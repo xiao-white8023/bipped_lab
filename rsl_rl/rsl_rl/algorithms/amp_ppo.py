@@ -1,21 +1,3 @@
-# Copyright (c) 2021-2024, The RSL-RL Project Developers.
-# All rights reserved.
-# Original code is licensed under the BSD-3-Clause license.
-#
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The Legged Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The TienKung-Lab Project Developers.
-# All rights reserved.
-# Modifications are licensed under the BSD-3-Clause license.
-#
-# This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
-# with additional modifications by the TienKung-Lab Project,
-# and is distributed under the BSD-3-Clause license.
-
 from __future__ import annotations
 
 from itertools import chain
@@ -109,19 +91,31 @@ class AMPPPO:
             self.symmetry = None
 
         # Discriminator components
+        '''
+        含义：AMP 损失（判别器的 Loss）在总损失中的权重。
+        背景：在 AMPPPO 中，我们通常用同一个优化器（Optimizer）同时更新 Policy（机器人）和 Discriminator（判别器）。
+        作用：
+        Ltotal​=LPPO​+amploss_coef×LDiscriminator​
+        这决定了在一次反向传播中，我们是更在乎“优化机器人的策略”，还是更在乎“提升判别器的眼力”。
+        设为 1.0 表示两者同等重要。
+        '''
         self.amploss_coef = 1.0
         self.min_std = min_std
         self.discriminator = discriminator
         self.discriminator.to(self.device)
-        self.amp_transition = RolloutStorage.Transition()
-        self.amp_storage = ReplayBuffer(discriminator.input_dim // 2, amp_replay_buffer_size, device)
+        '''
+        这两行代码是在为视 AMP (Adversarial Motion Priors) 算法构建**“假数据”的存储系统**。
+        在 AMP 训练中，我们需要一个地方来存放机器人产生的动作数据（这些数据被为“假”数据），以便后续和专家数据（“真”数据）一起喂给判别器进行训练。这两行代码分别建立了短期缓存和长期经验池。
+        '''
+        self.amp_transition = RolloutStorage.Transition() # 这是一个微型的临时容器，通常只用来存放**“当前这一个时间步 (timestep)”** 产生的数据。
+        self.amp_storage = ReplayBuffer(discriminator.input_dim // 2, amp_replay_buffer_size, device) # 但是我们在 Buffer 里只需要存单个状态 st​。取用的时候，我们只要拿出 st​ 和它后面的 st+1​ 拼起来就行了。  amp_replay_buffer_size如果存满了，新来的数据会把最旧的数据挤出去（FIFO）。
         self.amp_data = amp_data
-        self.amp_normalizer = amp_normalizer
+        self.amp_normalizer = amp_normalizer  # amp归一化
 
         # PPO components
         self.policy = policy
         self.policy.to(self.device)
-        # Create optimizer
+        # Create optimizer  创建优化器
         params = [
             {"params": self.policy.parameters(), "name": "policy"},
             {"params": self.discriminator.trunk.parameters(), "weight_decay": 10e-4, "name": "amp_trunk"},
@@ -243,8 +237,11 @@ class AMPPPO:
         if self.policy.is_recurrent:
             generator = self.storage.recurrent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         else:
-            generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+            generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs) # 分成4个批次 每一个批次利用5轮
 
+        # AMP 算法中专门为判别器提供「机器人生成的运动数据」的采样生成器
+        # 专家数据（来自 amp_data，是 “真” 数据）。
+        # 机器人数据（来自 amp_storage，是 “假” 数据，也就是机器人刚才在环境里跑出来的运动数据）。
         amp_policy_generator = self.amp_storage.feed_forward_generator(
             self.num_learning_epochs * self.num_mini_batches,
             self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches,
@@ -524,35 +521,33 @@ class AMPPPO:
         torch.distributed.broadcast_object_list(model_params, src=0)
         # load the model parameters on all GPUs from source GPU
         self.policy.load_state_dict(model_params[0])
+        # 
+        self.discriminator.load_state_dict(model_params[1])
+        #
         if self.rnd:
             self.rnd.predictor.load_state_dict(model_params[1])
 
     def reduce_parameters(self):
-        """Collect gradients from all GPUs and average them.
-
-        This function is called after the backward pass to synchronize the gradients across all GPUs.
-        """
-        # Create a tensor to store the gradients
+        """Collect gradients from all GPUs and average them."""
+        # 1. 包含判别器的梯度
         grads = [param.grad.view(-1) for param in self.policy.parameters() if param.grad is not None]
+        grads += [param.grad.view(-1) for param in self.discriminator.parameters() if param.grad is not None]
         if self.rnd:
             grads += [param.grad.view(-1) for param in self.rnd.parameters() if param.grad is not None]
+        
         all_grads = torch.cat(grads)
-
-        # Average the gradients across all GPUs
         torch.distributed.all_reduce(all_grads, op=torch.distributed.ReduceOp.SUM)
         all_grads /= self.gpu_world_size
 
-        # Get all parameters
-        all_params = self.policy.parameters()
+        # 2. 包含判别器的参数
+        from itertools import chain
+        all_params = chain(self.policy.parameters(), self.discriminator.parameters())
         if self.rnd:
             all_params = chain(all_params, self.rnd.parameters())
 
-        # Update the gradients for all parameters with the reduced gradients
         offset = 0
         for param in all_params:
             if param.grad is not None:
                 numel = param.numel()
-                # copy data back from shared buffer
                 param.grad.data.copy_(all_grads[offset : offset + numel].view_as(param.grad.data))
-                # update the offset for the next parameter
                 offset += numel

@@ -30,11 +30,14 @@ from isaaclab_rl.rsl_rl import (  # noqa:F401
     RslRlSymmetryCfg,
 )
 
+from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCameraCfg
+
 import legged_lab.mdp as mdp
 
 from .base_config import (
     ActionDelayCfg,
     BaseSceneCfg,
+    Privileged_Info,
     CommandRangesCfg,
     CommandsCfg,
     DomainRandCfg,
@@ -70,6 +73,12 @@ class BaseEnvCfg:
             debug_vis=False,
             drift_range=(0.0, 0.0),  # (0.3, 0.3)
         ),
+        camera = GroupedRayCasterCameraCfg(
+                        prim_path=MISSING, 
+                        pattern_cfg=MISSING
+                    ),
+        privileged_info = Privileged_Info()
+        
     )
     robot: RobotCfg = RobotCfg(
         actor_obs_history_length=10,
@@ -89,6 +98,9 @@ class BaseEnvCfg:
             joint_vel=1.0,
             actions=1.0,
             height_scan=1.0,
+            feet_pos=1.0,
+            feet_vel=1.0,
+            contact_force= 0.01
         ),
         clip_observations=100.0,
         clip_actions=100.0,

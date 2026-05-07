@@ -1,57 +1,53 @@
-# Copyright (c) 2021-2024, The RSL-RL Project Developers.
-# All rights reserved.
-# Original code is licensed under the BSD-3-Clause license.
-#
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The Legged Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The TienKung-Lab Project Developers.
-# All rights reserved.
-# Modifications are licensed under the BSD-3-Clause license.
-#
-# This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
-# with additional modifications by the TienKung-Lab Project,
-# and is distributed under the BSD-3-Clause license.
+
 
 import argparse
+import os
+import sys
+
+# --- 修复 1: 路径置顶 ---
+current_dir = os.path.dirname(os.path.abspath(__file__))
+local_rsl_rl_path = os.path.abspath(os.path.join(current_dir, "../../rsl_rl"))
+if local_rsl_rl_path not in sys.path:
+    sys.path.insert(0, local_rsl_rl_path)
 
 from isaaclab.app import AppLauncher
 
-from legged_lab.utils import task_registry
-from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner
-
-# local imports
-import legged_lab.utils.cli_args as cli_args  # isort: skip
-
-# add argparse arguments
+# --- 修复 2: 基础参数解析 (避开 __init__.py 陷阱) ---
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
 
-# append RSL-RL cli arguments
-cli_args.add_rsl_rl_args(parser)
-# append AppLauncher cli args
+# 仅添加 AppLauncher 引擎启动参数并解析
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
-# Start camera rendering
-if "sensor" in args_cli.task:
+
+if args_cli.task is not None and "sensor" in args_cli.task:
     args_cli.enable_cameras = True
 
-# launch omniverse app
+# ==============================================================================
+# 启动引擎！(此时没有任何底层依赖被触发)
+# ==============================================================================
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
-import os
-from datetime import datetime
 
+# ==============================================================================
+# App 启动完成！现在可以安全触发所有的 __init__.py 了
+# ==============================================================================
+
+# 导入 RL 相关的参数配置，并进行二次解析
+import legged_lab.utils.cli_args as cli_args
+cli_args.add_rsl_rl_args(parser)
+args_cli, hydra_args = parser.parse_known_args()
+
+from datetime import datetime
 import torch
 from isaaclab.utils.io import dump_yaml
 from isaaclab_tasks.utils import get_checkpoint_path
 
-from legged_lab.envs import *  # noqa:F401, F403
+from legged_lab.utils import task_registry
+from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner,MoeAmpOnPolicyRunner
+from legged_lab.envs import * # noqa:F401, F403
 from legged_lab.utils.cli_args import update_rsl_rl_cfg
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -92,7 +88,7 @@ def train():
     if agent_cfg.run_name:
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
-    runner_class: OnPolicyRunner | AmpOnPolicyRunner = eval(agent_cfg.runner_class_name)
+    runner_class: OnPolicyRunner | AmpOnPolicyRunner |MoeAmpOnPolicyRunner = eval(agent_cfg.runner_class_name)
     runner = runner_class(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
 
     if agent_cfg.resume:

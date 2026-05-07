@@ -52,14 +52,13 @@ class SceneCfg(InteractiveSceneCfg):
                 static_friction=1.0,
                 dynamic_friction=1.0,
             ),
-            visual_material=sim_utils.MdlFileCfg(
-                mdl_path=f"{ISAACLAB_NUCLEUS_DIR}/Materials/TilesMarbleSpiderWhiteBrickBondHoned/TilesMarbleSpiderWhiteBrickBondHoned.mdl",
-                project_uvw=True,
-                texture_scale=(0.25, 0.25),
+            visual_material=sim_utils.PreviewSurfaceCfg(
+                diffuse_color=(0.2, 0.2, 0.2),  # (R, G, B) 设为 0.2 就是护眼的深灰色
+                roughness=0.8,                  # 粗糙度高一点，避免反光刺眼
+                metallic=0.0,                   # 非金属材质
             ),
             debug_vis=False,
         )
-
         self.robot: ArticulationCfg = config.robot.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
         self.contact_sensor = ContactSensorCfg(
@@ -116,3 +115,13 @@ class SceneCfg(InteractiveSceneCfg):
                 debug_vis=config.depth_camera.debug_vis,
                 visualizer_cfg=config.depth_camera.visualizer_cfg,
             )
+        
+        if config.camera.add_camera:
+            self.camera=config.camera.camera
+        
+        if config.left_feet_ray_caster.add_left_feet_ray_caster:
+            self.left_feet_ray_caster=config.left_feet_ray_caster.left_feet_ray_caster
+        
+        if config.right_feet_ray_caster.add_right_feet_ray_caster:
+            self.right_feet_ray_caster=config.right_feet_ray_caster.right_feet_ray_caster
+        

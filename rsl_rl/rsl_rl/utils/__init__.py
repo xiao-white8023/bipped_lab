@@ -27,6 +27,7 @@ from .utils import (
     store_code_state,
     string_to_callable,
     unpad_trajectories,
+    get_param
 )
 
 __all__ = [

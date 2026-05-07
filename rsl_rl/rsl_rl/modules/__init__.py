@@ -18,13 +18,17 @@
 
 """Definitions for neural-network components for RL-agents."""
 
-from .actor_critic import ActorCritic
+from .actor_critic_rough import ActorCritic
+from .actor_critic import ActorCriticWalk
 from .actor_critic_recurrent import ActorCriticRecurrent
 from .discriminator import Discriminator
 from .normalizer import EmpiricalNormalization
 from .rnd import RandomNetworkDistillation
 from .student_teacher import StudentTeacher
 from .student_teacher_recurrent import StudentTeacherRecurrent
+from .cnn_mlp import CnnMlp
+from .cnn_mlp_cfg import CnnMlpCfg
+from .moe_actor_critic import MoeActorCritic
 
 __all__ = [
     "ActorCritic",
@@ -34,4 +38,7 @@ __all__ = [
     "StudentTeacher",
     "StudentTeacherRecurrent",
     "Discriminator",
+    'CnnMlp',
+    "ActorCriticWalk"
+    "MoeActorCritic"
 ]

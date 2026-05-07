@@ -17,3 +17,4 @@
 # and is distributed under the BSD-3-Clause license.
 
 from .task_registry import task_registry
+from .raycast import raycast_mesh_grouped

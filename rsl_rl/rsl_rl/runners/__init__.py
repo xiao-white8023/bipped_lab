@@ -20,5 +20,6 @@
 
 from .amp_on_policy_runner import AmpOnPolicyRunner
 from .on_policy_runner import OnPolicyRunner
+from .moe_amp_on_policy_runner import MoeAmpOnPolicyRunner
 
-__all__ = ["OnPolicyRunner", "AmpOnPolicyRunner"]
+__all__ = ["OnPolicyRunner", "AmpOnPolicyRunner","MoeAmpOnPolicyRunner"]

@@ -63,7 +63,8 @@ class RolloutStorage:
         self.rnd_state_shape = rnd_state_shape
         self.actions_shape = actions_shape
 
-        # Core
+        # Core 
+        # [24,4096,960]
         self.observations = torch.zeros(num_transitions_per_env, num_envs, *obs_shape, device=self.device)
         if privileged_obs_shape is not None:
             self.privileged_observations = torch.zeros(
@@ -197,11 +198,12 @@ class RolloutStorage:
     def mini_batch_generator(self, num_mini_batches, num_epochs=8):
         if self.training_type != "rl":
             raise ValueError("This function is only available for reinforcement learning training.")
-        batch_size = self.num_envs * self.num_transitions_per_env
-        mini_batch_size = batch_size // num_mini_batches
-        indices = torch.randperm(num_mini_batches * mini_batch_size, requires_grad=False, device=self.device)
+        batch_size = self.num_envs * self.num_transitions_per_env   ## 也就是说，我们现在手里有 98304 条 (s_t, a_t, r_t, ...) 数据。
+        mini_batch_size = batch_size // num_mini_batches # 把数据平均分成num_mini_batches个小批次
+        indices = torch.randperm(num_mini_batches * mini_batch_size, requires_grad=False, device=self.device) # 生成了一个长度为batch_size的乱序的张量索引[10,2,5,123,1,97,56,2312,3545,345,123....]
 
         # Core
+        # 原来的维度是[24,4096,观测维度]  flatten(0, 1) 让第0维第一维合并维一个维度  变成了[24*4096 观测维度]
         observations = self.observations.flatten(0, 1)
         if self.privileged_observations is not None:
             privileged_observations = self.privileged_observations.flatten(0, 1)
@@ -225,13 +227,13 @@ class RolloutStorage:
         for epoch in range(num_epochs):
             for i in range(num_mini_batches):
                 # Select the indices for the mini-batch
-                start = i * mini_batch_size
-                end = (i + 1) * mini_batch_size
-                batch_idx = indices[start:end]
+                start = i * mini_batch_size  # 第一次循环是0
+                end = (i + 1) * mini_batch_size 
+                batch_idx = indices[start:end] # 这个就是从乱序索引中索引
 
                 # Create the mini-batch
                 # -- Core
-                obs_batch = observations[batch_idx]
+                obs_batch = observations[batch_idx] # 得到第n个小批次的观测值
                 privileged_observations_batch = privileged_observations[batch_idx]
                 actions_batch = actions[batch_idx]
 

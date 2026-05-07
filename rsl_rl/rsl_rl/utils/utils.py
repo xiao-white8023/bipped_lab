@@ -105,6 +105,13 @@ def resolve_nn_activation(act_name: str) -> torch.nn.Module:
     else:
         raise ValueError(f"Invalid activation function '{act_name}'.")
 
+def get_param(param:any,idx:int):
+    if isinstance(param,(type,list)):
+        param=param[idx]
+        return param
+    else:
+        param=param
+        return param
 
 def split_and_pad_trajectories(tensor, dones):
     """Splits trajectories at done indices. Then concatenates them and pads with zeros up to the length og the longest trajectory.

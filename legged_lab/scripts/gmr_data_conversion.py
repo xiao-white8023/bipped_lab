@@ -2,8 +2,34 @@ import pickle
 import numpy as np
 import torch
 import argparse
-from isaaclab.utils.math import quat_mul, quat_conjugate, axis_angle_from_quat  
 from scipy.spatial.transform import Rotation 
+
+# =====================================================================
+# 🚀 纯 PyTorch 实现的四元数运算 (彻底摆脱 isaaclab 和 pxr 的依赖)
+# =====================================================================
+def quat_conjugate(q):
+    """计算四元数的共轭"""
+    return torch.cat([q[..., 0:1], -q[..., 1:4]], dim=-1)
+
+def quat_mul(q1, q2):
+    """计算两个四元数相乘"""
+    w1, x1, y1, z1 = q1[..., 0], q1[..., 1], q1[..., 2], q1[..., 3]
+    w2, x2, y2, z2 = q2[..., 0], q2[..., 1], q2[..., 2], q2[..., 3]
+    w = w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
+    x = w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2
+    y = w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2
+    z = w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2
+    return torch.stack([w, x, y, z], dim=-1)
+
+def axis_angle_from_quat(q):
+    """将四元数转换为轴角表示"""
+    w = q[..., 0]
+    vec = q[..., 1:]
+    norm = torch.norm(vec, dim=-1, keepdim=True)
+    angle = 2 * torch.acos(torch.clamp(w, -1.0, 1.0)).unsqueeze(-1)
+    axis = vec / (norm + 1e-6)
+    return axis * angle
+# =====================================================================
 
 def convert_pkl_to_custom(input_pkl, output_txt, fps):
     dt = 1.0 / fps
@@ -25,6 +51,7 @@ def convert_pkl_to_custom(input_pkl, output_txt, fps):
 
     dof_vel = (dof_pos[1:] - dof_pos[:-1]) / dt
 
+    # 注意：标准 AMP 通常需要四元数，如果训练报错维度不对，把这里的 euler 换回四元数
     euler_angles = Rotation.from_quat(root_rot[:-1, [1, 2, 3, 0]]).as_euler('XYZ', degrees=False)
     euler_angles = np.unwrap(euler_angles, axis=0)
 
@@ -57,7 +84,6 @@ def convert_pkl_to_custom(input_pkl, output_txt, fps):
 
         f.write(']\n}')
     print(f"✅ Successfully converted {input_pkl} to {output_txt}")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

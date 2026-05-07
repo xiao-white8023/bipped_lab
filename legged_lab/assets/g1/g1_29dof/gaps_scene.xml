@@ -1,0 +1,66 @@
+<mujoco model="g1 gaps scene">
+  <!-- 包含带 motor actuator 的机器人模型 -->
+  <include file="g1_29dof_rev_1_0.xml"/>
+
+  <statistic center="3 0 0.5" extent="5.0"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="-130" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    <material name="platform" rgba="0.5 0.5 0.6 1"/>
+  </asset>
+
+  <worldbody>
+    <light pos="3 0 3" dir="0 0 -1" directional="true"/>
+    
+    <!-- 
+    坑洞场景配置:
+    - 机器人初始化高度: 0.793m (pelvis)
+    - 平台顶面高度: 0 (与正常地面齐平)
+    - 沟壑深度: 0.5m (掉下去会摔)
+    - 沟壑宽度: 0.2m - 0.4m (需要跨过)
+    -->
+    
+    <!-- 起始平台 (机器人初始化位置 x=0, y=0) -->
+    <geom name="start_platform" type="box" size="1.5 5.0 0.25" pos="0 0 -0.25" material="platform"/>
+    
+    <!-- 沟壑区域: 平台之间有间隙 -->
+    <!-- 间隙1: 0.25m -->
+    <geom name="plat_1" type="box" size="0.30 5.0 0.25" pos="2.05 0 -0.25" material="platform"/>
+    
+    <!-- 间隙2: 0.30m -->
+    <geom name="plat_2" type="box" size="0.30 5.0 0.25" pos="2.95 0 -0.25" material="platform"/>
+    
+    <!-- 间隙3: 0.35m -->
+    <geom name="plat_3" type="box" size="0.25 5.0 0.25" pos="3.85 0 -0.25" material="platform"/>
+    
+    <!-- 间隙4: 0.30m -->
+    <geom name="plat_4" type="box" size="0.30 5.0 0.25" pos="4.70 0 -0.25" material="platform"/>
+    
+    <!-- 间隙5: 0.35m -->
+    <geom name="plat_5" type="box" size="0.30 5.0 0.25" pos="5.65 0 -0.25" material="platform"/>
+    
+    <!-- 间隙6: 0.40m -->
+    <geom name="plat_6" type="box" size="0.25 5.0 0.25" pos="6.60 0 -0.25" material="platform"/>
+    
+    <!-- 间隙7: 0.35m -->
+    <geom name="plat_7" type="box" size="0.30 5.0 0.25" pos="7.55 0 -0.25" material="platform"/>
+    
+    <!-- 间隙8: 0.30m -->
+    <geom name="plat_8" type="box" size="0.30 5.0 0.25" pos="8.45 0 -0.25" material="platform"/>
+    
+    <!-- 终点平台 -->
+    <geom name="end_platform" type="box" size="1.5 5.0 0.25" pos="10.25 0 -0.25" material="platform"/>
+    
+    <!-- 底部地面 (沟壑底部，掉下去会落到这里) -->
+    <geom name="floor" size="20 10 0.01" type="box" pos="5 0 -0.51" material="groundplane"/>
+    
+  </worldbody>
+</mujoco>

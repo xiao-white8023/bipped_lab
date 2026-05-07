@@ -1,32 +1,23 @@
 # Copyright (c) 2021-2024, The RSL-RL Project Developers.
 # All rights reserved.
 # Original code is licensed under the BSD-3-Clause license.
-#
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The Legged Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The TienKung-Lab Project Developers.
-# All rights reserved.
-# Modifications are licensed under the BSD-3-Clause license.
-#
-# This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
-# with additional modifications by the TienKung-Lab Project,
-# and is distributed under the BSD-3-Clause license.
 
 import argparse
-
-from isaaclab.app import AppLauncher
-
-from legged_lab.utils import task_registry
-
-# local imports
-import legged_lab.utils.cli_args as cli_args  # isort: skip
+import os
+import sys
 import numpy as np
 
-# add argparse arguments
+# --- 核心修复 1: 路径置顶 ---
+current_dir = os.path.dirname(os.path.abspath(__file__))
+local_rsl_rl_path = os.path.abspath(os.path.join(current_dir, "../../rsl_rl"))
+if local_rsl_rl_path not in sys.path:
+    sys.path.insert(0, local_rsl_rl_path)
+
+# ==============================================================================
+# 🚀 阶段一：极简导入与参数解析 (绝对禁止导入 legged_lab)
+# ==============================================================================
+from isaaclab.app import AppLauncher
+
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
@@ -34,22 +25,25 @@ parser.add_argument("--seed", type=int, default=None, help="Seed used for the en
 parser.add_argument("--save_path", type=str, default=None, help="Path to save the txt file")
 parser.add_argument("--fps", type=float, default=30.0, help="Target fps")
 
-# append RSL-RL cli arguments
-cli_args.add_rsl_rl_args(parser)
-# append AppLauncher cli args
+# 附加启动器参数，并忽略未识别的参数（防止因未加载 rsl_rl_args 而报错）
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
-# Start camera rendering
-if "sensor" in args_cli.task:
+
+if args_cli.task is not None and "sensor" in args_cli.task:
     args_cli.enable_cameras = True
 
-# launch omniverse app
+# ==============================================================================
+# 💥 阶段二：宇宙大爆炸 (启动仿真器)
+# ==============================================================================
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-from legged_lab.envs import *  # noqa:F401, F403
+# ==============================================================================
+# ✅ 阶段三：安全区 (现在可以肆无忌惮地导入物理相关的包了)
+# ==============================================================================
+from legged_lab.utils import task_registry
+from legged_lab.envs import * # noqa:F401, F403
 from legged_lab.utils.cli_args import update_rsl_rl_cfg
-
 
 def play_amp_animation():
     env_class_name = args_cli.task
@@ -66,7 +60,7 @@ def play_amp_animation():
     if args_cli.num_envs is not None:
         env_cfg.scene.num_envs = args_cli.num_envs
 
-    agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
+    #agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.seed = agent_cfg.seed
 
     env_class = task_registry.get_task_class(env_class_name)
@@ -74,6 +68,9 @@ def play_amp_animation():
 
     frame_cnt = 0
     all_frames = []
+    
+    # 播放循环
+    print(f"▶️ 开始播放并录制动作...")
     while simulation_app.is_running():
         while True:
             time = (frame_cnt % (env.motion_len)) * (1.0/args_cli.fps)
@@ -86,6 +83,7 @@ def play_amp_animation():
                 break
         break
 
+    # 保存文件
     if args_cli.save_path:
         all_frames_np = np.stack(all_frames, axis=0)
         np.savetxt(args_cli.save_path, all_frames_np, fmt='%f', delimiter=', ')
@@ -113,6 +111,7 @@ def play_amp_animation():
             f.write(']\n}')
 
         print(f"✅ Successfully converted to {args_cli.save_path}")
+
 if __name__ == "__main__":
     play_amp_animation()
     simulation_app.close()

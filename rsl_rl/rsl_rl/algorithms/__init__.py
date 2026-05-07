@@ -17,9 +17,9 @@
 # and is distributed under the BSD-3-Clause license.
 
 """Implementation of different RL agents."""
-
+from .moe_amp_ppo import MoeAmpPpO
 from .amp_ppo import AMPPPO
 from .distillation import Distillation
 from .ppo import PPO
 
-__all__ = ["PPO", "Distillation", "AMPPPO"]
+__all__ = ["PPO", "Distillation", "AMPPPO",'MoeAmpPpO']

@@ -1,29 +1,12 @@
-# Copyright (c) 2021-2024, The RSL-RL Project Developers.
-# All rights reserved.
-# Original code is licensed under the BSD-3-Clause license.
-#
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The Legged Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The TienKung-Lab Project Developers.
-# All rights reserved.
-# Modifications are licensed under the BSD-3-Clause license.
-#
-# This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
-# with additional modifications by the TienKung-Lab Project,
-# and is distributed under the BSD-3-Clause license.
-
 import glob
 import json
 
 import numpy as np
 import torch
 
-
 class AMPLoaderDisplay:
+    '''
+    # tienkung 
     JOINT_POS_SIZE = 26
 
     JOINT_VEL_SIZE = 26
@@ -33,7 +16,20 @@ class AMPLoaderDisplay:
 
     ROOT_STATES_NUM = 6
     JOINT_VEL_START_IDX = JOINT_POSE_END_IDX
-    JOINT_VEL_END_IDX = JOINT_VEL_START_IDX + JOINT_VEL_SIZE
+    JOINT_VEL_END_IDX = JOINT_VEL_START_IDX + JOINT_VEL_SIZE 
+    '''
+    
+    '''G1 29dof'''
+    JOINT_POS_SIZE = 35
+
+    JOINT_VEL_SIZE = 35
+
+    JOINT_POSE_START_IDX = 0
+    JOINT_POSE_END_IDX = JOINT_POSE_START_IDX + JOINT_POS_SIZE
+
+    ROOT_STATES_NUM = 6
+    JOINT_VEL_START_IDX = JOINT_POSE_END_IDX
+    JOINT_VEL_END_IDX = JOINT_VEL_START_IDX + JOINT_VEL_SIZE 
 
     def __init__(
         self,
@@ -42,32 +38,32 @@ class AMPLoaderDisplay:
         data_dir="",
         preload_transitions=False,
         num_preload_transitions=1000000,
-        motion_files=glob.glob("datasets/motion_amp_expert/*"),
+        motion_files=glob.glob("datasets/motion_amp_expert/*"), # glob 模块用于匹配文件路径，这里会获取该目录下所有文件的完整路径，作为默认的运动数据文件列表
     ):
         """Expert dataset provides AMP observations from Dog mocap dataset.
 
         time_between_frames: Amount of time in seconds between transition.
         """
         self.device = device
-        self.time_between_frames = time_between_frames
+        self.time_between_frames = time_between_frames # 两帧之间的间隔
 
         # Values to store for each trajectory.
         self.trajectories = []
         self.trajectories_full = []
         self.trajectory_names = []
         self.trajectory_idxs = []
-        self.trajectory_lens = []  # Traj length in seconds.
+        self.trajectory_lens = []  # Traj length in seconds. 单位是时间
         self.trajectory_weights = []
         self.trajectory_frame_durations = []
-        self.trajectory_num_frames = []
+        self.trajectory_num_frames = [] # 总的帧数
 
         for i, motion_file in enumerate(motion_files):
+        # 这两行代码是在 遍历所有运动数据文件的同时，提取每个文件的「轨迹名称」（去掉文件后缀），并将其存储到类的实例列表 self.trajectory_names 中
             self.trajectory_names.append(motion_file.split(".")[0])
             with open(motion_file) as f:
                 motion_json = json.load(f)
-                motion_data = np.array(motion_json["Frames"])
+                motion_data = np.array(motion_json["Frames"]) # 转化为2维数组
 
-                # Remove first 7 observation dimensions (root_pos and root_orn).
                 self.trajectories.append(
                     torch.tensor(
                         motion_data[:, : AMPLoaderDisplay.JOINT_VEL_END_IDX], dtype=torch.float32, device=device
@@ -82,17 +78,21 @@ class AMPLoaderDisplay:
                 self.trajectory_weights.append(float(motion_json["MotionWeight"]))
                 frame_duration = float(motion_json["FrameDuration"])
                 self.trajectory_frame_durations.append(frame_duration)
-                traj_len = (motion_data.shape[0] - 1) * frame_duration
+                traj_len = (motion_data.shape[0] - 1) * frame_duration # 计算总时长
                 print(f"traj_len:{traj_len}")
                 self.trajectory_lens.append(traj_len)
                 self.trajectory_num_frames.append(float(motion_data.shape[0]))
 
-            print(f"Loaded {traj_len}s. motion from {motion_file}.")
+            print(f" 数据集总共是 {traj_len}s. 模型文件是 {motion_file}.")
 
         # Trajectory weights are used to sample some trajectories more than others.
+        # 归一化后的权重数组之和为 1.0，每个值对应「该轨迹被采样的概率」
         self.trajectory_weights = np.array(self.trajectory_weights) / np.sum(self.trajectory_weights)
+        # 每一个文件的帧率 转化为数组的形式 方便后续使用
         self.trajectory_frame_durations = np.array(self.trajectory_frame_durations)
+        # 每一个文件的总时长 转化为数组的形式
         self.trajectory_lens = np.array(self.trajectory_lens)
+        # 每一个文件的总帧数 转化为数组的形式
         self.trajectory_num_frames = np.array(self.trajectory_num_frames)
 
         # Preload transitions.
@@ -104,7 +104,7 @@ class AMPLoaderDisplay:
             self.preloaded_s = self.get_full_frame_at_time_batch(traj_idxs, times)
             self.preloaded_s_next = self.get_full_frame_at_time_batch(traj_idxs, times + self.time_between_frames)
             print("Finished preloading")
-
+        # 按行拼接成一个大的张量
         self.all_trajectories_full = torch.vstack(self.trajectories_full)
 
     def weighted_traj_idx_sample(self):
@@ -159,15 +159,27 @@ class AMPLoaderDisplay:
         blend = torch.tensor(p * n - idx_low, device=self.device, dtype=torch.float32).unsqueeze(-1)
         return self.slerp(all_frame_starts, all_frame_ends, blend)
 
+    '''
+    它的核心作用是根据「轨迹索引」和「指定时间点」，通过「时间归一化→计算相邻帧索引→边界保护→线性插值混合」，
+    返回一个平滑的运动帧数据，解决了「指定时间点不恰好对应轨迹中整帧」的问题，让获取的帧数据更连续、无跳变
+    '''
     def get_full_frame_at_time(self, traj_idx, time):
         """Returns full frame for the given trajectory at the specified time."""
+        # 传入的是时间在总时间中的占比
         p = float(time) / self.trajectory_lens[traj_idx]
+        # 数据集的总帧数
         n = self.trajectories_full[traj_idx].shape[0]
+        # p * n 可以得到在该时间下的 数据对应的是哪一帧 如果对应的帧数恰好是小数 比如 50.5帧
+        # np.floor(p * n) 向下取整 变成第50帧   np.ceil(p * n) 向上取整 变成第51帧 为后续的插值做处理
         idx_low, idx_high = int(np.floor(p * n)), int(np.ceil(p * n))
+        # 防止帧数越界
         idx_low = min(idx_low, n - 1)
         idx_high = min(idx_high, n - 1)
+        # 开始帧的数据
         frame_start = self.trajectories_full[traj_idx][idx_low]
+        # 结束帧的数据
         frame_end = self.trajectories_full[traj_idx][idx_high]
+        # 用当前帧 减 前一帧 得到一个小数 这个小数 就是在插值的过程中 前后帧的比重
         blend = p * n - idx_low
         return self.blend_frame_pose(frame_start, frame_end, blend)
 

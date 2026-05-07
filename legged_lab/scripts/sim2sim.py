@@ -1,21 +1,3 @@
-# Copyright (c) 2021-2024, The RSL-RL Project Developers.
-# All rights reserved.
-# Original code is licensed under the BSD-3-Clause license.
-#
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The Legged Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The TienKung-Lab Project Developers.
-# All rights reserved.
-# Modifications are licensed under the BSD-3-Clause license.
-#
-# This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
-# with additional modifications by the TienKung-Lab Project,
-# and is distributed under the BSD-3-Clause license.
-
 import argparse
 import os
 import sys
@@ -66,21 +48,29 @@ class MujocoRunner:
     def __init__(self, cfg: SimToSimCfg, policy_path, model_path):
         self.cfg = cfg
         network_path = policy_path
-        self.model = mujoco.MjModel.from_xml_path(model_path)
-        self.model.opt.timestep = self.cfg.sim.dt
+        self.model = mujoco.MjModel.from_xml_path(model_path)  # 加载静态的xml文件 
+        self.model.opt.timestep = self.cfg.sim.dt  # 时间步
 
-        self.policy = torch.jit.load(network_path)
-        self.data = mujoco.MjData(self.model)
-        self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data)
-        self.viewer._render_every_frame = False
+        self.policy = torch.jit.load(network_path)  # 加载.pt文件
+        self.data = mujoco.MjData(self.model) # 这是机器人的动态状态（当前情况） 随着仿真的进行 每一帧都在变化
+        self.viewer = mujoco_viewer.MujocoViewer(self.model, self.data) # 创建一个窗口，把 model（几何形状）和 data（当前位置）画在屏幕上。
+        self.viewer._render_every_frame = False  # 这是一个优化设置。意思是“不要自动刷新画面”，而是让程序手动控制刷新。这样可以避免为了画图而拖慢物理计算的速度
         self.init_variables()
 
     def init_variables(self) -> None:
         """Initialize simulation variables and joint index mappings."""
-        self.dt = self.cfg.sim.decimation * self.cfg.sim.dt
-        self.dof_pos = np.zeros(self.cfg.sim.num_action)
+        '''
+        
+        在内存里开辟三个空数组，用来存机器人当前的关节数据。
+        
+        '''
+        self.dt = self.cfg.sim.decimation * self.cfg.sim.dt  # 0.02s
+        self.dof_pos = np.zeros(self.cfg.sim.num_action)  # 创建一个全为0的一维数组 
         self.dof_vel = np.zeros(self.cfg.sim.num_action)
         self.action = np.zeros(self.cfg.sim.num_action)
+        '''
+        关节默认位置
+        '''
         self.default_dof_pos = np.array(
             [0, -0.5, 0, 1.0, -0.5, 0, 0, -0.5, 0, 1.0, -0.5, 0, 0, 0.1, 0.0, -0.3, 0, -0.1, 0.0, -0.3]
         )
@@ -188,8 +178,11 @@ class MujocoRunner:
         Run the simulation loop with keyboard-controlled commands.
         """
         self.setup_keyboard_listener()
-        self.listener.start()
-
+        self.listener.start() # 启动后台的键盘接受的线程
+        '''
+        self.data.time：MuJoCo 物理引擎内部的当前时间（从 0.0s 开始）。
+        self.cfg.sim.sim_duration：仿真的总时长（比如 100秒)
+        '''
         while self.data.time < self.cfg.sim.sim_duration:
             self.obs_history = self.get_obs()
             self.action[:] = self.policy(torch.tensor(self.obs_history, dtype=torch.float32)).detach().numpy()[:20]
@@ -254,20 +247,26 @@ class MujocoRunner:
         """
         Set up keyboard event listener for user control input.
         """
-
+        # 回调函数
         def on_press(key):
             try:
-                if key.char == "8":  # NumPad 8      x += 0.2
+                if key.char == "8":  # NumPad 8 x += 0.2
+                    print("x方向的速度 +0.2")
                     self.adjust_command_vel(0, 0.2)
                 elif key.char == "2":  # NumPad 2      x -= 0.2
+                    print("x方向的速度 +0.2")
                     self.adjust_command_vel(0, -0.2)
                 elif key.char == "4":  # NumPad 4      y -= 0.2
+                    print("y方向的速度 -0.2")
                     self.adjust_command_vel(1, -0.2)
                 elif key.char == "6":  # NumPad 6      y += 0.2
+                    print("y方向的速度 +0.2")
                     self.adjust_command_vel(1, 0.2)
                 elif key.char == "7":  # NumPad 7      yaw += 0.2
+                    print("yaw的速度 +0.2")
                     self.adjust_command_vel(2, -0.2)
                 elif key.char == "9":  # NumPad 9      yaw -= 0.2
+                    print("yaw的速度 -0.2")
                     self.adjust_command_vel(2, 0.2)
             except AttributeError:
                 pass

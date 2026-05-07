@@ -1,17 +1,3 @@
-# Copyright (c) 2021-2024, The RSL-RL Project Developers.
-# All rights reserved.
-# Original code is licensed under the BSD-3-Clause license.
-#
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The Legged Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The TienKung-Lab Project Developers.
-# All rights reserved.
-# Modifications are licensed under the BSD-3-Clause license.
-#
 # This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
 # with additional modifications by the TienKung-Lab Project,
 # and is distributed under the BSD-3-Clause license.
@@ -26,7 +12,7 @@ class Discriminator(nn.Module):
     Discriminator neural network for adversarial motion priors (AMP) reward prediction.
 
     Args:
-        input_dim (int): Dimension of the input feature vector (concatenated state and next state).
+        输入的维度（整形）： 输入的特征向量的维度是包含当前的状态和下一时刻的状态
         amp_reward_coef (float): Coefficient to scale the AMP reward.
         hidden_layer_sizes (list[int]): Sizes of hidden layers in the MLP trunk.
         device (torch.device): Device to run the model on (CPU or GPU).
@@ -38,27 +24,30 @@ class Discriminator(nn.Module):
         amp_linear (nn.Linear): Final linear layer producing discriminator output.
         task_reward_lerp (float): Interpolation factor for combining rewards.
     """
-
     def __init__(self, input_dim, amp_reward_coef, hidden_layer_sizes, device, task_reward_lerp=0.0):
-        super().__init__()
+        super().__init__() # 固定写法 继承 nn.Module 
 
         self.device = device
         self.input_dim = input_dim
 
-        self.amp_reward_coef = amp_reward_coef
+        self.amp_reward_coef = amp_reward_coef # 风格奖励系数
         amp_layers = []
-        curr_in_dim = input_dim
+        curr_in_dim = input_dim  
         for hidden_dim in hidden_layer_sizes:
             amp_layers.append(nn.Linear(curr_in_dim, hidden_dim))
             amp_layers.append(nn.ReLU())
             curr_in_dim = hidden_dim
+        '''
+        Sequential 制作成流水线
+        '''
         self.trunk = nn.Sequential(*amp_layers).to(device)
+        
         self.amp_linear = nn.Linear(hidden_layer_sizes[-1], 1).to(device)
 
         self.trunk.train()
         self.amp_linear.train()
 
-        self.task_reward_lerp = task_reward_lerp
+        self.task_reward_lerp = task_reward_lerp # 任务奖励惩罚
 
     def forward(self, x):
         """
@@ -125,7 +114,7 @@ class Discriminator(nn.Module):
             if self.task_reward_lerp > 0:
                 reward = self._lerp_reward(reward, task_reward.unsqueeze(-1))
             self.train()
-        return reward.squeeze(), d
+        return reward.squeeze(-1), d
 
     def _lerp_reward(self, disc_r, task_r):
         """

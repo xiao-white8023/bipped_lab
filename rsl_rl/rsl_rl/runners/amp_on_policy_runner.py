@@ -1,21 +1,3 @@
-# Copyright (c) 2021-2024, The RSL-RL Project Developers.
-# All rights reserved.
-# Original code is licensed under the BSD-3-Clause license.
-#
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The Legged Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The TienKung-Lab Project Developers.
-# All rights reserved.
-# Modifications are licensed under the BSD-3-Clause license.
-#
-# This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
-# with additional modifications by the TienKung-Lab Project,
-# and is distributed under the BSD-3-Clause license.
-
 from __future__ import annotations
 
 import os
@@ -30,11 +12,13 @@ from rsl_rl.algorithms import AMPPPO
 from rsl_rl.env import VecEnv
 from rsl_rl.modules import (
     ActorCritic,
+    ActorCriticWalk,
     ActorCriticRecurrent,
     Discriminator,
     EmpiricalNormalization,
     StudentTeacher,
     StudentTeacherRecurrent,
+    CnnMlp
 )
 from rsl_rl.utils import AMPLoader, Normalizer, store_code_state
 
@@ -44,8 +28,8 @@ class AmpOnPolicyRunner:
 
     def __init__(self, env: VecEnv, train_cfg: dict, log_dir: str | None = None, device="cpu"):
         self.cfg = train_cfg
-        self.alg_cfg = train_cfg["algorithm"]
-        self.policy_cfg = train_cfg["policy"]
+        self.alg_cfg = train_cfg["algorithm"]  #  算法参数
+        self.policy_cfg = train_cfg["policy"]  #  策略参数
         self.device = device
         self.env = env
 
@@ -62,7 +46,7 @@ class AmpOnPolicyRunner:
 
         # resolve dimensions of observations
         obs, extras = self.env.get_observations()
-        num_obs = obs.shape[1]
+        num_obs = obs.shape[1]  # actor的输入维度
 
         # resolve type of privileged observations
         if self.training_type == "rl":
@@ -78,13 +62,19 @@ class AmpOnPolicyRunner:
 
         # resolve dimensions of privileged observations
         if self.privileged_obs_type is not None:
-            num_privileged_obs = extras["observations"][self.privileged_obs_type].shape[1]
+            num_privileged_obs = extras["observations"][self.privileged_obs_type].shape[1] # critic的观测维度
         else:
             num_privileged_obs = num_obs
 
+        '''
+        policy中有actor critic网络
+        '''
         # evaluate the policy class
         policy_class = eval(self.policy_cfg.pop("class_name"))
-        policy: ActorCritic | ActorCriticRecurrent | StudentTeacher | StudentTeacherRecurrent = policy_class(
+        if "CnnMlp" in self.policy_cfg and isinstance(self.policy_cfg["CnnMlp"], dict):
+            self.policy_cfg["CnnMlp"].pop("num_heads", None)
+            self.policy_cfg["CnnMlp"].pop("embed_dim", None)
+        policy: ActorCritic | ActorCriticRecurrent | StudentTeacher | StudentTeacherRecurrent|ActorCriticWalk = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
 
@@ -100,7 +90,6 @@ class AmpOnPolicyRunner:
             self.alg_cfg["rnd_cfg"]["num_states"] = num_rnd_state
             # scale down the rnd weight with timestep (similar to how rewards are scaled down in legged_gym envs)
             self.alg_cfg["rnd_cfg"]["weight"] *= env.unwrapped.step_dt
-
         # if using symmetry then pass the environment config object
         if "symmetry_cfg" in self.alg_cfg and self.alg_cfg["symmetry_cfg"] is not None:
             # this is used by the symmetry function for handling different observation terms
@@ -114,18 +103,27 @@ class AmpOnPolicyRunner:
             num_preload_transitions=train_cfg["amp_num_preload_transitions"],
             motion_files=train_cfg["amp_motion_files"],
         )
+        
+        print(f"DEBUG: 数据集的维度: {amp_data.observation_dim}")
+        obs, _ = self.env.get_observations() # 获取机器人实际观测
+        amp_obs_demo = self.env.get_amp_obs_for_expert_trans() # 获得amp样本的维度
+        print(f"DEBUG: 机器人输出的用来和数据集比较的维度: {amp_obs_demo.shape[1]}")
+        
         amp_normalizer = Normalizer(amp_data.observation_dim)
         discriminator = Discriminator(
             amp_data.observation_dim * 2,
-            train_cfg["amp_reward_coef"],
+            train_cfg["amp_reward_coef"],      # 风格奖励系数
             train_cfg["amp_discr_hidden_dims"],
-            device,
-            train_cfg["amp_task_reward_lerp"],
+            device, 
+            train_cfg["amp_task_reward_lerp"], # 惩罚系数 只注重任务奖励 不重视模仿
         ).to(self.device)
-        min_std = torch.zeros(len(train_cfg["min_normalized_std"]), device=self.device, requires_grad=False)
+        
+        min_std = torch.zeros(len(train_cfg["min_normalized_std"]), device=self.device, requires_grad=False) # 创建一个全为 0 的张量，用作动作噪声标准差（Standard Deviation）的下限（Floor）。
 
         # initialize algorithm
         alg_class = eval(self.alg_cfg.pop("class_name"))
+        self.alg_cfg.pop("optimizer", None)
+        self.alg_cfg.pop("share_cnn_encoders", None)
         self.alg: AMPPPO = alg_class(
             policy,
             discriminator,
@@ -155,8 +153,8 @@ class AmpOnPolicyRunner:
             self.training_type,
             self.env.num_envs,
             self.num_steps_per_env,
-            [num_obs],
-            [num_privileged_obs],
+            [num_obs],            # actor观测
+            [num_privileged_obs], # critic 观测维度
             [self.env.num_actions],
         )
 
@@ -210,7 +208,7 @@ class AmpOnPolicyRunner:
         privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
         amp_obs = self.env.get_amp_obs_for_expert_trans()
         obs, privileged_obs, amp_obs = obs.to(self.device), privileged_obs.to(self.device), amp_obs.to(self.device)
-        self.train_mode()  # switch to train mode (for dropout for example)
+        self.train_mode()  # switch to train mode (for dropout for example) 
 
         # Book keeping
         ep_infos = []

@@ -1,21 +1,3 @@
-# Copyright (c) 2021-2024, The RSL-RL Project Developers.
-# All rights reserved.
-# Original code is licensed under the BSD-3-Clause license.
-#
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The Legged Lab Project Developers.
-# All rights reserved.
-#
-# Copyright (c) 2025-2026, The TienKung-Lab Project Developers.
-# All rights reserved.
-# Modifications are licensed under the BSD-3-Clause license.
-#
-# This file contains code derived from the RSL-RL, Isaac Lab, and Legged Lab Projects,
-# with additional modifications by the TienKung-Lab Project,
-# and is distributed under the BSD-3-Clause license.
-
 from __future__ import annotations
 
 import os
@@ -52,13 +34,14 @@ class OnPolicyRunner:
         self._configure_multi_gpu()
 
         # resolve training type depending on the algorithm
+        
         if self.alg_cfg["class_name"] == "PPO":
             self.training_type = "rl"
         elif self.alg_cfg["class_name"] == "Distillation":
             self.training_type = "distillation"
         else:
             raise ValueError(f"Training type not found for algorithm {self.alg_cfg['class_name']}.")
-
+        print("没有使用amp")
         # resolve dimensions of observations
         obs, extras = self.env.get_observations()
         num_obs = obs.shape[1]
@@ -83,6 +66,9 @@ class OnPolicyRunner:
 
         # evaluate the policy class
         policy_class = eval(self.policy_cfg.pop("class_name"))
+        if "CnnMlp" in self.policy_cfg and isinstance(self.policy_cfg["CnnMlp"], dict):
+            self.policy_cfg["CnnMlp"].pop("num_heads", None)
+            self.policy_cfg["CnnMlp"].pop("embed_dim", None)
         policy: ActorCritic | ActorCriticRecurrent | StudentTeacher | StudentTeacherRecurrent = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
@@ -107,6 +93,8 @@ class OnPolicyRunner:
 
         # initialize algorithm
         alg_class = eval(self.alg_cfg.pop("class_name"))
+        self.alg_cfg.pop("optimizer", None)
+        self.alg_cfg.pop("share_cnn_encoders", None)
         self.alg: PPO | Distillation = alg_class(
             policy, device=self.device, **self.alg_cfg, multi_gpu_cfg=self.multi_gpu_cfg
         )
