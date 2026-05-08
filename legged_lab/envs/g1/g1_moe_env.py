@@ -20,12 +20,6 @@ from legged_lab.envs.g1.g1_rough_cfg import G129WALK_ROUGHENVCFG,G129WALK_ROUGHA
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
 from legged_lab.utils.env_utils.scene import SceneCfg
 
-from legged_lab.camera_noise.camera_noise import (
-            range_based_gaussian_noise,
-            gaussian_blur_noise,
-            depth_stero_noise
-        )
-
 from rsl_rl.env import VecEnv
 from rsl_rl.utils import AMPLoaderDisplay
 
@@ -293,26 +287,7 @@ class G1MOEROUGHEnv(VecEnv):
             )
         #
         if self.cfg.scene.camera.add_camera_noise:
-            # 实例化带状态的传感器死机模型
-            self.sensor_dead_model = camera_noise_cfg.SensorDeadNoiseModel(
-                cfg=camera_noise_cfg.SensorDeadNoiseCfg(
-                    dead_probability=0.02, 
-                    dead_frames=[2, 3, 4]
-                ),
-                num_envs=self.num_envs,
-                device=self.device
-            )
-            # 实例化其他无状态噪声的配置项，留着备用
-            self.gaussian_cfg = camera_noise_cfg.RangeBasedGaussianNoiseCfg(
-                noise_std=0.02, min_value=0.0, max_value=3.0,device=self.device
-            )
-            self.blur_cfg = camera_noise_cfg.GaussianBlurNoiseCfg(
-                kernel_size=3, sigma=1.0,device=self.device
-            )
-            self.stereo_cfg = camera_noise_cfg.DepthSteroNoiseCfg(
-                stero_far_distance=2.5, stero_min_distance=0.2, 
-                stero_full_block_artifacts_prob=0.05,device=self.device
-            )
+            pass
 
         # 脚连杆的索引
         self.ankle_link_ids,_ = self.robot.find_bodies(
@@ -569,9 +544,7 @@ class G1MOEROUGHEnv(VecEnv):
         #
         if self.camera is not None:
             self.depth_buffer[env_ids]=0
-        #
-        if self.cfg.scene.camera.add_camera_noise:
-            self.sensor_dead_model.reset(env_ids)
+        
         self.scene.write_data_to_sim()
         self.sim.forward()
 
@@ -741,20 +714,7 @@ class G1MOEROUGHEnv(VecEnv):
         )
 
     def add_camera_noise(self,depth,env_ids):
-        # InstinctLab 的函数要求输入形状为 (N, H, W, C)，我们需要补齐通道维度
-        depth = depth.unsqueeze(-1)
-
-        # 1. 基础距离高斯噪声
-        depth = range_based_gaussian_noise(depth, self.gaussian_cfg, env_ids)
-        # 2. 运动模糊
-        depth = gaussian_blur_noise(depth, self.blur_cfg, env_ids)
-        # 3. 双目失效伪影
-        depth = depth_stero_noise(depth, self.stereo_cfg, env_ids)
-        # 4. 传感器死机断片 (调用带状态的模型)
-        depth = self.sensor_dead_model(depth, self.sensor_dead_model.cfg, env_ids)
-
-        # 去掉通道维度，还原为 (N, H, W)
-        return depth.squeeze(-1)
+        pass
 
     def get_processed_deepcamera(self):
         # 获取底层输出: (num_envs, H=36, W=64)
