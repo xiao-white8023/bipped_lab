@@ -38,6 +38,7 @@ class RolloutStorage:
             self.action_sigma = None
             self.hidden_states = None
             self.rnd_state = None
+            self.residual_gate = None
 
         def clear(self):
             self.__init__()
@@ -88,6 +89,7 @@ class RolloutStorage:
             self.sigma = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
             self.returns = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
             self.advantages = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+            self.residual_gates = torch.ones(num_transitions_per_env, num_envs, 1, device=self.device)
 
         # For RND
         if rnd_state_shape is not None:
@@ -123,6 +125,10 @@ class RolloutStorage:
             self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
             self.mu[self.step].copy_(transition.action_mean)
             self.sigma[self.step].copy_(transition.action_sigma)
+            if transition.residual_gate is not None:
+                self.residual_gates[self.step].copy_(transition.residual_gate.view(-1, 1))
+            else:
+                self.residual_gates[self.step].fill_(1.0)
 
         # For RND
         if self.rnd_state_shape is not None:
@@ -195,7 +201,7 @@ class RolloutStorage:
             ], self.dones[i]
 
     # for reinforcement learning with feedforward networks
-    def mini_batch_generator(self, num_mini_batches, num_epochs=8):
+    def mini_batch_generator(self, num_mini_batches, num_epochs=8, include_residual_gate=False):
         if self.training_type != "rl":
             raise ValueError("This function is only available for reinforcement learning training.")
         batch_size = self.num_envs * self.num_transitions_per_env   ## 也就是说，我们现在手里有 98304 条 (s_t, a_t, r_t, ...) 数据。
@@ -219,6 +225,7 @@ class RolloutStorage:
         advantages = self.advantages.flatten(0, 1)
         old_mu = self.mu.flatten(0, 1)
         old_sigma = self.sigma.flatten(0, 1)
+        residual_gates = self.residual_gates.flatten(0, 1) if include_residual_gate else None
 
         # For RND
         if self.rnd_state_shape is not None:
@@ -244,6 +251,7 @@ class RolloutStorage:
                 advantages_batch = advantages[batch_idx]
                 old_mu_batch = old_mu[batch_idx]
                 old_sigma_batch = old_sigma[batch_idx]
+                residual_gate_batch = residual_gates[batch_idx] if include_residual_gate else None
 
                 # -- For RND
                 if self.rnd_state_shape is not None:
@@ -252,13 +260,29 @@ class RolloutStorage:
                     rnd_state_batch = None
 
                 # yield the mini-batch
-                yield obs_batch, privileged_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
+                batch = (
+                    obs_batch,
+                    privileged_observations_batch,
+                    actions_batch,
+                    target_values_batch,
+                    advantages_batch,
+                    returns_batch,
+                    old_actions_log_prob_batch,
+                    old_mu_batch,
+                    old_sigma_batch,
+                    (
                     None,
                     None,
-                ), None, rnd_state_batch
+                    ),
+                    None,
+                    rnd_state_batch,
+                )
+                if include_residual_gate:
+                    batch = (*batch, residual_gate_batch)
+                yield batch
 
     # for reinfrocement learning with recurrent networks
-    def recurrent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
+    def recurrent_mini_batch_generator(self, num_mini_batches, num_epochs=8, include_residual_gate=False):
         if self.training_type != "rl":
             raise ValueError("This function is only available for reinforcement learning training.")
         padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, self.dones)
@@ -302,6 +326,7 @@ class RolloutStorage:
                 advantages_batch = self.advantages[:, start:stop]
                 values_batch = self.values[:, start:stop]
                 old_actions_log_prob_batch = self.actions_log_prob[:, start:stop]
+                residual_gate_batch = self.residual_gates[:, start:stop] if include_residual_gate else None
 
                 # reshape to [num_envs, time, num layers, hidden dim] (original shape: [time, num_layers, num_envs, hidden_dim])
                 # then take only time steps after dones (flattens num envs and time dimensions),
@@ -323,9 +348,25 @@ class RolloutStorage:
                 hid_a_batch = hid_a_batch[0] if len(hid_a_batch) == 1 else hid_a_batch
                 hid_c_batch = hid_c_batch[0] if len(hid_c_batch) == 1 else hid_c_batch
 
-                yield obs_batch, privileged_obs_batch, actions_batch, values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (
+                batch = (
+                    obs_batch,
+                    privileged_obs_batch,
+                    actions_batch,
+                    values_batch,
+                    advantages_batch,
+                    returns_batch,
+                    old_actions_log_prob_batch,
+                    old_mu_batch,
+                    old_sigma_batch,
+                    (
                     hid_a_batch,
                     hid_c_batch,
-                ), masks_batch, rnd_state_batch
+                    ),
+                    masks_batch,
+                    rnd_state_batch,
+                )
+                if include_residual_gate:
+                    batch = (*batch, residual_gate_batch)
+                yield batch
 
                 first_traj = last_traj

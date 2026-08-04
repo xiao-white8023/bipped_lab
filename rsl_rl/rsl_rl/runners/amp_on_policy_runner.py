@@ -12,13 +12,8 @@ from rsl_rl.algorithms import AMPPPO
 from rsl_rl.env import VecEnv
 from rsl_rl.modules import (
     ActorCritic,
-    ActorCriticWalk,
-    ActorCriticRecurrent,
     Discriminator,
     EmpiricalNormalization,
-    StudentTeacher,
-    StudentTeacherRecurrent,
-    CnnMlp
 )
 from rsl_rl.utils import AMPLoader, Normalizer, store_code_state
 
@@ -37,12 +32,9 @@ class AmpOnPolicyRunner:
         self._configure_multi_gpu()
 
         # resolve training type depending on the algorithm
-        if self.alg_cfg["class_name"] in ["PPO", "AMPPPO"]:
-            self.training_type = "rl"
-        elif self.alg_cfg["class_name"] == "Distillation":
-            self.training_type = "distillation"
-        else:
+        if self.alg_cfg["class_name"] != "AMPPPO":
             raise ValueError(f"Training type not found for algorithm {self.alg_cfg['class_name']}.")
+        self.training_type = "rl"
 
         # resolve dimensions of observations
         obs, extras = self.env.get_observations()
@@ -52,11 +44,6 @@ class AmpOnPolicyRunner:
         if self.training_type == "rl":
             if "critic" in extras["observations"]:
                 self.privileged_obs_type = "critic"  # actor-critic reinforcement learnig, e.g., PPO
-            else:
-                self.privileged_obs_type = None
-        if self.training_type == "distillation":
-            if "teacher" in extras["observations"]:
-                self.privileged_obs_type = "teacher"  # policy distillation
             else:
                 self.privileged_obs_type = None
 
@@ -74,7 +61,7 @@ class AmpOnPolicyRunner:
         if "CnnMlp" in self.policy_cfg and isinstance(self.policy_cfg["CnnMlp"], dict):
             self.policy_cfg["CnnMlp"].pop("num_heads", None)
             self.policy_cfg["CnnMlp"].pop("embed_dim", None)
-        policy: ActorCritic | ActorCriticRecurrent | StudentTeacher | StudentTeacherRecurrent|ActorCriticWalk = policy_class(
+        policy: ActorCritic = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
 
@@ -105,9 +92,14 @@ class AmpOnPolicyRunner:
         )
         
         print(f"DEBUG: 数据集的维度: {amp_data.observation_dim}")
-        obs, _ = self.env.get_observations() # 获取机器人实际观测
-        amp_obs_demo = self.env.get_amp_obs_for_expert_trans() # 获得amp样本的维度
+        amp_obs_demo = self.env.get_amp_obs_for_expert_trans()  # 获得AMP样本的维度
         print(f"DEBUG: 机器人输出的用来和数据集比较的维度: {amp_obs_demo.shape[1]}")
+
+        if amp_data.observation_dim != amp_obs_demo.shape[1]:
+            raise ValueError(
+                "AMP observation dimension mismatch: "
+                f"dataset={amp_data.observation_dim}, policy={amp_obs_demo.shape[1]}."
+            )
         
         amp_normalizer = Normalizer(amp_data.observation_dim)
         discriminator = Discriminator(
@@ -118,7 +110,17 @@ class AmpOnPolicyRunner:
             train_cfg["amp_task_reward_lerp"], # 惩罚系数 只注重任务奖励 不重视模仿
         ).to(self.device)
         
-        min_std = torch.zeros(len(train_cfg["min_normalized_std"]), device=self.device, requires_grad=False) # 创建一个全为 0 的张量，用作动作噪声标准差（Standard Deviation）的下限（Floor）。
+        min_std = torch.tensor(
+            train_cfg["min_normalized_std"],
+            dtype=torch.float32,
+            device=self.device,
+            requires_grad=False,
+        )
+        if min_std.numel() != self.env.num_actions:
+            raise ValueError(
+                "min_normalized_std length must match the action dimension: "
+                f"{min_std.numel()} != {self.env.num_actions}."
+            )
 
         # initialize algorithm
         alg_class = eval(self.alg_cfg.pop("class_name"))
@@ -193,10 +195,6 @@ class AmpOnPolicyRunner:
             else:
                 raise ValueError("Logger type not found. Please choose 'neptune', 'wandb' or 'tensorboard'.")
 
-        # check if teacher is loaded
-        if self.training_type == "distillation" and not self.alg.policy.loaded_teacher:
-            raise ValueError("Teacher model parameters not loaded. Please load a teacher model to distill.")
-
         # randomize initial episode lengths (for exploration)
         if init_at_random_ep_len:
             self.env.episode_length_buf = torch.randint_like(
@@ -260,17 +258,62 @@ class AmpOnPolicyRunner:
                     else:
                         privileged_obs = obs
 
-                    # Account for terminal state transitions
-                    next_amp_obs_with_term = torch.clone(next_amp_obs)
-                    reset_env_ids = self.env.reset_env_ids
-                    terminal_amp_states = self.env.get_amp_obs_for_expert_trans()[reset_env_ids]
-                    next_amp_obs_with_term[reset_env_ids] = terminal_amp_states
+                    # Account for terminal state transitions.
+                    # env.step() has already reset terminated environments, so next_amp_obs
+                    # contains reset states for those environments. The environment must cache
+                    # the true pre-reset AMP states in infos["terminal_amp_states"].
+                    next_amp_obs_with_term = next_amp_obs.clone()
+                    reset_env_ids = self.env.reset_env_ids.to(self.device)
+
+                    if reset_env_ids.numel() > 0:
+                        if "terminal_amp_states" not in infos:
+                            raise RuntimeError(
+                                "The environment reset one or more environments, but infos does not contain "
+                                "'terminal_amp_states'. Cache the AMP observations before env.reset() inside env.step()."
+                            )
+
+                        terminal_amp_states = infos["terminal_amp_states"].to(self.device)
+
+                        if terminal_amp_states.ndim != 2:
+                            raise RuntimeError(
+                                "terminal_amp_states must be a 2-D tensor, got "
+                                f"shape={tuple(terminal_amp_states.shape)}."
+                            )
+                        if terminal_amp_states.shape[0] != reset_env_ids.numel():
+                            raise RuntimeError(
+                                "The number of terminal AMP states does not match the number of reset environments: "
+                                f"{terminal_amp_states.shape[0]} != {reset_env_ids.numel()}."
+                            )
+                        if terminal_amp_states.shape[1] != next_amp_obs.shape[1]:
+                            raise RuntimeError(
+                                "Terminal AMP state dimension does not match the normal AMP observation dimension: "
+                                f"{terminal_amp_states.shape[1]} != {next_amp_obs.shape[1]}."
+                            )
+
+                        # terminal_amp_states[i] corresponds to reset_env_ids[i].
+                        next_amp_obs_with_term.index_copy_(
+                            0,
+                            reset_env_ids,
+                            terminal_amp_states,
+                        )
 
                     rewards = self.alg.discriminator.predict_amp_reward(
-                        amp_obs, next_amp_obs_with_term, rewards, normalizer=self.alg.amp_normalizer
+                        amp_obs,
+                        next_amp_obs_with_term,
+                        rewards,
+                        normalizer=self.alg.amp_normalizer,
                     )[0]
-                    amp_obs = torch.clone(next_amp_obs)
-                    self.alg.process_env_step(rewards, dones, infos, next_amp_obs_with_term)
+
+                    # Start the next rollout transition from the post-reset states.
+                    amp_obs = next_amp_obs.clone()
+
+                    # Store current -> true terminal transitions for reset environments.
+                    self.alg.process_env_step(
+                        rewards,
+                        dones,
+                        infos,
+                        next_amp_obs_with_term,
+                    )
 
                     # Extract intrinsic rewards (only for logging)
                     intrinsic_rewards = self.alg.intrinsic_rewards if self.alg.rnd else None

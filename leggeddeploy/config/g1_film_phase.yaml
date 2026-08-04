@@ -1,0 +1,84 @@
+# 带步态相位版本 (观测 100 维)
+
+control_dt: 0.02
+
+msg_type: "hg"        # "hg" for G1
+imu_type: "pelvis"    # "torso" or "pelvis"
+
+lowcmd_topic: "rt/lowcmd"
+lowstate_topic: "rt/lowstate"
+
+# 策略路径 (导出的 TorchScript JIT 模型)
+policy_path: "/home/cjh/TienKung-Lab/logs/g1_noamp/2026-07-21_21-01-51/exported/policy.pt"
+
+# 使用 10 帧观测历史 (与训练一致)
+obs_history_length: 10
+
+# G1 关节映射: Isaac Lab 顺序 -> 电机索引
+# Isaac Lab 顺序: [left_hip_pitch, right_hip_pitch, waist_yaw, left_hip_roll, right_hip_roll, ...]
+joint2motor_idx: [0, 6, 12, 1, 7, 13, 2, 8, 14, 3, 9, 15, 22, 4, 10, 16, 23, 5, 11, 17, 24, 18, 25, 19, 26, 20, 27, 21, 28] # 是isaaclab的关节在真实世界中的索引
+
+# PD 增益 (Isaac Lab 顺序)
+kps: [200, 200, 200, 150, 150, 200, 150, 150, 200, 200, 200, 100, 100, 20, 20, 100, 100, 20, 20, 50, 50, 50, 50, 40, 40, 40, 40, 40, 40]
+kds: [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+
+# 默认关节位置 (Isaac Lab 顺序)
+default_joint_pos: [-0.2, -0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.42, 0.42, 0.35, 0.35, -0.23, -0.23, 0.18, -0.18, 0.0, 0.0, 0.0, 0.0, 0.87, 0.87, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# 观测缩放
+ang_vel_scale: 1.0
+dof_pos_scale: 1.0
+dof_vel_scale: 1.0
+action_scale: 0.25
+command_scale: [1.0, 1.0, 1.0]
+
+# 观测维度 (带步态相位版本)
+# ang_vel(3) + gravity(3) + command(3) + joint_pos(29) + joint_vel(29) + action(29) + gait_phase(4) = 100
+num_actions: 29
+num_obs: 100  # 单帧本体观测的维度  # 100
+num_policy_obs: 3304 # 10帧的本体观测历史+4帧的展平后的深度图 # 3304
+
+# DWAQ encoder 输出维度: velocity(3) + latent(16) = 19
+# cenet_out_dim: 19
+
+# 步态相位配置
+gait_phase:
+  enable: true
+  period: 0.8    # 步态周期 0.8s
+  offset: 0.5    # 左右腿相位差 50%
+
+# 速度命令范围
+command_range: {lin_vel_x: [-0.4, 0.7], lin_vel_y: [-0.4, 0.4], ang_vel_z: [-1.57, 1.57]}
+
+
+# 深度图相关
+depth:
+  enable: true 
+  robot_ip: "192.168.123.164" # 有线连接
+  port: 5555
+  depth_min: 0.1
+  depth_max: 2.5
+  raw_h: 36
+  raw_w: 64
+  crop_up: 18
+  crop_down: 0
+  crop_left: 16
+  crop_right: 16
+  history_frames: 4
+  depth_update_interval: 5
+  
+  CMD_RAW : 1   # 请求机器人端发送原生的深度图
+  CMD_INTERRUPT : 0 # 终止
+
+  # 深度图显示，全部是灰度图，不用伪彩色
+  show_raw_depth: true
+  show_pre_norm_depth: true
+  show_policy_depth: true
+
+  raw_depth_window_name: "robot_raw_depth"
+  pre_norm_depth_window_name: "pre_norm_depth_m"
+  policy_depth_window_name: "policy_depth_norm"
+
+  raw_depth_display_scale: 1
+  pre_norm_depth_display_scale: 10
+  policy_depth_display_scale: 10

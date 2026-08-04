@@ -85,7 +85,7 @@ class G1ROUGHEnv(VecEnv):
         if "camera" in self.scene.sensors:
             self.camera: GroupedRayCasterCamera = self.scene.sensors["camera"]
         else:
-            raise Exception("找不到camera")
+            self.camera=None
 
         command_cfg = UniformVelocityCommandCfg(
             asset_name="robot",
@@ -116,31 +116,69 @@ class G1ROUGHEnv(VecEnv):
         )
         # 数据的总的帧数
         self.motion_len = self.amp_loader_display.trajectory_num_frames[0]
-
+        print("训练时的真实关节顺序:", self.robot.joint_names)
     def visualize_motion(self, time):
         # 返回的是当前时间下的 数据中对应的帧
         visual_motion_frame = self.amp_loader_display.get_full_frame_at_time(0, time)
         device = self.device
+
+        root_pose_size = 6
+        root_vel_size = 6
+        motion_frame_size = visual_motion_frame.shape[0]
+        motion_joint_size = (motion_frame_size - root_pose_size - root_vel_size) // 2
+        if motion_frame_size != root_pose_size + root_vel_size + 2 * motion_joint_size:
+            raise ValueError(
+                f"Unsupported motion frame size {motion_frame_size}. Expected root(6) + joints + root_vel(6) + joint_vel."
+            )
+
+        joint_pos_start_idx = root_pose_size
+        root_vel_start_idx = joint_pos_start_idx + motion_joint_size
+        joint_vel_start_idx = root_vel_start_idx + root_vel_size
+
+        if motion_joint_size == 29:
+            motion_group_sizes = {
+                "left_leg": 6,
+                "right_leg": 6,
+                "waist": 3,
+                "left_arm": 7,
+                "right_arm": 7,
+            }
+        elif motion_joint_size == 23:
+            motion_group_sizes = {
+                "left_leg": 6,
+                "right_leg": 6,
+                "waist": 1,
+                "left_arm": 5,
+                "right_arm": 5,
+            }
+        else:
+            raise ValueError(f"Unsupported G1 motion joint size {motion_joint_size}. Expected 29 or 23.")
  
         # 关节位置
         dof_pos = torch.zeros((self.num_envs, self.robot.num_joints), device=device)
         # 关节速度
         dof_vel = torch.zeros((self.num_envs, self.robot.num_joints), device=device)
- 
-        dof_pos[:, self.left_leg_ids] = visual_motion_frame[6:12]
-        dof_pos[:, self.right_leg_ids] = visual_motion_frame[12:18]
-        dof_pos[:,self.waist_ids] = visual_motion_frame[18:21]
-        dof_pos[:, self.left_arm_ids] = visual_motion_frame[21:28]
-        dof_pos[:, self.right_arm_ids] = visual_motion_frame[28:35]
- 
-        dof_vel[:, self.left_leg_ids] = visual_motion_frame[41:47]
-        dof_vel[:, self.right_leg_ids] = visual_motion_frame[47:53]
-        dof_vel[:,self.waist_ids] = visual_motion_frame[53:56]
-        dof_vel[:, self.left_arm_ids] = visual_motion_frame[56:63]
-        dof_vel[:, self.right_arm_ids] = visual_motion_frame[63:70]
+
+        joint_groups = (
+            (self.left_leg_ids, motion_group_sizes["left_leg"]),
+            (self.right_leg_ids, motion_group_sizes["right_leg"]),
+            (self.waist_ids, motion_group_sizes["waist"]),
+            (self.left_arm_ids, motion_group_sizes["left_arm"]),
+            (self.right_arm_ids, motion_group_sizes["right_arm"]),
+        )
+
+        pos_src_idx = joint_pos_start_idx
+        vel_src_idx = joint_vel_start_idx
+        for joint_ids, motion_group_size in joint_groups:
+            copy_size = min(len(joint_ids), motion_group_size)
+            if copy_size > 0:
+                dof_pos[:, joint_ids[:copy_size]] = visual_motion_frame[pos_src_idx : pos_src_idx + copy_size]
+                dof_vel[:, joint_ids[:copy_size]] = visual_motion_frame[vel_src_idx : vel_src_idx + copy_size]
+            pos_src_idx += motion_group_size
+            vel_src_idx += motion_group_size
  
         self.robot.write_joint_position_to_sim(dof_pos)
-        self.robot.write_joint_velocity_to_sim(dof_vel)
+        self.robot.write_joint_velocity_to_sim(torch.zeros_like(dof_vel))
 
                 # 生成环境ID张量：维度 [num_envs]，值为0,1,...,num_envs-1，用于批量更新所有并行环境的机器人状态
         env_ids = torch.arange(self.num_envs, device=device)
@@ -158,8 +196,8 @@ class G1ROUGHEnv(VecEnv):
         quat_wxyz = torch.tensor(
             [quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]], dtype=torch.float32, device=device
         )
-        # 提取AMP帧中的根节点线速度（35:38维：vx,vy,vz），clone()避免修改原数据
-        lin_vel = visual_motion_frame[35:38].clone()
+        # 可视化时只摆姿态，避免速度尖峰被物理积分放大成抖动。
+        lin_vel = torch.zeros(3, dtype=torch.float32, device=device)
         # 设置根节点的角速度 初始化一个 3 维全 0 张量，作为根节点的角速度 ang_vel
         ang_vel = torch.zeros_like(lin_vel)
 
@@ -171,9 +209,11 @@ class G1ROUGHEnv(VecEnv):
         root_state[:, 10:13] = torch.tile(ang_vel.unsqueeze(0), (self.num_envs, 1))
  
         self.robot.write_root_state_to_sim(root_state, env_ids)
-        self.sim.render()
-        self.sim.step()
-        self.scene.update(dt=self.step_dt)
+        self.scene.write_data_to_sim()
+        self.sim.forward()
+        self.scene.update(dt=0.0)
+        if not self.headless:
+            self.sim.render()
 
         # 左手的位置
         left_hand_pos = (
@@ -275,6 +315,11 @@ class G1ROUGHEnv(VecEnv):
         # 创建「超时标记缓冲区」，标记哪些环境因达到最大 episode 长度需要重置
         self.time_out_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
+        self.phase = torch.zeros(self.num_envs, device=self.device)
+        self.phase_left = torch.zeros(self.num_envs, device=self.device)
+        self.phase_right = torch.zeros(self.num_envs, device=self.device)
+        self.leg_phase = torch.zeros(self.num_envs, 2, device=self.device)
+
         self.action = torch.zeros(
             self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False
         )
@@ -290,14 +335,52 @@ class G1ROUGHEnv(VecEnv):
                 device=self.device, dtype=torch.float
             )
         #
+        amp_joint_names = [
+            "left_hip_pitch_joint",
+            "left_hip_roll_joint",
+            "left_hip_yaw_joint",
+            "left_knee_joint",
 
+            "right_hip_pitch_joint",
+            "right_hip_roll_joint",
+            "right_hip_yaw_joint",
+            "right_knee_joint",
+
+            "waist_yaw_joint",
+
+            "left_shoulder_pitch_joint",
+            "left_shoulder_roll_joint",
+            "left_shoulder_yaw_joint",
+            "left_elbow_joint",
+            "left_wrist_roll_joint",
+
+            "right_shoulder_pitch_joint",
+            "right_shoulder_roll_joint",
+            "right_shoulder_yaw_joint",
+            "right_elbow_joint",
+            "right_wrist_roll_joint",
+        ]
+
+        self.amp_joint_ids, self.amp_joint_names = (
+            self.robot.find_joints(
+                amp_joint_names,
+                preserve_order=True,
+            )
+        )
+
+        if len(self.amp_joint_ids) != 19:
+            raise RuntimeError(
+                "AMP应找到19个非脚踝关节，"
+                f"实际找到 {len(self.amp_joint_ids)}："
+                f"{self.amp_joint_names}"
+            )
         # 脚连杆的索引
         self.ankle_link_ids,_ = self.robot.find_bodies(
             name_keys=['left_ankle_roll_link','right_ankle_roll_link'],preserve_order=True,
         )
         # 手腕处的连杆
         self.wrist_link_ids,_ =self.robot.find_bodies(
-            name_keys=['left_ankle_roll_link', 'right_ankle_roll_link'],
+            name_keys=['left_wrist_roll_rubber_hand', 'right_wrist_roll_rubber_hand'],
             preserve_order=True,
         )
         # 左腿关节索引
@@ -332,8 +415,6 @@ class G1ROUGHEnv(VecEnv):
                     'left_shoulder_yaw_joint',
                     'left_elbow_joint',
                     'left_wrist_roll_joint',
-                    'left_wrist_pitch_joint', 
-                    'left_wrist_yaw_joint',
             ],
             preserve_order=True,
         )
@@ -345,8 +426,6 @@ class G1ROUGHEnv(VecEnv):
                     'right_shoulder_yaw_joint',
                     'right_elbow_joint',
                     'right_wrist_roll_joint',
-                    'right_wrist_pitch_joint',
-                    'right_wrist_yaw_joint'
             ],
             preserve_order=True,
         )
@@ -354,8 +433,6 @@ class G1ROUGHEnv(VecEnv):
         self.waist_ids, _ = self.robot.find_joints(
             name_keys=[
                 "waist_yaw_joint",
-                "waist_roll_joint",
-                "waist_pitch_joint"
             ],
             preserve_order=True,
         )
@@ -367,28 +444,6 @@ class G1ROUGHEnv(VecEnv):
         self.avg_feet_speed_per_step = torch.zeros(
             self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
         )
-
-        # Init gait parameter
-        # 步态相位（4096,2）例如[[0.2,0.3],...] 表示第0个环境的左腿走了20%的周期 右腿走了30%的周期
-        # 相位的核心作用是：通过 “进度” 判断腿当前处于「支撑相（落地）」还是「摆动相（抬起）」
-        self.gait_phase = torch.zeros(self.num_envs, 2, dtype=torch.float, device=self.device, requires_grad=False)
-        # 存储「每个并行环境的步态周期时长」（单位：秒），定义 “左腿 / 右腿完成一次‘支撑→摆动→支撑’的总时间”。
-        # 创建相同的周期 均为0.85s
-        # gait_cycle 不是 “左腿抬落 + 右腿抬落” 的总时间，而是单腿完成一次 “支撑（落地）→摆动（抬起）→重新支撑” 的完整时长；
-        self.gait_cycle = torch.full(
-            (self.num_envs,), self.cfg.gait.gait_cycle, dtype=torch.float, device=self.device, requires_grad=False
-        )
-        # 定义左腿在空中的占比 右腿在空中的占比
-        self.phase_ratio = torch.tensor(
-            [self.cfg.gait.gait_air_ratio_l, self.cfg.gait.gait_air_ratio_r], dtype=torch.float, device=self.device
-        ).repeat(self.num_envs, 1)
-        # 定义左右腿的偏移
-        self.phase_offset = torch.tensor(
-            [self.cfg.gait.gait_phase_offset_l, self.cfg.gait.gait_phase_offset_r],
-            dtype=torch.float,
-            device=self.device,
-        ).repeat(self.num_envs, 1)
-
         self.obs_noisy_vec_and_buffer()
 
     def compute_current_observations(self):
@@ -428,12 +483,9 @@ class G1ROUGHEnv(VecEnv):
                 ang_vel * self.obs_scales.ang_vel,  # 3
                 projected_gravity * self.obs_scales.projected_gravity,  # 3
                 command * self.obs_scales.commands,  # 3
-                joint_pos * self.obs_scales.joint_pos,  # 29
-                joint_vel * self.obs_scales.joint_vel,  # 29
-                action * self.obs_scales.actions,  # 29
-                torch.sin(2 * torch.pi * self.gait_phase),  # 2
-                torch.cos(2 * torch.pi * self.gait_phase),  # 2
-                self.phase_ratio,  # 2
+                joint_pos * self.obs_scales.joint_pos,  # 23
+                joint_vel * self.obs_scales.joint_vel,  # 23
+                action * self.obs_scales.actions,  # 23
             ],
             dim=-1,
         )
@@ -445,9 +497,9 @@ class G1ROUGHEnv(VecEnv):
     
     def obs_noisy_vec_and_buffer(self):
         if self.add_noise:
-            
+        
             current_actor_obs, _ = self.compute_current_observations()
-            
+        
             noise_obs_vec = torch.zeros_like(current_actor_obs[0]) # 定义一个和current_actor_obs维度一样的向量
             noise_obs_vec[0:3] = self.obs_scales.ang_vel*self.noisy.ang_vel
             noise_obs_vec[3:6] = self.obs_scales.projected_gravity*self.noisy.projected_gravity
@@ -464,7 +516,8 @@ class G1ROUGHEnv(VecEnv):
                     - self.cfg.normalization.height_scan_offset
                 )
             height_scan_noise_vec = torch.zeros_like(height_scan[0])
-            height_scan_noise_vec[:] = self.noisy.height_scan * self.obs_scales.height_scan
+            if self.add_noise:
+                height_scan_noise_vec[:] = self.noisy.height_scan * self.obs_scales.height_scan
             self.height_scan_noise_vec = height_scan_noise_vec
         
         # 定义actor缓存区 存入单帧观测数据后，self.actor_obs_buffer 的核心存储张量（buffer）是一个 3 维张量，维度为 [num_envs, max_len, single_actor_obs_dim]
@@ -501,7 +554,7 @@ class G1ROUGHEnv(VecEnv):
             self.critic_obs = torch.cat([self.critic_obs, height_scan], dim=-1)
             if self.add_noise:
                 height_scan += (2 * torch.rand_like(height_scan) - 1) * self.height_scan_noise_vec
-            self.actor_obs = torch.cat([self.actor_obs, height_scan], dim=-1)
+            
         
         self.actor_obs = torch.clip(self.actor_obs, -self.clip_obs, self.clip_obs)
         self.critic_obs = torch.clip(self.critic_obs, -self.clip_obs, self.clip_obs)
@@ -549,28 +602,65 @@ class G1ROUGHEnv(VecEnv):
         self.sim.forward()
 
     def step(self, actions: torch.Tensor):
+        # ---------------------------------------------------------
+        # 1. 处理动作
+        # ---------------------------------------------------------
         delayed_actions = self.action_buffer.compute(actions)
-        self.action = torch.clip(delayed_actions, -self.clip_actions, self.clip_actions).to(self.device)
 
-        processed_actions = self.action * self.action_scale + self.robot.data.default_joint_pos
+        self.action = torch.clip(
+            delayed_actions,
+            -self.clip_actions,
+            self.clip_actions,
+        ).to(self.device)
 
+        processed_actions = (
+            self.action * self.action_scale
+            + self.robot.data.default_joint_pos
+        )
+
+        # ---------------------------------------------------------
+        # 2. 物理仿真
+        # ---------------------------------------------------------
         self.avg_feet_force_per_step = torch.zeros(
-            self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
+            self.num_envs,
+            len(self.feet_cfg.body_ids),
+            dtype=torch.float,
+            device=self.device,
+            requires_grad=False,
         )
+
         self.avg_feet_speed_per_step = torch.zeros(
-            self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
+            self.num_envs,
+            len(self.feet_cfg.body_ids),
+            dtype=torch.float,
+            device=self.device,
+            requires_grad=False,
         )
+
         for _ in range(self.cfg.sim.decimation):
             self.sim_step_counter += 1
-            self.robot.set_joint_position_target(processed_actions)
+
+            self.robot.set_joint_position_target(
+                processed_actions
+            )
+
             self.scene.write_data_to_sim()
             self.sim.step(render=False)
             self.scene.update(dt=self.physics_dt)
 
             self.avg_feet_force_per_step += torch.norm(
-                self.contact_sensor.data.net_forces_w[:, self.feet_cfg.body_ids, :3], dim=-1
+                self.contact_sensor.data.net_forces_w[
+                    :, self.feet_cfg.body_ids, :3
+                ],
+                dim=-1,
             )
-            self.avg_feet_speed_per_step += torch.norm(self.robot.data.body_lin_vel_w[:, self.ankle_link_ids, :], dim=-1)
+
+            self.avg_feet_speed_per_step += torch.norm(
+                self.robot.data.body_lin_vel_w[
+                    :, self.ankle_link_ids, :
+                ],
+                dim=-1,
+            )
 
         self.avg_feet_force_per_step /= self.cfg.sim.decimation
         self.avg_feet_speed_per_step /= self.cfg.sim.decimation
@@ -578,30 +668,98 @@ class G1ROUGHEnv(VecEnv):
         if not self.headless:
             self.sim.render()
 
+        # ---------------------------------------------------------
+        # 3. 更新episode、命令和随机事件
+        # ---------------------------------------------------------
         self.episode_length_buf += 1
         self._calculate_gait_para()
 
         self.command_generator.compute(self.step_dt)
-        if "interval" in self.event_manager.available_modes:
-            self.event_manager.apply(mode="interval", dt=self.step_dt)
 
+        if "interval" in self.event_manager.available_modes:
+            self.event_manager.apply(
+                mode="interval",
+                dt=self.step_dt,
+            )
+
+        # ---------------------------------------------------------
+        # 4. 判断终止和计算任务奖励
+        # ---------------------------------------------------------
         self.reset_buf, self.time_out_buf = self.check_reset()
-        reward_buf = self.reward_manager.compute(self.step_dt)
-        self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+
+        reward_buf = self.reward_manager.compute(
+            self.step_dt
+        )
+
+        self.reset_env_ids = self.reset_buf.nonzero(
+            as_tuple=False
+        ).flatten()
+
+        # ---------------------------------------------------------
+        # 5. 关键：必须在reset前保存真实终止AMP状态
+        # ---------------------------------------------------------
+        pre_reset_amp_obs = (
+            self.get_amp_obs_for_expert_trans()
+            .detach()
+        )
+
+        # 只保存需要reset的环境，避免保存整个4096×50张量
+        terminal_amp_states = (
+            pre_reset_amp_obs[self.reset_env_ids]
+            .clone()
+        )
+
+        # 确保extras结构存在
+        if "observations" not in self.extras:
+            self.extras["observations"] = {}
+
+        # terminal_amp_states的第i行对应reset_env_ids的第i个环境
+        self.extras["terminal_amp_states"] = (
+            terminal_amp_states
+        )
+
+        # 不要只在reset()内部设置，否则没有reset时可能残留旧值
+        self.extras["time_outs"] = (
+            self.time_out_buf.clone()
+        )
+
+        # ---------------------------------------------------------
+        # 6. reset终止环境
+        # ---------------------------------------------------------
         self.reset(self.reset_env_ids)
 
+        # ---------------------------------------------------------
+        # 7. reset后计算下一时刻观测
+        # ---------------------------------------------------------
         actor_obs, critic_obs = self.compute_observations()
+
         if self.camera is not None:
             depth_obs = self.get_deepcamera_history()
-            flat_depth = depth_obs.view(self.num_envs, -1)
-            self.extras["observations"]["depth"] = flat_depth
-            
-            #  核心修改：同理，在 step 中也进行拼接
-            actor_obs = torch.cat([actor_obs, flat_depth], dim=-1)
-            critic_obs = torch.cat([critic_obs, flat_depth], dim=-1)
-            
-        self.extras["observations"]["critic"] = critic_obs
-        return actor_obs, reward_buf, self.reset_buf, self.extras
+
+            flat_depth = depth_obs.view(
+                self.num_envs,
+                -1,
+            )
+
+            self.extras["observations"]["depth"] = (
+                flat_depth
+            )
+
+            actor_obs = torch.cat(
+                [actor_obs, flat_depth],
+                dim=-1,
+            )
+
+        self.extras["observations"]["critic"] = (
+            critic_obs
+        )
+
+        return (
+            actor_obs,
+            reward_buf,
+            self.reset_buf,
+            self.extras,
+        )
 
     def check_reset(self):
         net_contact_forces = self.contact_sensor.data.net_forces_w_history
@@ -647,67 +805,88 @@ class G1ROUGHEnv(VecEnv):
             
             #  核心修改：将深度图直接拼接到本体观测的末尾
             actor_obs = torch.cat([actor_obs, flat_depth], dim=-1)
-            critic_obs = torch.cat([critic_obs, flat_depth], dim=-1)
+            critic_obs = torch.cat([critic_obs], dim=-1)
             
         self.extras["observations"]["critic"] = critic_obs
         return actor_obs, self.extras
     
     def get_amp_obs_for_expert_trans(self):
-        # 左手的位置
+
+        joint_pos = self.robot.data.joint_pos[
+            :, self.amp_joint_ids
+        ]
+
+        joint_vel = self.robot.data.joint_vel[
+            :, self.amp_joint_ids
+        ]
+
         left_hand_pos = (
-            self.robot.data.body_state_w[:, self.wrist_link_ids[0], :3]
+            self.robot.data.body_state_w[
+                :, self.wrist_link_ids[0], :3
+            ]
             - self.robot.data.root_state_w[:, 0:3]
         )
-        # 右手的位置
+
         right_hand_pos = (
-            self.robot.data.body_state_w[:, self.wrist_link_ids[1], :3]
+            self.robot.data.body_state_w[
+                :, self.wrist_link_ids[1], :3
+            ]
             - self.robot.data.root_state_w[:, 0:3]
         )
-        # 
-        left_hand_pos = quat_apply(quat_conjugate(self.robot.data.root_state_w[:, 3:7]), left_hand_pos)
-        right_hand_pos = quat_apply(quat_conjugate(self.robot.data.root_state_w[:, 3:7]), right_hand_pos)
 
-        # 左脚的位置
         left_foot_pos = (
-            self.robot.data.body_state_w[:, self.ankle_link_ids[0], :3] - self.robot.data.root_state_w[:, 0:3]
+            self.robot.data.body_state_w[
+                :, self.ankle_link_ids[0], :3
+            ]
+            - self.robot.data.root_state_w[:, 0:3]
         )
-        # 右脚的位置
+
         right_foot_pos = (
-            self.robot.data.body_state_w[:, self.ankle_link_ids[1], :3] - self.robot.data.root_state_w[:, 0:3]
+            self.robot.data.body_state_w[
+                :, self.ankle_link_ids[1], :3
+            ]
+            - self.robot.data.root_state_w[:, 0:3]
         )
-        left_foot_pos = quat_apply(quat_conjugate(self.robot.data.root_state_w[:, 3:7]), left_foot_pos)
-        right_foot_pos = quat_apply(quat_conjugate(self.robot.data.root_state_w[:, 3:7]), right_foot_pos)
 
-        self.left_leg_dof_pos = self.robot.data.joint_pos[:, self.left_leg_ids]
-        self.right_leg_dof_pos = self.robot.data.joint_pos[:,self.right_leg_ids]
-        self.waist_dof_pos = self.robot.data.joint_pos[:,self.waist_ids]
-        self.left_arm_dof_pos = self.robot.data.joint_pos[:,self.left_arm_ids]
-        self.right_arm_dof_pos = self.robot.data.joint_pos[:,self.right_arm_ids]
-        self.left_leg_dof_vel = self.robot.data.joint_vel[:,self.left_leg_ids]
-        self.right_leg_dof_vel = self.robot.data.joint_vel[:,self.right_leg_ids]
-        self.waist_dof_vel = self.robot.data.joint_vel[:,self.waist_ids]
-        self.left_arm_dof_vel = self.robot.data.joint_vel[:,self.left_arm_ids]
-        self.right_arm_dof_vel = self.robot.data.joint_vel[:,self.right_arm_ids]
+        root_quat_inv = quat_conjugate(
+            self.robot.data.root_state_w[:, 3:7]
+        )
 
-        return torch.cat(
-            (
-                self.left_leg_dof_pos,
-                self.right_leg_dof_pos,
-                self.waist_dof_pos,
-                self.left_arm_dof_pos,
-                self.right_arm_dof_pos,
-                self.left_leg_dof_vel,
-                self.right_leg_dof_vel,
-                self.waist_dof_vel,
-                self.left_arm_dof_vel,
-                self.right_arm_dof_vel,
-                left_hand_pos,
-                right_hand_pos,
-                left_foot_pos,
-                right_foot_pos
-            ),
+        left_hand_pos = quat_apply(
+            root_quat_inv,
+            left_hand_pos,
+        )
+        right_hand_pos = quat_apply(
+            root_quat_inv,
+            right_hand_pos,
+        )
+        left_foot_pos = quat_apply(
+            root_quat_inv,
+            left_foot_pos,
+        )
+        right_foot_pos = quat_apply(
+            root_quat_inv,
+            right_foot_pos,
+        )
+
+        amp_obs = torch.cat(
+            [
+                joint_pos,       # 19
+                joint_vel,       # 19
+                left_hand_pos,   # 3
+                right_hand_pos,  # 3
+                left_foot_pos,   # 3
+                right_foot_pos,  # 3
+            ],
             dim=-1,
         )
+
+        if amp_obs.shape[1] != 50:
+            raise RuntimeError(
+                f"AMP obs 应为50维，实际为 {amp_obs.shape}"
+            )
+
+        return amp_obs
     
     def get_processed_deepcamera(self):
         # 获取底层输出: (num_envs, H=36, W=64)
@@ -766,8 +945,19 @@ class G1ROUGHEnv(VecEnv):
         except ModuleNotFoundError:
             pass
         return torch_utils.set_seed(seed)
-    
+
     def _calculate_gait_para(self) -> None:
-        t = self.episode_length_buf * self.step_dt / self.gait_cycle
-        self.gait_phase[:, 0] = (t + self.phase_offset[:, 0]) % 1.0
-        self.gait_phase[:, 1] = (t + self.phase_offset[:, 1]) % 1.0
+        gait_cfg = self.cfg.gait
+        if not gait_cfg.enable:
+            return
+
+        period = gait_cfg.period
+        offset = gait_cfg.offset
+        t = self.episode_length_buf.float() * self.step_dt
+
+        self.phase = (t % period) / period
+        self.phase_left = self.phase
+        self.phase_right = (self.phase + offset) % 1.0
+        self.leg_phase[:, 0] = self.phase_left
+        self.leg_phase[:, 1] = self.phase_right
+    

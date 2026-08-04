@@ -1,35 +1,46 @@
+"""Motion loader used by ``play_amp_animation.py`` for G1 23-DoF playback.
+
+Expected visualization frame layout (58 values):
+    root position (3)
+    root XYZ Euler angles (3)
+    G1 joint positions (23)
+    root linear velocity (3)
+    root angular velocity (3)
+    G1 joint velocities (23)
+
+The loader keeps the public API used by the original TienKung-Lab code while
+fixing the 29-DoF constants, frame indexing, boundary handling, and NumPy 1.26+
+compatibility.
+"""
+
+from __future__ import annotations
+
 import glob
 import json
+from pathlib import Path
+from typing import Sequence
 
 import numpy as np
 import torch
 
+
 class AMPLoaderDisplay:
-    '''
-    # tienkung 
-    JOINT_POS_SIZE = 26
+    """Load and interpolate G1 23-DoF visualization trajectories."""
 
-    JOINT_VEL_SIZE = 26
+    ROOT_POSE_SIZE = 6
+    DOF_SIZE = 23
+    ROOT_VEL_SIZE = 6
 
-    JOINT_POSE_START_IDX = 0
-    JOINT_POSE_END_IDX = JOINT_POSE_START_IDX + JOINT_POS_SIZE
-
-    ROOT_STATES_NUM = 6
-    JOINT_VEL_START_IDX = JOINT_POSE_END_IDX
-    JOINT_VEL_END_IDX = JOINT_VEL_START_IDX + JOINT_VEL_SIZE 
-    '''
-    
-    '''G1 29dof'''
-    JOINT_POS_SIZE = 35
-
-    JOINT_VEL_SIZE = 35
+    # First block: root pose + joint positions.
+    JOINT_POS_SIZE = ROOT_POSE_SIZE + DOF_SIZE  # 29
+    # Second block: root linear/angular velocity + joint velocities.
+    JOINT_VEL_SIZE = ROOT_VEL_SIZE + DOF_SIZE  # 29
 
     JOINT_POSE_START_IDX = 0
-    JOINT_POSE_END_IDX = JOINT_POSE_START_IDX + JOINT_POS_SIZE
-
-    ROOT_STATES_NUM = 6
-    JOINT_VEL_START_IDX = JOINT_POSE_END_IDX
-    JOINT_VEL_END_IDX = JOINT_VEL_START_IDX + JOINT_VEL_SIZE 
+    JOINT_POSE_END_IDX = JOINT_POSE_START_IDX + JOINT_POS_SIZE  # 29
+    JOINT_VEL_START_IDX = JOINT_POSE_END_IDX  # 29
+    JOINT_VEL_END_IDX = JOINT_VEL_START_IDX + JOINT_VEL_SIZE  # 58
+    FRAME_SIZE = JOINT_VEL_END_IDX
 
     def __init__(
         self,
@@ -37,258 +48,259 @@ class AMPLoaderDisplay:
         time_between_frames,
         data_dir="",
         preload_transitions=False,
-        num_preload_transitions=1000000,
-        motion_files=glob.glob("datasets/motion_amp_expert/*"), # glob 模块用于匹配文件路径，这里会获取该目录下所有文件的完整路径，作为默认的运动数据文件列表
+        num_preload_transitions=1_000_000,
+        motion_files=None,
     ):
-        """Expert dataset provides AMP observations from Dog mocap dataset.
-
-        time_between_frames: Amount of time in seconds between transition.
-        """
         self.device = device
-        self.time_between_frames = time_between_frames # 两帧之间的间隔
+        self.time_between_frames = float(time_between_frames)
 
-        # Values to store for each trajectory.
-        self.trajectories = []
-        self.trajectories_full = []
-        self.trajectory_names = []
-        self.trajectory_idxs = []
-        self.trajectory_lens = []  # Traj length in seconds. 单位是时间
-        self.trajectory_weights = []
-        self.trajectory_frame_durations = []
-        self.trajectory_num_frames = [] # 总的帧数
+        if motion_files is None:
+            search_root = data_dir or "datasets/motion_visualization"
+            motion_files = sorted(glob.glob(str(Path(search_root) / "*")))
+        else:
+            motion_files = list(motion_files)
 
-        for i, motion_file in enumerate(motion_files):
-        # 这两行代码是在 遍历所有运动数据文件的同时，提取每个文件的「轨迹名称」（去掉文件后缀），并将其存储到类的实例列表 self.trajectory_names 中
-            self.trajectory_names.append(motion_file.split(".")[0])
-            with open(motion_file) as f:
-                motion_json = json.load(f)
-                motion_data = np.array(motion_json["Frames"]) # 转化为2维数组
+        if not motion_files:
+            raise ValueError("No visualization motion files were provided or found.")
 
-                self.trajectories.append(
-                    torch.tensor(
-                        motion_data[:, : AMPLoaderDisplay.JOINT_VEL_END_IDX], dtype=torch.float32, device=device
-                    )
+        self.trajectories: list[torch.Tensor] = []
+        self.trajectories_full: list[torch.Tensor] = []
+        self.trajectory_names: list[str] = []
+        self.trajectory_idxs: list[int] = []
+        self.trajectory_lens: list[float] = []
+        self.trajectory_weights: list[float] = []
+        self.trajectory_frame_durations: list[float] = []
+        self.trajectory_num_frames: list[int] = []
+
+        for motion_idx, motion_file in enumerate(motion_files):
+            path = Path(motion_file)
+            with path.open("r", encoding="utf-8") as file:
+                motion_json = json.load(file)
+
+            motion_data = np.asarray(motion_json["Frames"], dtype=np.float32)
+            self._validate_motion_data(motion_data, path)
+
+            frame_duration = float(motion_json["FrameDuration"])
+            if not np.isfinite(frame_duration) or frame_duration <= 0.0:
+                raise ValueError(
+                    f"FrameDuration must be positive and finite, got {frame_duration} in {path}."
                 )
-                self.trajectories_full.append(
-                    torch.tensor(
-                        motion_data[:, : AMPLoaderDisplay.JOINT_VEL_END_IDX], dtype=torch.float32, device=device
-                    )
-                )
-                self.trajectory_idxs.append(i)
-                self.trajectory_weights.append(float(motion_json["MotionWeight"]))
-                frame_duration = float(motion_json["FrameDuration"])
-                self.trajectory_frame_durations.append(frame_duration)
-                traj_len = (motion_data.shape[0] - 1) * frame_duration # 计算总时长
-                print(f"traj_len:{traj_len}")
-                self.trajectory_lens.append(traj_len)
-                self.trajectory_num_frames.append(float(motion_data.shape[0]))
 
-            print(f" 数据集总共是 {traj_len}s. 模型文件是 {motion_file}.")
+            trajectory = torch.as_tensor(motion_data, dtype=torch.float32, device=device)
+            num_frames = int(motion_data.shape[0])
+            trajectory_len = (num_frames - 1) * frame_duration
 
-        # Trajectory weights are used to sample some trajectories more than others.
-        # 归一化后的权重数组之和为 1.0，每个值对应「该轨迹被采样的概率」
-        self.trajectory_weights = np.array(self.trajectory_weights) / np.sum(self.trajectory_weights)
-        # 每一个文件的帧率 转化为数组的形式 方便后续使用
-        self.trajectory_frame_durations = np.array(self.trajectory_frame_durations)
-        # 每一个文件的总时长 转化为数组的形式
-        self.trajectory_lens = np.array(self.trajectory_lens)
-        # 每一个文件的总帧数 转化为数组的形式
-        self.trajectory_num_frames = np.array(self.trajectory_num_frames)
+            self.trajectories.append(trajectory)
+            self.trajectories_full.append(trajectory)
+            self.trajectory_names.append(path.stem)
+            self.trajectory_idxs.append(motion_idx)
+            self.trajectory_weights.append(float(motion_json.get("MotionWeight", 1.0)))
+            self.trajectory_frame_durations.append(frame_duration)
+            self.trajectory_lens.append(trajectory_len)
+            self.trajectory_num_frames.append(num_frames)
 
-        # Preload transitions.
-        self.preload_transitions = preload_transitions
+            print(
+                f"Loaded visualization motion '{path}': "
+                f"frames={num_frames}, dim={motion_data.shape[1]}, "
+                f"duration={trajectory_len:.6f}s, fps={1.0 / frame_duration:.6f}."
+            )
+
+        weights = np.asarray(self.trajectory_weights, dtype=np.float64)
+        if not np.isfinite(weights).all() or np.any(weights < 0.0) or weights.sum() <= 0.0:
+            raise ValueError("MotionWeight values must be finite, non-negative, and sum to more than zero.")
+
+        self.trajectory_weights = weights / weights.sum()
+        self.trajectory_frame_durations = np.asarray(self.trajectory_frame_durations, dtype=np.float64)
+        self.trajectory_lens = np.asarray(self.trajectory_lens, dtype=np.float64)
+        self.trajectory_num_frames = np.asarray(self.trajectory_num_frames, dtype=np.int64)
+
+        self.preload_transitions = bool(preload_transitions)
         if self.preload_transitions:
-            print("Preloading {num_preload_transitions} transitions")
+            print(f"Preloading {num_preload_transitions} visualization transitions.")
             traj_idxs = self.weighted_traj_idx_sample_batch(num_preload_transitions)
             times = self.traj_time_sample_batch(traj_idxs)
             self.preloaded_s = self.get_full_frame_at_time_batch(traj_idxs, times)
-            self.preloaded_s_next = self.get_full_frame_at_time_batch(traj_idxs, times + self.time_between_frames)
-            print("Finished preloading")
-        # 按行拼接成一个大的张量
+            self.preloaded_s_next = self.get_full_frame_at_time_batch(
+                traj_idxs, times + self.time_between_frames
+            )
+            print("Finished preloading visualization transitions.")
+
         self.all_trajectories_full = torch.vstack(self.trajectories_full)
 
+    @classmethod
+    def _validate_motion_data(cls, motion_data: np.ndarray, path: Path) -> None:
+        if motion_data.ndim != 2:
+            raise ValueError(f"Motion Frames must be a 2-D array, got {motion_data.shape} in {path}.")
+        if motion_data.shape[0] < 2:
+            raise ValueError(f"Motion must contain at least two frames: {path}.")
+        if motion_data.shape[1] != cls.FRAME_SIZE:
+            raise ValueError(
+                f"G1 23-DoF visualization frames must contain {cls.FRAME_SIZE} values, "
+                f"but {path} contains {motion_data.shape[1]}."
+            )
+        if not np.isfinite(motion_data).all():
+            raise ValueError(f"Motion contains NaN or Inf values: {path}.")
+
     def weighted_traj_idx_sample(self):
-        """Get traj idx via weighted sampling."""
-        return np.random.choice(self.trajectory_idxs, p=self.trajectory_weights)
+        return int(np.random.choice(self.trajectory_idxs, p=self.trajectory_weights))
 
     def weighted_traj_idx_sample_batch(self, size):
-        """Batch sample traj idxs."""
-        return np.random.choice(self.trajectory_idxs, size=size, p=self.trajectory_weights, replace=True)
+        return np.random.choice(
+            self.trajectory_idxs,
+            size=int(size),
+            p=self.trajectory_weights,
+            replace=True,
+        ).astype(np.int64)
 
     def traj_time_sample(self, traj_idx):
-        """Sample random time for traj."""
-        subst = self.time_between_frames + self.trajectory_frame_durations[traj_idx]
-        return max(0, (self.trajectory_lens[traj_idx] * np.random.uniform() - subst))
+        traj_idx = int(traj_idx)
+        latest_start = max(0.0, self.trajectory_lens[traj_idx] - self.time_between_frames)
+        return float(np.random.uniform(0.0, latest_start)) if latest_start > 0.0 else 0.0
 
     def traj_time_sample_batch(self, traj_idxs):
-        """Sample random time for multiple trajectories."""
-        subst = self.time_between_frames + self.trajectory_frame_durations[traj_idxs]
-        time_samples = self.trajectory_lens[traj_idxs] * np.random.uniform(size=len(traj_idxs)) - subst
-        return np.maximum(np.zeros_like(time_samples), time_samples)
+        traj_idxs = np.asarray(traj_idxs, dtype=np.int64)
+        latest_starts = np.maximum(0.0, self.trajectory_lens[traj_idxs] - self.time_between_frames)
+        return np.random.uniform(size=traj_idxs.shape[0]) * latest_starts
 
-    def slerp(self, frame1, frame2, blend):
+    @staticmethod
+    def slerp(frame1, frame2, blend):
+        """Linear interpolation retained for compatibility with the original API.
+
+        The visualization file stores unwrapped Euler angles rather than quaternions,
+        so direct linear interpolation is intentional here.
+        """
         return (1.0 - blend) * frame1 + blend * frame2
 
+    def _frame_indices(self, traj_idx: int, time: float) -> tuple[int, int, float]:
+        traj_idx = int(traj_idx)
+        frame_duration = float(self.trajectory_frame_durations[traj_idx])
+        num_frames = int(self.trajectory_num_frames[traj_idx])
+        max_time = float(self.trajectory_lens[traj_idx])
+
+        clipped_time = float(np.clip(float(time), 0.0, max_time))
+        frame_position = clipped_time / frame_duration
+        idx_low = min(int(np.floor(frame_position)), num_frames - 1)
+        idx_high = min(idx_low + 1, num_frames - 1)
+        blend = float(frame_position - idx_low) if idx_high > idx_low else 0.0
+        return idx_low, idx_high, blend
+
+    def _frame_indices_batch(self, traj_idxs, times):
+        traj_idxs = np.asarray(traj_idxs, dtype=np.int64)
+        times = np.asarray(times, dtype=np.float64)
+        if traj_idxs.shape != times.shape:
+            raise ValueError(f"traj_idxs and times must have the same shape: {traj_idxs.shape} != {times.shape}")
+
+        frame_durations = self.trajectory_frame_durations[traj_idxs]
+        num_frames = self.trajectory_num_frames[traj_idxs]
+        max_times = self.trajectory_lens[traj_idxs]
+        clipped_times = np.clip(times, 0.0, max_times)
+
+        frame_positions = clipped_times / frame_durations
+        idx_low = np.floor(frame_positions).astype(np.int64)
+        idx_low = np.minimum(idx_low, num_frames - 1)
+        idx_high = np.minimum(idx_low + 1, num_frames - 1)
+        blend = np.where(idx_high > idx_low, frame_positions - idx_low, 0.0)
+        return idx_low, idx_high, blend.astype(np.float32)
+
     def get_trajectory(self, traj_idx):
-        """Returns trajectory of AMP observations."""
-        return self.trajectories_full[traj_idx]
+        return self.trajectories_full[int(traj_idx)]
 
     def get_frame_at_time(self, traj_idx, time):
-        """Returns frame for the given trajectory at the specified time."""
-        p = float(time) / self.trajectory_lens[traj_idx]
-        n = self.trajectories[traj_idx].shape[0]
-        idx_low, idx_high = int(np.floor(p * n)), int(np.ceil(p * n))
-        frame_start = self.trajectories[traj_idx][idx_low]
-        frame_end = self.trajectories[traj_idx][idx_high]
-        blend = p * n - idx_low
-
+        idx_low, idx_high, blend = self._frame_indices(traj_idx, time)
+        frame_start = self.trajectories[int(traj_idx)][idx_low]
+        frame_end = self.trajectories[int(traj_idx)][idx_high]
         return self.slerp(frame_start, frame_end, blend)
 
     def get_frame_at_time_batch(self, traj_idxs, times):
-        """Returns frame for the given trajectory at the specified time."""
-        p = times / self.trajectory_lens[traj_idxs]
-        n = self.trajectory_num_frames[traj_idxs]
-        idx_low, idx_high = np.floor(p * n).astype(np.int), np.ceil(p * n).astype(np.int)
-        all_frame_starts = torch.zeros(len(traj_idxs), self.observation_dim, device=self.device)
-        all_frame_ends = torch.zeros(len(traj_idxs), self.observation_dim, device=self.device)
-        for traj_idx in set(traj_idxs):
-            trajectory = self.trajectories[traj_idx]
-            traj_mask = traj_idxs == traj_idx
-            all_frame_starts[traj_mask] = trajectory[idx_low[traj_mask]]
-            all_frame_ends[traj_mask] = trajectory[idx_high[traj_mask]]
-        blend = torch.tensor(p * n - idx_low, device=self.device, dtype=torch.float32).unsqueeze(-1)
-        return self.slerp(all_frame_starts, all_frame_ends, blend)
+        return self._get_frames_at_time_batch(self.trajectories, traj_idxs, times)
 
-    '''
-    它的核心作用是根据「轨迹索引」和「指定时间点」，通过「时间归一化→计算相邻帧索引→边界保护→线性插值混合」，
-    返回一个平滑的运动帧数据，解决了「指定时间点不恰好对应轨迹中整帧」的问题，让获取的帧数据更连续、无跳变
-    '''
     def get_full_frame_at_time(self, traj_idx, time):
-        """Returns full frame for the given trajectory at the specified time."""
-        # 传入的是时间在总时间中的占比
-        p = float(time) / self.trajectory_lens[traj_idx]
-        # 数据集的总帧数
-        n = self.trajectories_full[traj_idx].shape[0]
-        # p * n 可以得到在该时间下的 数据对应的是哪一帧 如果对应的帧数恰好是小数 比如 50.5帧
-        # np.floor(p * n) 向下取整 变成第50帧   np.ceil(p * n) 向上取整 变成第51帧 为后续的插值做处理
-        idx_low, idx_high = int(np.floor(p * n)), int(np.ceil(p * n))
-        # 防止帧数越界
-        idx_low = min(idx_low, n - 1)
-        idx_high = min(idx_high, n - 1)
-        # 开始帧的数据
-        frame_start = self.trajectories_full[traj_idx][idx_low]
-        # 结束帧的数据
-        frame_end = self.trajectories_full[traj_idx][idx_high]
-        # 用当前帧 减 前一帧 得到一个小数 这个小数 就是在插值的过程中 前后帧的比重
-        blend = p * n - idx_low
+        idx_low, idx_high, blend = self._frame_indices(traj_idx, time)
+        frame_start = self.trajectories_full[int(traj_idx)][idx_low]
+        frame_end = self.trajectories_full[int(traj_idx)][idx_high]
         return self.blend_frame_pose(frame_start, frame_end, blend)
 
     def get_full_frame_at_time_batch(self, traj_idxs, times):
-        p = times / self.trajectory_lens[traj_idxs]
-        n = self.trajectory_num_frames[traj_idxs]
-        idx_low, idx_high = np.floor(p * n).astype(np.int), np.ceil(p * n).astype(np.int)
-        all_frame_amp_starts = torch.zeros(
-            len(traj_idxs),
-            AMPLoaderDisplay.JOINT_VEL_END_IDX - AMPLoaderDisplay.JOINT_POSE_START_IDX,
-            device=self.device,
-        )
-        all_frame_amp_ends = torch.zeros(
-            len(traj_idxs),
-            AMPLoaderDisplay.JOINT_VEL_END_IDX - AMPLoaderDisplay.JOINT_POSE_START_IDX,
-            device=self.device,
-        )
-        for traj_idx in set(traj_idxs):
-            trajectory = self.trajectories_full[traj_idx]
-            traj_mask = traj_idxs == traj_idx
-            all_frame_amp_starts[traj_mask] = trajectory[idx_low[traj_mask]][
-                :, AMPLoaderDisplay.JOINT_POSE_START_IDX : AMPLoaderDisplay.JOINT_VEL_END_IDX
-            ]
-            all_frame_amp_ends[traj_mask] = trajectory[idx_high[traj_mask]][
-                :, AMPLoaderDisplay.JOINT_POSE_START_IDX : AMPLoaderDisplay.JOINT_VEL_END_IDX
-            ]
-        blend = torch.tensor(p * n - idx_low, device=self.device, dtype=torch.float32).unsqueeze(-1)
+        return self._get_frames_at_time_batch(self.trajectories_full, traj_idxs, times)
 
-        amp_blend = self.slerp(all_frame_amp_starts, all_frame_amp_ends, blend)
-        return torch.cat([amp_blend], dim=-1)
+    def _get_frames_at_time_batch(self, trajectories, traj_idxs, times):
+        traj_idxs = np.asarray(traj_idxs, dtype=np.int64)
+        idx_low, idx_high, blend = self._frame_indices_batch(traj_idxs, times)
+        batch_size = int(traj_idxs.shape[0])
+
+        frame_starts = torch.empty((batch_size, self.FRAME_SIZE), dtype=torch.float32, device=self.device)
+        frame_ends = torch.empty_like(frame_starts)
+
+        for traj_idx in np.unique(traj_idxs):
+            mask = traj_idxs == traj_idx
+            batch_indices = np.flatnonzero(mask)
+            batch_indices_t = torch.as_tensor(batch_indices, dtype=torch.long, device=self.device)
+            low_indices_t = torch.as_tensor(idx_low[mask], dtype=torch.long, device=self.device)
+            high_indices_t = torch.as_tensor(idx_high[mask], dtype=torch.long, device=self.device)
+            trajectory = trajectories[int(traj_idx)]
+            frame_starts[batch_indices_t] = trajectory[low_indices_t]
+            frame_ends[batch_indices_t] = trajectory[high_indices_t]
+
+        blend_tensor = torch.as_tensor(blend, dtype=torch.float32, device=self.device).unsqueeze(-1)
+        return self.slerp(frame_starts, frame_ends, blend_tensor)
 
     def get_frame(self):
-        """Returns random frame."""
         traj_idx = self.weighted_traj_idx_sample()
-        sampled_time = self.traj_time_sample(traj_idx)
-        return self.get_frame_at_time(traj_idx, sampled_time)
+        return self.get_frame_at_time(traj_idx, self.traj_time_sample(traj_idx))
 
     def get_full_frame(self):
-        """Returns random full frame."""
         traj_idx = self.weighted_traj_idx_sample()
-        sampled_time = self.traj_time_sample(traj_idx)
-        return self.get_full_frame_at_time(traj_idx, sampled_time)
+        return self.get_full_frame_at_time(traj_idx, self.traj_time_sample(traj_idx))
 
     def get_full_frame_batch(self, num_frames):
         if self.preload_transitions:
-            idxs = np.random.choice(self.preloaded_s.shape[0], size=num_frames)
+            idxs = np.random.choice(self.preloaded_s.shape[0], size=int(num_frames))
             return self.preloaded_s[idxs]
-        else:
-            traj_idxs = self.weighted_traj_idx_sample_batch(num_frames)
-            times = self.traj_time_sample_batch(traj_idxs)
-            return self.get_full_frame_at_time_batch(traj_idxs, times)
+        traj_idxs = self.weighted_traj_idx_sample_batch(num_frames)
+        times = self.traj_time_sample_batch(traj_idxs)
+        return self.get_full_frame_at_time_batch(traj_idxs, times)
 
     def blend_frame_pose(self, frame0, frame1, blend):
-        """Linearly interpolate between two frames, including orientation.
-
-        Args:
-            frame0: First frame to be blended corresponds to (blend = 0).
-            frame1: Second frame to be blended corresponds to (blend = 1).
-            blend: Float between [0, 1], specifying the interpolation between
-            the two frames.
-        Returns:
-            An interpolation of the two frames.
-        """
-        joints0, joints1 = AMPLoaderDisplay.get_joint_pose(frame0), AMPLoaderDisplay.get_joint_pose(frame1)
-        joint_vel_0, joint_vel_1 = AMPLoaderDisplay.get_joint_vel(frame0), AMPLoaderDisplay.get_joint_vel(frame1)
-
-        blend_joint_q = self.slerp(joints0, joints1, blend)
-        blend_joints_vel = self.slerp(joint_vel_0, joint_vel_1, blend)
-
-        return torch.cat([blend_joint_q, blend_joints_vel])
+        pose0, pose1 = self.get_joint_pose(frame0), self.get_joint_pose(frame1)
+        vel0, vel1 = self.get_joint_vel(frame0), self.get_joint_vel(frame1)
+        return torch.cat(
+            [self.slerp(pose0, pose1, blend), self.slerp(vel0, vel1, blend)],
+            dim=-1,
+        )
 
     def feed_forward_generator(self, num_mini_batch, mini_batch_size):
-        """Generates a batch of AMP transitions."""
-        for _ in range(num_mini_batch):
+        for _ in range(int(num_mini_batch)):
             if self.preload_transitions:
-                idxs = np.random.choice(self.preloaded_s.shape[0], size=mini_batch_size)
-                s = self.preloaded_s[idxs, AMPLoaderDisplay.JOINT_POSE_START_IDX : AMPLoaderDisplay.JOINT_VEL_END_IDX]
-                s_next = self.preloaded_s_next[
-                    idxs, AMPLoaderDisplay.JOINT_POSE_START_IDX : AMPLoaderDisplay.JOINT_VEL_END_IDX
-                ]
+                idxs = np.random.choice(self.preloaded_s.shape[0], size=int(mini_batch_size))
+                s = self.preloaded_s[idxs]
+                s_next = self.preloaded_s_next[idxs]
             else:
-                s, s_next = [], []
                 traj_idxs = self.weighted_traj_idx_sample_batch(mini_batch_size)
                 times = self.traj_time_sample_batch(traj_idxs)
-                for traj_idx, frame_time in zip(traj_idxs, times):
-                    s.append(self.get_frame_at_time(traj_idx, frame_time))
-                    s_next.append(self.get_frame_at_time(traj_idx, frame_time + self.time_between_frames))
-
-                s = torch.vstack(s)
-                s_next = torch.vstack(s_next)
+                s = self.get_frame_at_time_batch(traj_idxs, times)
+                s_next = self.get_frame_at_time_batch(traj_idxs, times + self.time_between_frames)
             yield s, s_next
 
     @property
     def observation_dim(self):
-        """Size of AMP observations."""
-        return self.trajectories[0].shape[1]
+        return self.FRAME_SIZE
 
     @property
     def num_motions(self):
         return len(self.trajectory_names)
 
+    @staticmethod
     def get_joint_pose(pose):
         return pose[AMPLoaderDisplay.JOINT_POSE_START_IDX : AMPLoaderDisplay.JOINT_POSE_END_IDX]
 
+    @staticmethod
     def get_joint_pose_batch(poses):
         return poses[:, AMPLoaderDisplay.JOINT_POSE_START_IDX : AMPLoaderDisplay.JOINT_POSE_END_IDX]
 
+    @staticmethod
     def get_joint_vel(pose):
         return pose[AMPLoaderDisplay.JOINT_VEL_START_IDX : AMPLoaderDisplay.JOINT_VEL_END_IDX]
 
+    @staticmethod
     def get_joint_vel_batch(poses):
         return poses[:, AMPLoaderDisplay.JOINT_VEL_START_IDX : AMPLoaderDisplay.JOINT_VEL_END_IDX]

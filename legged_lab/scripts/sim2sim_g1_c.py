@@ -376,7 +376,8 @@ class G1FlatMujocoRunner:
             while self.viewer.is_running() and self.data.time < self.cfg.sim.sim_duration:
                 # 获取观测并执行策略
                 obs = self.get_obs()
-                self.action[:] = self.policy(torch.tensor(obs, dtype=torch.float32)).detach().numpy()[:self.num_actions]
+                obs_tensor = torch.tensor(obs, dtype=torch.float32).unsqueeze(0)
+                self.action[:] = self.policy(obs_tensor).detach().numpy()[0, :self.num_actions]
                 self.action = np.clip(self.action, -self.cfg.sim.clip_actions, self.cfg.sim.clip_actions)
                 
                 # 调试输出

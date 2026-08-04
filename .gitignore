@@ -7,3 +7,13 @@ run_bash.sh
 wandb
 MUJOCO_LOG.TXT
 .history
+
+# Local evaluation artifacts
+full_49000/
+gap*_results*.csv
+w?o Cl 49000/
+w?o GRU/
+paper_figures/
+
+# External dependency; install separately as documented in leggeddeploy/README.md
+unitree_sdk2_python/

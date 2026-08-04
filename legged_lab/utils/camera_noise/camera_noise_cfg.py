@@ -7,9 +7,9 @@ from isaaclab.utils.noise import NoiseCfg
 
 from .camera_noise import (
     ImageNoiseModel,
+    StructuredDepthFailureModel,
     depth_normalization,
     crop_and_resize,
-    BlindSpotNoiseCfg,
     blind_spot_noise,
     range_based_gaussian_noise,
     depth_artifact_noise,
@@ -89,6 +89,59 @@ class DepthArtifactNoiseCfg(ImageNoiseCfg):
     artifacts_width_mean_std: list[float] = [2, 0.5] # 伪影块宽度的均值和标准差
     noise_value: float = 0.0 # 噪声
     func = depth_artifact_noise
+
+@configclass
+class StructuredDepthFailureCfg(ImageNoiseCfg):
+    """Configuration for large, structured depth failures that persist for multiple frames."""
+
+    failure_probability: float = 0.02
+    """Probability of starting a failure for each currently healthy environment."""
+
+    failure_duration_range: tuple[int, int] = (3, 12)
+    """Default duration range in camera frames. Minimum is intentionally multi-frame."""
+
+    failure_modes: tuple[str, ...] = (
+        "large_hole", # 大面积空洞
+        "lower_occlusion",  # 深度图底部一大片区域被遮挡或不可见。
+        "central_landing_occlusion", # 深度图中间偏下的落脚区域出现一块遮挡/缺失。
+        "stripe_missing",  # 深度图中出现横向或纵向条纹缺失。
+        "full_dropout",
+        "consecutive_dropout",
+        "freeze_frame",
+        "distant_dust",
+    )
+    """Enabled structured failure modes."""
+
+    failure_mode_probabilities: Optional[list[float]] = None
+    """Sampling probability for each mode. None means uniform over failure_modes."""
+
+    fill_value: float = 0.0
+    """Depth value used for holes, occlusions and dropout."""
+
+    large_hole_height_range: tuple[float, float] = (0.35, 0.75)
+    large_hole_width_range: tuple[float, float] = (0.35, 0.80)
+    lower_occlusion_height_range: tuple[float, float] = (0.35, 0.70)
+    central_landing_height_range: tuple[float, float] = (0.35, 0.70)
+    central_landing_width_range: tuple[float, float] = (0.35, 0.75)
+    # 这两行确保了是中心区域被遮挡。
+    central_landing_center_y_range: tuple[float, float] = (0.55, 0.85)
+    central_landing_center_x_range: tuple[float, float] = (0.40, 0.60)
+
+    stripe_width_range: tuple[float, float] = (0.08, 0.25)
+    stripe_count_range: tuple[int, int] = (1, 3) # 条纹的数量
+    stripe_orientations: tuple[str, ...] = ("vertical", "horizontal") # 条纹的方向
+
+    consecutive_dropout_duration_range: tuple[int, int] = (6, 20)
+    freeze_duration_range: tuple[int, int] = (4, 15)
+
+    # 深度图中远距离区域受到灰尘、雾、反射、远距离测量不稳定等因素影响，出现随机扰动，甚至部分远处像素直接失效变成 0
+    distant_dust_duration_range: tuple[int, int] = (8, 25)
+    distant_dust_start: float = 1.5
+    distant_dust_noise_std: float = 0.08 # 方差
+    distant_dust_dropout_probability: float = 0.35 # 远距离droupt的概率
+    distant_dust_fill_value: float = 0.0
+
+    func: type[StructuredDepthFailureModel] = StructuredDepthFailureModel
 
 @configclass
 class LatencyNoiseCfg(ImageNoiseCfg):

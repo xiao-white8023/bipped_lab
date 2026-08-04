@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch.distributions import Normal
 
 from .cnn_mlp import CnnMlp as CnnMlpModule
+from .film_cnn_mlp import FiLMCnnMlp
 
 from rsl_rl.utils import resolve_nn_activation
 from typing import Optional
@@ -31,7 +32,7 @@ class ActorCritic(nn.Module):
         self.num_critic_obs = num_critic_obs
         self.num_actions = num_actions
         # ==========================================
-        # 1. 从 kwargs 中动态提取所有 PIE 辅助任务的配置参数
+        # 1. 从 kwargs 中动态提取所有辅助任务的配置参数
         # ==========================================
         self.single_proprio_dim = kwargs.pop("single_proprio_dim", 102)
         
@@ -39,6 +40,16 @@ class ActorCritic(nn.Module):
         his_encoder_dims = kwargs.pop("his_encoder_dims", [256, 128])
 
         self.his_latent_dim = kwargs.pop("his_latent_dim", 64)
+        self.use_gru = kwargs.pop("use_gru", False)
+        self.use_film_cnn = kwargs.pop("use_film_cnn", False)
+        self.use_film_moe_gate = kwargs.pop("use_film_moe_gate", False)
+        self.use_separate_moe_gate_input = kwargs.pop("use_separate_moe_gate_input", False)
+        # Legacy keys kept for old configs; separate MoE gate now uses depth_latent only.
+        self.moe_gate_command_start_idx = kwargs.pop("moe_gate_command_start_idx", 6)
+        self.moe_gate_command_dim = kwargs.pop("moe_gate_command_dim", 3)
+        self.use_moe_topk = kwargs.pop("use_moe_topk", False)
+        self.moe_topk = kwargs.pop("moe_topk", 2)
+        self.moe_topk_start_iter = kwargs.pop("moe_topk_start_iter", 2000)
         
         # 速度估计参数
         self.use_vel_estimation = kwargs.pop("use_vel_estimation", False)
@@ -66,15 +77,38 @@ class ActorCritic(nn.Module):
         activation = resolve_nn_activation(activation)
 
         self.has_cnn = CnnMlp is not None
+        self.moe_gate_film_condition_dim = 0
         if self.has_cnn:
-            # 实例化 CNN 模块
-            self.cnn = CnnMlpModule(**CnnMlp)
-            
             # 获取深度图的维度信息，计算展平后的长度
             self.cnn_channels = CnnMlp["input_channels"]
             self.cnn_h = CnnMlp["input_dim"][0]
             self.cnn_w = CnnMlp["input_dim"][1]
             self.depth_flat_dim = self.cnn_channels * self.cnn_h * self.cnn_w
+
+            cnn_cfg = dict(CnnMlp)
+            self.depth_history_frames = self.cnn_channels
+            if self.use_gru:
+                cnn_cfg["input_channels"] = 1
+
+            # 实例化 CNN 模块
+            if self.use_film_cnn:
+                film_condition_dim = self.single_proprio_dim + self.his_latent_dim
+                self.cnn = FiLMCnnMlp(**cnn_cfg, film_condition_dim=film_condition_dim)
+            else:
+                self.cnn = CnnMlpModule(**cnn_cfg)
+
+            self.visual_latent_dim = self.cnn.output_dim
+            if self.use_gru:
+                self.depth_gru = nn.GRU(
+                    input_size=self.cnn.output_dim,
+                    hidden_size=64,
+                    num_layers=1,
+                    batch_first=True,
+                )
+                self.visual_latent_dim = 64
+            if self.use_film_moe_gate and not self.use_gru:
+                raise ValueError("use_film_moe_gate=True requires use_gru=True because the gate FiLM condition uses only GRU terrain features.")
+            self.moe_gate_film_condition_dim = self.visual_latent_dim
             
             # 减去深度图维度，剩下的就是真实的本体观测维度
             self.proprio_actor_dim = num_actor_obs - self.depth_flat_dim  # 这个就是历史总的维度了
@@ -117,7 +151,7 @@ class ActorCritic(nn.Module):
                     self.terrain_front_indices = None
 
                 terrain_act_fn = resolve_nn_activation(terrain_activation_str)
-                actor_input_dim = self.single_proprio_dim + self.his_latent_dim + self.cnn.output_dim
+                actor_input_dim = self.single_proprio_dim + self.his_latent_dim + self.visual_latent_dim
                 
                 # 使用动态计算出的 terrain_output_dim (比如 99 或 187)
                 self.terrain_decoder = self._build_mlp(
@@ -127,8 +161,13 @@ class ActorCritic(nn.Module):
                     output_dim=self.terrain_output_dim
                 )
             
-            mlp_input_dim_a = self.single_proprio_dim + self.his_latent_dim + self.cnn.output_dim
+            mlp_input_dim_a = self.single_proprio_dim + self.his_latent_dim + self.visual_latent_dim
             mlp_input_dim_c = self.proprio_critic_dim
+            self.moe_gate_input_dim = (
+                self.visual_latent_dim
+                if self.use_separate_moe_gate_input
+                else mlp_input_dim_a
+            )
         
         else:
             mlp_input_dim_a = num_actor_obs
@@ -138,7 +177,14 @@ class ActorCritic(nn.Module):
             self.cnn_channels = 1
             self.cnn_h = 1
             self.cnn_w = 1
+            self.depth_flat_dim = 0
+            self.depth_history_frames = 0
+            self.visual_latent_dim = 0
             self.cnn = nn.Identity()
+            self.use_gru = False
+            self.use_film_moe_gate = False
+            self.use_separate_moe_gate_input = False
+            self.moe_gate_input_dim = mlp_input_dim_a
         
         self.actor = self._build_actor(mlp_input_dim_a,actor_hidden_dims,activation,num_actions)
         self.critic = self._build_critic(mlp_input_dim_c,critic_hidden_dims,activation)
@@ -163,6 +209,8 @@ class ActorCritic(nn.Module):
         # 缓存容器
         self._last_his_latent: Optional[torch.Tensor] = None
         self._last_actor_input: Optional[torch.Tensor] = None
+        self._last_moe_gate_condition: Optional[torch.Tensor] = None
+        self._last_moe_gate_input: Optional[torch.Tensor] = None
 
     def _build_mlp(self, input_dim, hidden_dims, activation_fn, output_dim):
         """通用多层感知机(MLP)动态构建工具。支持 hidden_dims=[] 直接线性映射"""
@@ -201,6 +249,54 @@ class ActorCritic(nn.Module):
                 critic_layers.append(nn.Linear(critic_hidden_dims[layer_index], critic_hidden_dims[layer_index + 1]))
                 critic_layers.append(activation)
         return  nn.Sequential(*critic_layers)
+
+    def _encode_depth(self, depth_img: torch.Tensor, current_proprio: torch.Tensor, his_latent: torch.Tensor) -> torch.Tensor:
+        if self.use_film_cnn:
+            film_condition = torch.cat([current_proprio, his_latent], dim=-1)
+            return self.cnn(depth_img, film_condition)
+        return self.cnn(depth_img)
+
+    def _encode_depth_history(self, depth_flat: torch.Tensor, current_proprio: torch.Tensor, his_latent: torch.Tensor) -> torch.Tensor:
+        batch_size = depth_flat.shape[0]
+        depth_seq = depth_flat.view(batch_size, self.depth_history_frames, self.cnn_h, self.cnn_w)
+        depth_img = depth_seq.reshape(batch_size * self.depth_history_frames, 1, self.cnn_h, self.cnn_w)
+
+        if self.use_film_cnn:
+            current_proprio = current_proprio.unsqueeze(1).expand(-1, self.depth_history_frames, -1)
+            his_latent = his_latent.unsqueeze(1).expand(-1, self.depth_history_frames, -1)
+            current_proprio = current_proprio.reshape(batch_size * self.depth_history_frames, -1)
+            his_latent = his_latent.reshape(batch_size * self.depth_history_frames, -1)
+
+        depth_latent = self._encode_depth(depth_img, current_proprio, his_latent)
+        depth_latent = depth_latent.reshape(batch_size, self.depth_history_frames, -1)
+        _, hidden_state = self.depth_gru(depth_latent)
+        return hidden_state[-1]
+
+    def _forward_actor(self, observations: torch.Tensor) -> torch.Tensor:
+        gate_condition = None
+        if (
+            self.use_film_moe_gate
+            and self._last_moe_gate_condition is not None
+            and hasattr(self.actor, "use_gate_film")
+        ):
+            gate_condition = self._last_moe_gate_condition
+
+        if (
+            self.use_separate_moe_gate_input
+            and hasattr(self.actor, "use_separate_gate_input")
+            and self.actor.use_separate_gate_input
+        ):
+            if self._last_moe_gate_input is None:
+                raise ValueError("Separate MoE gate input is enabled, but _last_moe_gate_input is None.")
+            return self.actor(
+                observations,
+                gate_input=self._last_moe_gate_input,
+                gate_condition=gate_condition,
+            )
+
+        if gate_condition is not None:
+            return self.actor(observations, gate_condition=gate_condition)
+        return self.actor(observations)
     
     @staticmethod
     # not used at the moment
@@ -247,24 +343,56 @@ class ActorCritic(nn.Module):
         # 3. 将历史数据送入历史编码器
         his_latent = self.history_encoder(proprio_history)
         
-        # === 核心修改 1：屏蔽 JIT 编译器的追踪 ===
+        # === 屏蔽 JIT 编译器的追踪 ===
         if not torch.jit.is_scripting() and self.training: 
             self._last_his_latent = his_latent
         # ==========================================
 
         # 4. 提取视觉特征
-        depth_img = depth_flat.view(-1, self.cnn_channels, self.cnn_h, self.cnn_w)
-        depth_latent = self.cnn(depth_img)
+        if self.use_gru:
+            depth_latent = self._encode_depth_history(depth_flat, current_proprio, his_latent)
+        else:
+            depth_img = depth_flat.view(-1, self.cnn_channels, self.cnn_h, self.cnn_w)
+            depth_latent = self._encode_depth(depth_img, current_proprio, his_latent)
+        if self.use_film_moe_gate:
+            self._last_moe_gate_condition = depth_latent
         
-        # 5. 拼接成 Actor 最终的特征向量 (102 + his_latent + cnn_output)
+        # 5. 拼接成 Actor 最终的特征向量 (current_proprio + his_latent + depth_latent)
         actor_input = torch.cat([current_proprio, his_latent, depth_latent], dim=-1)
+        if self.use_separate_moe_gate_input:
+            self._last_moe_gate_input = depth_latent
+        else:
+            self._last_moe_gate_input = None
         
-        # === 核心修改 2：屏蔽 JIT 编译器的追踪 ===
+        # === 屏蔽 JIT 编译器的追踪 ===
         if not torch.jit.is_scripting() and self.training:
             self._last_actor_input = actor_input  
         # ==========================================
 
         return actor_input
+
+    def set_moe_iteration(self, iteration: int):
+        for module in self.modules():
+            if module is not self and hasattr(module, "set_iteration"):
+                module.set_iteration(iteration)
+
+    def get_moe_balance_loss(self):
+        device = next(self.parameters()).device
+        if hasattr(self.actor, "get_balance_loss"):
+            return self.actor.get_balance_loss(device=device)
+        return torch.zeros((), device=device)
+
+    def get_moe_gate_entropy(self):
+        device = next(self.parameters()).device
+        if hasattr(self.actor, "get_gate_entropy"):
+            return self.actor.get_gate_entropy(device=device)
+        return torch.zeros((), device=device)
+
+    def get_moe_routing_stats(self):
+        device = next(self.parameters()).device
+        if hasattr(self.actor, "get_routing_stats"):
+            return self.actor.get_routing_stats(device=device)
+        return {}
 
     def predict_velocity(self):
         """供 PPO 调用的辅助任务接口"""
@@ -280,14 +408,18 @@ class ActorCritic(nn.Module):
     def update_distribution(self, observations):
         observations = self._process_obs(observations, is_actor=True)
         # compute mean
-        mean = self.actor(observations)
+        mean = self._forward_actor(observations)
         # compute standard deviation
         if self.noise_std_type == "scalar":
-            std = self.std.expand_as(mean)
+            std = torch.clamp(self.std, min=1e-6, max=1e3).expand_as(mean)
         elif self.noise_std_type == "log":
-            std = torch.exp(self.log_std).expand_as(mean)
+            std = torch.exp(torch.clamp(self.log_std, min=-10.0, max=10.0)).expand_as(mean)
         else:
             raise ValueError(f"Unknown standard deviation type: {self.noise_std_type}. Should be 'scalar' or 'log'")
+        if not torch.isfinite(mean).all():
+            mean = torch.where(torch.isfinite(mean), mean, torch.zeros_like(mean))
+        if not torch.isfinite(std).all():
+            std = torch.where(torch.isfinite(std), std, torch.full_like(std, 1e-3))
         # create distribution
         self.distribution = Normal(mean, std)
 
@@ -300,7 +432,7 @@ class ActorCritic(nn.Module):
 
     def act_inference(self, observations):
         observations = self._process_obs(observations, is_actor=True)
-        actions_mean = self.actor(observations)
+        actions_mean = self._forward_actor(observations)
         return actions_mean
 
     def evaluate(self, critic_observations, **kwargs):

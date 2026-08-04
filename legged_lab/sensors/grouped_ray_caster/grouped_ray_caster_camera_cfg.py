@@ -72,5 +72,5 @@ class GroupedRayCasterCameraCfg(GroupedRayCasterCfg):
     )
 
     def __post_init__(self):
-        # for cameras, this quantity should be False always.
-        self.attach_yaw_only = False
+        if not hasattr(self, "ray_alignment"):
+            self.ray_alignment = "base"

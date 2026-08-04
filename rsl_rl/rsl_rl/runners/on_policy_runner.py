@@ -8,14 +8,11 @@ from collections import deque
 import torch
 
 import rsl_rl
-from rsl_rl.algorithms import PPO, Distillation
+from rsl_rl.algorithms import PPO
 from rsl_rl.env import VecEnv
 from rsl_rl.modules import (
     ActorCritic,
-    ActorCriticRecurrent,
     EmpiricalNormalization,
-    StudentTeacher,
-    StudentTeacherRecurrent,
 )
 from rsl_rl.utils import store_code_state
 
@@ -35,12 +32,9 @@ class OnPolicyRunner:
 
         # resolve training type depending on the algorithm
         
-        if self.alg_cfg["class_name"] == "PPO":
-            self.training_type = "rl"
-        elif self.alg_cfg["class_name"] == "Distillation":
-            self.training_type = "distillation"
-        else:
+        if self.alg_cfg["class_name"] != "PPO":
             raise ValueError(f"Training type not found for algorithm {self.alg_cfg['class_name']}.")
+        self.training_type = "rl"
         print("没有使用amp")
         # resolve dimensions of observations
         obs, extras = self.env.get_observations()
@@ -50,11 +44,6 @@ class OnPolicyRunner:
         if self.training_type == "rl":
             if "critic" in extras["observations"]:
                 self.privileged_obs_type = "critic"  # actor-critic reinforcement learnig, e.g., PPO
-            else:
-                self.privileged_obs_type = None
-        if self.training_type == "distillation":
-            if "teacher" in extras["observations"]:
-                self.privileged_obs_type = "teacher"  # policy distillation
             else:
                 self.privileged_obs_type = None
 
@@ -69,7 +58,7 @@ class OnPolicyRunner:
         if "CnnMlp" in self.policy_cfg and isinstance(self.policy_cfg["CnnMlp"], dict):
             self.policy_cfg["CnnMlp"].pop("num_heads", None)
             self.policy_cfg["CnnMlp"].pop("embed_dim", None)
-        policy: ActorCritic | ActorCriticRecurrent | StudentTeacher | StudentTeacherRecurrent = policy_class(
+        policy: ActorCritic = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
 
@@ -95,7 +84,7 @@ class OnPolicyRunner:
         alg_class = eval(self.alg_cfg.pop("class_name"))
         self.alg_cfg.pop("optimizer", None)
         self.alg_cfg.pop("share_cnn_encoders", None)
-        self.alg: PPO | Distillation = alg_class(
+        self.alg: PPO = alg_class(
             policy, device=self.device, **self.alg_cfg, multi_gpu_cfg=self.multi_gpu_cfg
         )
 
@@ -156,10 +145,6 @@ class OnPolicyRunner:
                 self.writer = SummaryWriter(log_dir=self.log_dir, flush_secs=10)
             else:
                 raise ValueError("Logger type not found. Please choose 'neptune', 'wandb' or 'tensorboard'.")
-
-        # check if teacher is loaded
-        if self.training_type == "distillation" and not self.alg.policy.loaded_teacher:
-            raise ValueError("Teacher model parameters not loaded. Please load a teacher model to distill.")
 
         # randomize initial episode lengths (for exploration)
         if init_at_random_ep_len:

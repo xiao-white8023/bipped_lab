@@ -32,10 +32,22 @@ def axis_angle_from_quat(q):
 # =====================================================================
 
 def convert_pkl_to_custom(input_pkl, output_txt, fps):
-    dt = 1.0 / fps
-
     with open(input_pkl, "rb") as f:
         motion_data = pickle.load(f)
+
+    source_fps = motion_data.get("fps")
+
+    if fps is None:
+        if source_fps is None:
+            raise ValueError(
+                "PKL 中没有 fps，请通过 --fps 指定。"
+            )
+        fps = float(source_fps)
+
+    if fps <= 0:
+        raise ValueError(f"非法 FPS: {fps}")
+
+    dt = 1.0 / fps
 
     root_pos = motion_data["root_pos"]
     root_rot = motion_data["root_rot"][:, [3, 0, 1, 2]]  # xyzw → wxyz
@@ -69,7 +81,7 @@ def convert_pkl_to_custom(input_pkl, output_txt, fps):
     with open(output_txt, 'w') as f:
         f.write('{\n')
         f.write('"LoopMode": "Wrap",\n')
-        f.write(f'"FrameDuration": {1.0/fps:.3f},\n')
+        f.write(f'"FrameDuration": {1.0 / fps:.9f},\n')
         f.write('"EnableCycleOffsetPosition": true,\n')
         f.write('"EnableCycleOffsetRotation": true,\n')
         f.write('"MotionWeight": 0.5,\n\n')
@@ -89,7 +101,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_pkl", type=str, required=True)
     parser.add_argument("--output_txt", type=str, required=True)
-    parser.add_argument("--fps", type=float, default=30.0)
+    parser.add_argument(
+    "--fps",
+    type=float,
+    default=None,
+    help="默认读取 PKL 中的 fps,也可以手动覆盖",
+    )
     args = parser.parse_args()
 
     convert_pkl_to_custom(args.input_pkl, args.output_txt, args.fps)

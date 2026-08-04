@@ -14,18 +14,17 @@ if TYPE_CHECKING:
     from legged_lab.envs.base.base_env import BaseEnv
     
     from legged_lab.envs.g1.g1_rough_env import G1ROUGHEnv
-    from legged_lab.envs.g1.g1_walk_env import G1Env
+    from legged_lab.envs.g1.g1_dwaq_env import G1Env
 
 def track_lin_vel_xy_yaw_frame_exp(
     env: BaseEnv  | G1ROUGHEnv |G1Env, std: float, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    vel_yaw = math_utils.quat_rotate_inverse(
+    vel_yaw = math_utils.quat_apply_inverse(
         math_utils.yaw_quat(asset.data.root_quat_w), asset.data.root_lin_vel_w[:, :3]
     )
     lin_vel_error = torch.sum(torch.square(env.command_generator.command[:, :2] - vel_yaw[:, :2]), dim=1)
     return torch.exp(-lin_vel_error / std**2)
-
 
 def track_ang_vel_z_world_exp(
     env: BaseEnv  | G1ROUGHEnv |G1Env, std: float, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
@@ -33,7 +32,6 @@ def track_ang_vel_z_world_exp(
     asset: Articulation = env.scene[asset_cfg.name]
     ang_vel_error = torch.square(env.command_generator.command[:, 2] - asset.data.root_ang_vel_w[:, 2])
     return torch.exp(-ang_vel_error / std**2)
-
 
 def lin_vel_z_l2(env: BaseEnv  | G1ROUGHEnv |G1Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
@@ -62,45 +60,7 @@ def joint_vel_l2(env: BaseEnv | G1ROUGHEnv |G1Env, asset_cfg: SceneEntityCfg = S
     asset: Articulation = env.scene[asset_cfg.name]
     return torch.sum(torch.square(asset.data.joint_vel[:, asset_cfg.joint_ids]), dim=1)
 
-def gait_phase_contact(
-    env: BaseEnv  | G1ROUGHEnv |G1Env, sensor_cfg: SceneEntityCfg, stance_threshold: float = 0.55
-) -> torch.Tensor:
-    """Reward for foot contact matching the expected gait phase.
-    
-    Rewards the robot when foot contact status matches the expected stance/swing phase.
-    During stance phase (phase < stance_threshold), foot should be in contact.
-    During swing phase (phase >= stance_threshold), foot should be in the air.
-    
-    Args:
-        env: Environment with gait phase information.
-        sensor_cfg: Contact sensor configuration for feet.
-        stance_threshold: Phase threshold below which the foot should be in stance.
-        
-    Reference: DreamWaQ _reward_contact()
-    
-    Note: This function uses env.leg_phase which should be [num_envs, num_feet] tensor
-    where leg_phase[:, 0] = phase_left and leg_phase[:, 1] = phase_right.
-    The sensor_cfg.body_ids should match the same ordering (left foot first, right foot second).
-    """
-    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
-    net_contact_forces = contact_sensor.data.net_forces_w[:, sensor_cfg.body_ids, :]
-    
-    # Check contact for each foot (use z-component like original DreamWaQ)
-    # Original: contact = self.contact_forces[:, self.feet_indices[i], 2] > 1
-    contact = net_contact_forces[:, :, 2] > 1.0  # (num_envs, num_feet), z-direction force
-    
-    # Use leg_phase directly from environment
-    # leg_phase shape: (num_envs, 2) where [:, 0] = left, [:, 1] = right
-    leg_phase = env.leg_phase
-    
-    # Expected stance: phase < stance_threshold
-    is_stance = leg_phase < stance_threshold
-    
-    # Reward: 1 if contact matches expected phase, 0 otherwise
-    # XOR gives True when they don't match, so we negate it
-    phase_match = ~(contact ^ is_stance)  # (num_envs, num_feet)
-    
-    return torch.sum(phase_match.float(), dim=-1)  # Sum over feet
+
 
 
 def joint_pos_limits(env: BaseEnv | G1ROUGHEnv |G1Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
@@ -151,7 +111,7 @@ def flat_orientation_l2(
     env: BaseEnv  | G1ROUGHEnv |G1Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    return torch.sum(torch.square(asset.data.projected_gravity_b[:, 0:1]+2*asset.data.projected_gravity_b[:,1:2]), dim=1)
+    return torch.sum(torch.square(asset.data.projected_gravity_b[:, 0:1])+2*torch.square(asset.data.projected_gravity_b[:,1:2]), dim=1)
 
 
 
@@ -213,7 +173,7 @@ def body_orientation_l2(
     env:BaseEnv| G1ROUGHEnv |G1Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
     asset: Articulation = env.scene[asset_cfg.name]
-    body_orientation = math_utils.quat_rotate_inverse(
+    body_orientation = math_utils.quat_apply_inverse(
         asset.data.body_quat_w[:, asset_cfg.body_ids[0], :], asset.data.GRAVITY_VEC_W
     )
     return torch.sum(torch.square(body_orientation[:, :2]), dim=1)
@@ -560,10 +520,10 @@ def stand_still_pose(
     # 4. 
     # 允许产生负数输出，以便在 Config 中乘以负数 weight 后变成正向奖励
     return (dof_error - offset) * zero_flag.float()
-def stand_still_joint_vel(env: BaseEnv  | G1ROUGHEnv |G1Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")) -> torch.Tensor:
+def stand_still_joint_vel(env: BaseEnv  | G1ROUGHEnv |G1Env, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),threshold:float=0.1) -> torch.Tensor:
     """当命令为0时，平滑地惩罚所有关节的运动速度。"""
     cmd_norm = torch.norm(env.command_generator.command[:, :2], dim=1) + torch.abs(env.command_generator.command[:, 2])
-    zero_flag = (cmd_norm < 0.1).float()
+    zero_flag = (cmd_norm < threshold).float()
     
     asset = env.scene[asset_cfg.name]
     joint_vel_sq = torch.sum(torch.square(asset.data.joint_vel), dim=1)
@@ -604,6 +564,41 @@ def alive(env: BaseEnv | G1ROUGHEnv |G1Env) -> torch.Tensor:
     Reference: DreamWaQ (HumanoidDreamWaq/legged_gym/envs/g1/g1_env.py)
     """
     return torch.ones(env.num_envs, device=env.device, dtype=torch.float)
+
+def new_gait_phase_contact(
+    env,
+    sensor_cfg: SceneEntityCfg,
+    stance_threshold: float = 0.55,
+    command_threshold: float = 0.1,
+) -> torch.Tensor:
+    """只在有移动命令时启用接触相位奖励。"""
+
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+
+    net_contact_forces = contact_sensor.data.net_forces_w[
+        :, sensor_cfg.body_ids, :
+    ]
+
+    # 左右脚是否实际接触地面
+    contact = net_contact_forces[:, :, 2] > 1.0
+
+    # 左右脚期望支撑状态
+    is_stance = env.leg_phase < stance_threshold
+
+    # 接触状态与期望状态一致
+    phase_match = ~(contact ^ is_stance)
+    reward = torch.sum(phase_match.float(), dim=-1)
+
+    command = env.command_generator.command
+
+    command_norm = (
+        torch.linalg.vector_norm(command[:, :2], dim=1)
+        + torch.abs(command[:, 2])
+    )
+
+    move_mask = command_norm > command_threshold
+
+    return reward * move_mask.float()
 
 def gait_phase_contact(
     env: BaseEnv  | G1ROUGHEnv |G1Env, sensor_cfg: SceneEntityCfg, stance_threshold: float = 0.55
@@ -836,3 +831,330 @@ def straight_body_penalty_with_deadzone(
     reward = torch.sum(torch.square(tilt_excess), dim=1)
     
     return reward
+
+def track_height_cmd(env:BaseEnv,
+                     asset_cfg:SceneEntityCfg=SceneEntityCfg("robot"),
+                     std: float = 0.05,
+                    ):
+    asset:Articulation=env.scene[asset_cfg.name]
+    current_robot_height=asset.data.root_state_w[:,2]
+    current_height_command=env.command_generator.command[:,0]
+    height_error=current_robot_height-current_height_command
+    return torch.exp(-torch.square(height_error) / std**2)
+    
+
+def com_support_margin_penalty(
+    env: BaseEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    std: float = 0.03,
+    outside_scale: float = 10.0,
+    rear_scale: float = 1.5,
+) -> torch.Tensor:
+    """惩罚整机质心接近或越过双脚支撑域边界。
+
+    Args:
+        env:
+            强化学习环境。
+
+        asset_cfg:
+            机器人配置。目前函数直接读取 env 中的缓存，
+            因此此参数主要用于保持奖励函数接口统一。
+
+        std:
+            边界惩罚的作用距离，单位为米。
+            例如 0.03 表示距离边界约 3 cm 时开始明显惩罚。
+
+        outside_scale:
+            质心投影越过支撑域后的额外惩罚系数。
+
+        rear_scale:
+            后边界惩罚倍率。大于 1 时，更强地抑制重心后移。
+
+    Returns:
+        penalty:
+            shape = (num_envs,)
+
+            返回正惩罚值，建议在配置中使用负权重。
+    """
+
+    del asset_cfg
+
+    # ---------------------------------------------------------
+    # 1. 获取脚底支撑点和整机质心水平投影
+    # ---------------------------------------------------------
+
+    # shape: (num_envs, 2, 4, 2)
+    foot_support_xy_points = (
+        env.foot_support_corners_w[..., :2]
+    )
+
+    # shape: (num_envs, 2)
+    com_xy_w = env.whole_body_com_pos_w[:, :2]
+
+    # ---------------------------------------------------------
+    # 2. 根据脚底前后点建立支撑坐标系
+    #
+    # 角点顺序：
+    # 0: 前端 +y
+    # 1: 前端 -y
+    # 2: 后端 -y
+    # 3: 后端 +y
+    # ---------------------------------------------------------
+
+    # 每只脚的前端中心
+    # shape: (num_envs, 2, 2)
+    foot_front_center_xy = (
+        foot_support_xy_points[:, :, 0:2, :]
+        .mean(dim=2)
+    )
+
+    # 每只脚的后端中心
+    # shape: (num_envs, 2, 2)
+    foot_rear_center_xy = (
+        foot_support_xy_points[:, :, 2:4, :]
+        .mean(dim=2)
+    )
+
+    # 两只脚的平均前向方向
+    # shape: (num_envs, 2)
+    support_x_axis_w = (
+        foot_front_center_xy
+        - foot_rear_center_xy
+    ).mean(dim=1)
+
+    support_x_axis_w = support_x_axis_w / (
+        torch.linalg.vector_norm(
+            support_x_axis_w,
+            dim=-1,
+            keepdim=True,
+        ).clamp_min(1.0e-6)
+    )
+
+    # 水平面内与 x 轴垂直的 y 轴
+    support_y_axis_w = torch.stack(
+        [
+            -support_x_axis_w[:, 1],
+            support_x_axis_w[:, 0],
+        ],
+        dim=-1,
+    )
+
+    # 支撑坐标系原点取 8 个脚底点的平均值
+    # shape: (num_envs, 2)
+    support_origin_xy_w = (
+        foot_support_xy_points.mean(dim=(1, 2))
+    )
+
+    # ---------------------------------------------------------
+    # 3. 把脚底点投影到支撑坐标系
+    # ---------------------------------------------------------
+
+    relative_points_xy = (
+        foot_support_xy_points
+        - support_origin_xy_w[:, None, None, :]
+    )
+
+    # shape: (num_envs, 2, 4)
+    point_x = torch.sum(
+        relative_points_xy
+        * support_x_axis_w[:, None, None, :],
+        dim=-1,
+    )
+
+    point_y = torch.sum(
+        relative_points_xy
+        * support_y_axis_w[:, None, None, :],
+        dim=-1,
+    )
+
+    # 双脚支撑矩形边界
+    # shape: (num_envs,)
+    x_min = point_x.amin(dim=(1, 2))
+    x_max = point_x.amax(dim=(1, 2))
+    y_min = point_y.amin(dim=(1, 2))
+    y_max = point_y.amax(dim=(1, 2))
+
+    # ---------------------------------------------------------
+    # 4. 把整机质心投影到同一个支撑坐标系
+    # ---------------------------------------------------------
+
+    relative_com_xy = (
+        com_xy_w - support_origin_xy_w
+    )
+
+    # shape: (num_envs,)
+    com_x = torch.sum(
+        relative_com_xy * support_x_axis_w,
+        dim=-1,
+    )
+
+    com_y = torch.sum(
+        relative_com_xy * support_y_axis_w,
+        dim=-1,
+    )
+
+    # ---------------------------------------------------------
+    # 5. 计算质心到四条边界的有符号距离
+    #
+    # 距离 > 0：在支撑域内部
+    # 距离 = 0：位于边界
+    # 距离 < 0：已经越过边界
+    # ---------------------------------------------------------
+
+    rear_distance = com_x - x_min
+    front_distance = x_max - com_x
+    side_negative_distance = com_y - y_min
+    side_positive_distance = y_max - com_y
+
+    all_distances = torch.stack(
+        [
+            rear_distance,
+            front_distance,
+            side_negative_distance,
+            side_positive_distance,
+        ],
+        dim=-1,
+    )
+
+    # 离质心最近的支撑域边界
+    min_signed_distance = all_distances.amin(dim=-1)
+
+    # ---------------------------------------------------------
+    # 6. 支撑域边缘惩罚
+    #
+    # 在中心区域接近 0；
+    # 靠近边界时接近 1。
+    # ---------------------------------------------------------
+
+    inside_distance = torch.clamp(
+        min_signed_distance,
+        min=0.0,
+    )
+
+    edge_penalty = torch.exp(
+        -inside_distance / std
+    )
+
+    # ---------------------------------------------------------
+    # 7. 越界惩罚
+    # ---------------------------------------------------------
+
+    outside_distance = torch.relu(
+        -min_signed_distance
+    )
+
+    outside_penalty = (
+        outside_distance / std
+    ).square()
+
+    # ---------------------------------------------------------
+    # 8. 单独加强脚跟方向惩罚
+    # ---------------------------------------------------------
+
+    rear_inside_distance = torch.clamp(
+        rear_distance,
+        min=0.0,
+    )
+
+    rear_edge_penalty = torch.exp(
+        -rear_inside_distance / std
+    )
+
+    rear_outside_distance = torch.relu(
+        -rear_distance
+    )
+
+    rear_outside_penalty = (
+        rear_outside_distance / std
+    ).square()
+
+    rear_penalty = (
+        rear_edge_penalty
+        + outside_scale * rear_outside_penalty
+    )
+    # rear_scale=1 时，不添加额外后侧惩罚
+    penalty = (
+        edge_penalty
+        + outside_scale * outside_penalty
+        + (rear_scale - 1.0) * rear_penalty
+    )
+    return penalty
+
+def feet_no_contact(env: BaseEnv  | G1ROUGHEnv |G1Env, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    net_contact_forces = contact_sensor.data.net_forces_w_history
+    is_no_contact = torch.max(torch.norm(net_contact_forces[:, :, sensor_cfg.body_ids], dim=-1), dim=1)[0] < threshold
+    return torch.sum(is_no_contact, dim=1)
+
+def feet_xy_velocity(env:BaseEnv,threshold:float,asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")):
+    asset:Articulation=env.scene[asset_cfg.name]
+    feet_vel_xy=asset.data.body_link_vel_w[:,asset_cfg.body_ids,:2]
+    feet_speed_squared = torch.sum(
+        torch.square(feet_vel_xy),
+        dim=-1,
+    )
+    penalty_per_foot = torch.relu(
+        feet_speed_squared - threshold**2
+    )
+
+    # Sum over all selected feet.
+    # Shape: (num_envs,)
+    return torch.sum(penalty_per_foot, dim=-1)
+
+
+def com_projection_to_ankle_center(
+    env,
+    std: float = 0.08,
+) -> torch.Tensor:
+    """奖励整机质心投影接近左右脚踝中心。
+
+    Args:
+        env:
+            SquatStandEnv 环境实例。
+        std:
+            奖励的容许距离，单位为米。
+            越小，奖励对偏移越敏感。
+
+    Returns:
+        shape = (num_envs,)
+        每个并行环境的奖励，范围为 (0, 1]。
+    """
+    # asset:Articulation=env.scene[asset_cfg.name]
+    # height_cmd = env.command_generator.command[:,0]
+    # zero_flag=height_cmd<threshold
+
+    # 整机质心在世界坐标系中的水平投影
+    # shape: (num_envs, 2)
+    com_xy = env.whole_body_com_pos_w[:, :2]
+
+    # 左右脚踝 link 的世界坐标
+    # shape: (num_envs, 2, 2)
+    ankle_xy = env.robot.data.body_link_pos_w[
+        :, env.ankle_link_ids, :2
+    ]
+
+    # 左右脚踝连线的中心
+    # shape: (num_envs, 2)
+    ankle_center_xy = ankle_xy.mean(dim=1)
+
+    # 质心投影相对于脚踝中心的偏差
+    error_xy = com_xy - ankle_center_xy
+
+    # 平方距离，避免不必要的 sqrt
+    squared_distance = torch.sum(
+        torch.square(error_xy),
+        dim=1,
+    )
+
+    # 高斯型奖励
+    reward = torch.exp(
+        -0.5 * squared_distance / (std**2)
+    )
+
+    return reward
+
+def torse_penalty(env:BaseEnv,asset_cfg:SceneEntityCfg=SceneEntityCfg("robot")):
+    asset:Articulation=env.scene[asset_cfg.name]
+    waist_pitch_pos=torch.relu(-asset.data.joint_pos[:,asset_cfg.joint_ids])
+    return torch.sum(torch.square(waist_pitch_pos), dim=1)
+    

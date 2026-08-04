@@ -20,6 +20,28 @@
 
 from .amp_on_policy_runner import AmpOnPolicyRunner
 from .on_policy_runner import OnPolicyRunner
-from .moe_amp_on_policy_runner import MoeAmpOnPolicyRunner
+from .film_on_policy_runner import FilmOnPolicyRunner
 
-__all__ = ["OnPolicyRunner", "AmpOnPolicyRunner","MoeAmpOnPolicyRunner"]
+
+class _RemovedRunner:
+    def __init__(self, *args, **kwargs):
+        raise RuntimeError(
+            "This runner implementation was removed when keeping only "
+            "g1_rough, g1_film, and g1_squart training tasks."
+        )
+
+
+DWAQAmpOnPolicyRunner = _RemovedRunner
+MoeAmpOnPolicyRunner = _RemovedRunner
+MoeOnPolicyRunner = _RemovedRunner
+G1OnPolicyRunner = _RemovedRunner
+
+__all__ = [
+    "OnPolicyRunner",
+    "AmpOnPolicyRunner",
+    "DWAQAmpOnPolicyRunner",
+    "MoeAmpOnPolicyRunner",
+    "MoeOnPolicyRunner",
+    "G1OnPolicyRunner",
+    "FilmOnPolicyRunner"
+]

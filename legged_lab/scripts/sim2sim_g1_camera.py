@@ -78,15 +78,13 @@ LAB_DOF_NAMES = [
     'right_wrist_yaw_joint'
 ]
 
-
-
 class G1FlatSim2SimCfg:
     """G1 Flat Sim2Sim 配置类 - 与训练配置保持一致"""
 
     class sim:
         sim_duration = 100.0
         num_actions = 29
-        num_obs_per_step = 102
+        num_obs_per_step = 100 # 96
         actor_obs_history_length = 10
         dt = 0.005
         decimation = 4
@@ -488,9 +486,9 @@ class G1FlatMujocoRunner:
             joint_pos_isaac,                  # 29: 关节位置偏差
             joint_vel_isaac,                  # 29: 关节速度
             np.clip(self.action, -self.cfg.sim.clip_actions, self.cfg.sim.clip_actions),  # 29: 上一步动作
-            np.sin(2 * np.pi * self.gait_phase),  # 2
-            np.cos(2 * np.pi * self.gait_phase),  # 2
-            self.phase_ratio,  # 2
+            # np.sin(2 * np.pi * self.gait_phase),  # 2
+            # np.cos(2 * np.pi * self.gait_phase),  # 2
+            # self.phase_ratio,  # 2
         ], axis=0).astype(np.float32)
         
         # 更新观测历史 (滚动更新)

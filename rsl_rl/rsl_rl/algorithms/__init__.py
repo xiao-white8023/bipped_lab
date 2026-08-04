@@ -17,9 +17,19 @@
 # and is distributed under the BSD-3-Clause license.
 
 """Implementation of different RL agents."""
-from .moe_amp_ppo import MoeAmpPpO
 from .amp_ppo import AMPPPO
-from .distillation import Distillation
+from .moe_ppo import MoePPO
 from .ppo import PPO
 
-__all__ = ["PPO", "Distillation", "AMPPPO",'MoeAmpPpO']
+
+class _RemovedAlgorithm:
+    def __init__(self, *args, **kwargs):
+        raise RuntimeError(
+            "This algorithm implementation was removed when keeping only "
+            "g1_rough, g1_film, and g1_squart training tasks."
+        )
+
+
+MoeAmpPpO = _RemovedAlgorithm
+
+__all__ = ["PPO", "AMPPPO", "MoeAmpPpO", "MoePPO"]

@@ -1,5 +1,3 @@
-
-
 import argparse
 import os
 import sys
@@ -46,7 +44,9 @@ from isaaclab.utils.io import dump_yaml
 from isaaclab_tasks.utils import get_checkpoint_path
 
 from legged_lab.utils import task_registry
-from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner,MoeAmpOnPolicyRunner
+from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner, MoeAmpOnPolicyRunner, DWAQAmpOnPolicyRunner, MoeOnPolicyRunner,G1OnPolicyRunner,FilmOnPolicyRunner
+from rsl_rl.runners.g1_student_on_policy_runner import G1StudentOnPolicyRunner
+
 from legged_lab.envs import * # noqa:F401, F403
 from legged_lab.utils.cli_args import update_rsl_rl_cfg
 
@@ -88,7 +88,7 @@ def train():
     if agent_cfg.run_name:
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
-    runner_class: OnPolicyRunner | AmpOnPolicyRunner |MoeAmpOnPolicyRunner = eval(agent_cfg.runner_class_name)
+    runner_class: FilmOnPolicyRunner|OnPolicyRunner | AmpOnPolicyRunner | MoeAmpOnPolicyRunner | DWAQAmpOnPolicyRunner | MoeOnPolicyRunner|G1OnPolicyRunner|G1StudentOnPolicyRunner = eval(agent_cfg.runner_class_name)
     runner = runner_class(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
 
     if agent_cfg.resume:

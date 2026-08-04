@@ -23,8 +23,8 @@ class RewardCfg:
 
 @configclass
 class Privileged_Info:
-    enable_feet_Privileged:bool = False
-    enable_root_height_Privileged:bool= False
+    enable_feet_info:bool = False
+    enable_root_height:bool= False
     enable_feet_contact_force:bool = False
 
 @configclass
@@ -118,17 +118,17 @@ class NormalizationCfg:
     clip_actions: float = 100.0                # # 动作值裁剪上限
     height_scan_offset: float = 0.5              #  # 高度扫描基线偏移（调整观测基线）
  
- 
+
 @configclass
-class CommandRangesCfg:
+class CommandRangesCfg():
     lin_vel_x: tuple = (-0.6, 1.0)   # # x方向线速度（前进/后退）
     lin_vel_y: tuple = (-0.5, 0.5)   # y方向线速度（左右平移）
     ang_vel_z: tuple = (-1.0, 1.0)   # z轴角速度（转向）
     heading: tuple = (-math.pi, math.pi)  #  # 航向角（-π~π）
- 
- 
+
+
 @configclass
-class CommandsCfg():
+class CommandsCfg:
     resampling_time_range: tuple = (10.0, 10.0)  # 指令重采样间隔（10秒更新一次）
     rel_standing_envs: float = 0.2               # 20%的环境让机器人保持站立
     rel_heading_envs: float = 1.0                # 100%的环境启用航向指令
@@ -137,7 +137,7 @@ class CommandsCfg():
     debug_vis: bool = True                        # # 可视化指令（调试用）
     ranges: CommandRangesCfg = CommandRangesCfg()   # # 指令范围配置
  
- 
+
 @configclass
 class NoiseScalesCfg:
     # # 各观测维度的噪声幅度（模拟真实传感器误差）
@@ -206,6 +206,26 @@ class EventCfg:
         interval_range_s=(10.0, 15.0),
         params={"velocity_range": {"x": (-1.0, 1.0), "y": (-1.0, 1.0)}},
     )
+    reset_arm_pose_and_hold=EventTerm(
+        func=mdp.reset_arm_pose_and_hold,
+        mode="reset",
+        params={
+            "position_ranges": {
+            "right_shoulder_pitch_joint": (-0.35, 0.35),
+            "right_shoulder_roll_joint": (-0.10, 0.20),
+            "right_elbow_joint": (0.20, 0.80),
+        },
+        "asset_cfg": SceneEntityCfg(
+            "robot",
+            joint_names=[
+                "right_shoulder_pitch_joint",
+                "right_shoulder_roll_joint",
+                "right_elbow_joint",
+            ],
+            preserve_order=True,
+        )
+        }
+    )
  
  
 @configclass
@@ -228,7 +248,7 @@ class PhysxCfg:
     gpu_max_rigid_contact_count=2**23, # 必须改大，否则 4096 环境会崩
     gpu_max_rigid_patch_count=2**23,   # 同上
     gpu_heap_capacity=2**26,           # 必须改大，显存预留
- 
+
 @configclass
 class SimCfg:
     '''
@@ -238,3 +258,14 @@ class SimCfg:
     decimation: int = 4  # 控制频率抽取系数（200/4=50Hz控制频率）
     physx: PhysxCfg = PhysxCfg()  # PhysX物理引擎配置
 
+@configclass
+class HeightCommandRangeCfg():
+    height: tuple[float, float] = (0.45,0.76)
+
+@configclass
+class HeightCommandCfg:
+    resampling_time_range: tuple = (10.0, 10.0)
+    rel_standing_envs: float = 0.2
+    stand_height: float = 0.76
+    debug_vis:bool =True
+    ranges:HeightCommandRangeCfg=HeightCommandRangeCfg()
