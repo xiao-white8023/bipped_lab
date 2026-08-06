@@ -48,6 +48,8 @@ class CameraCfg:
     depth_update_interval:int=MISSING
     depth_crop:tuple=MISSING
     depth_history_frames:int=8
+    depth_input_mode: str = "depth"  # "depth" or "xyz"; xyz uses base-frame point coordinates.
+    normalize_depth_points: bool = True
 
 @configclass
 class left_feet_ray_caster_cfg: 

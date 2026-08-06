@@ -46,6 +46,21 @@ class AMPPPO:
         symmetry_cfg: dict | None = None,
         # Distributed training parameters
         multi_gpu_cfg: dict | None = None,
+        # Auxiliary task parameters
+        vel_estimation_coef: float = 0.0,
+        vel_estimation_warmup_iters: int = 0,
+        terrain_recon_coef: float = 0.0,
+        terrain_recon_warmup_iters: int = 0,
+        terrain_recon_target_clip: float = 1.0,
+        terrain_scan_dim: int = 187,
+        vel_dim: int = 3,
+        terrain_recon_front_only: bool = True,
+        terrain_recon_grid_cols: int = 17,
+        terrain_recon_grid_rows: int = 11,
+        terrain_recon_x_min: float = 0.0,
+        single_critic_dim: int = 107,
+        critic_history_len: int = 10,
+        vel_in_critic_offset: int = 104,
     ):
         # device-related parameters
         self.device = device
@@ -141,6 +156,41 @@ class AMPPPO:
         self.learning_rate = learning_rate
         self.normalize_advantage_per_mini_batch = normalize_advantage_per_mini_batch
 
+        self.vel_estimation_coef = vel_estimation_coef
+        self.vel_estimation_warmup_iters = vel_estimation_warmup_iters
+        self.terrain_recon_coef = terrain_recon_coef
+        self.terrain_recon_warmup_iters = terrain_recon_warmup_iters
+        self.terrain_recon_target_clip = terrain_recon_target_clip
+        self.terrain_scan_dim = terrain_scan_dim
+        self.vel_dim = vel_dim
+        self.current_iteration = 0
+        self.single_critic_dim = single_critic_dim
+        self.critic_history_len = critic_history_len
+        self.vel_in_critic_offset = vel_in_critic_offset
+        self.vel_obs_start_idx = (self.critic_history_len - 1) * self.single_critic_dim + self.vel_in_critic_offset
+
+        self.terrain_front_indices = None
+        if terrain_recon_front_only and terrain_recon_coef > 0:
+            resolution = 0.1
+            size_x = (terrain_recon_grid_cols - 1) * resolution
+            x_min_idx = max(0, int((terrain_recon_x_min + size_x / 2) / resolution))
+            front_indices = []
+            for y_idx in range(terrain_recon_grid_rows):
+                for x_idx in range(x_min_idx, terrain_recon_grid_cols):
+                    front_indices.append(y_idx * terrain_recon_grid_cols + x_idx)
+            self.terrain_front_indices = torch.tensor(front_indices, dtype=torch.long, device=device)
+            self.terrain_recon_target_dim = len(front_indices)
+        else:
+            self.terrain_recon_target_dim = terrain_scan_dim
+
+        if vel_estimation_coef > 0:
+            print("[AMPPPO] Velocity estimation AUX TASK enabled:")
+            print(f"  - coef: {vel_estimation_coef}, warmup: {vel_estimation_warmup_iters} iters")
+        if terrain_recon_coef > 0:
+            print("[AMPPPO] Terrain reconstruction AUX TASK enabled:")
+            print(f"  - coef: {terrain_recon_coef}, warmup: {terrain_recon_warmup_iters} iters")
+            print(f"  - front_only: {terrain_recon_front_only}, predict {self.terrain_recon_target_dim} points")
+
     def init_storage(
         self, training_type, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, actions_shape
     ):
@@ -214,6 +264,13 @@ class AMPPPO:
             last_values, self.gamma, self.lam, normalize_advantage=not self.normalize_advantage_per_mini_batch
         )
 
+    def _get_warmup_weight(self, iteration: int, warmup_iters: int, target_weight: float) -> float:
+        if warmup_iters <= 0:
+            return target_weight
+        if iteration >= warmup_iters:
+            return target_weight
+        return target_weight * (iteration / warmup_iters)
+
     def update(self):  # noqa: C901
         mean_value_loss = 0
         mean_surrogate_loss = 0
@@ -232,6 +289,14 @@ class AMPPPO:
             mean_symmetry_loss = 0
         else:
             mean_symmetry_loss = None
+        mean_vel_loss = 0
+        mean_terrain_recon_loss = 0
+        vel_weight = self._get_warmup_weight(
+            self.current_iteration, self.vel_estimation_warmup_iters, self.vel_estimation_coef
+        )
+        terrain_weight = self._get_warmup_weight(
+            self.current_iteration, self.terrain_recon_warmup_iters, self.terrain_recon_coef
+        )
 
         # generator for mini batches
         if self.policy.is_recurrent:
@@ -371,6 +436,36 @@ class AMPPPO:
 
             loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
 
+            vel_loss = torch.tensor(0.0, device=self.device)
+            if vel_weight > 0 and hasattr(self.policy, "use_vel_estimation") and self.policy.use_vel_estimation:
+                vel_estimate = self.policy.predict_velocity()
+                if vel_estimate is not None:
+                    vel_target = critic_obs_batch[
+                        :, self.vel_obs_start_idx : self.vel_obs_start_idx + self.vel_dim
+                    ].detach()
+                    vel_loss = nn.functional.mse_loss(vel_estimate, vel_target)
+
+            terrain_recon_loss = torch.tensor(0.0, device=self.device)
+            if terrain_weight > 0 and hasattr(self.policy, "use_terrain_recon") and self.policy.use_terrain_recon:
+                terrain_pred = self.policy.predict_terrain()
+                if terrain_pred is not None:
+                    terrain_target_full = critic_obs_batch[:, -self.terrain_scan_dim :].detach()
+                    if self.terrain_front_indices is not None:
+                        terrain_target = terrain_target_full[:, self.terrain_front_indices]
+                    else:
+                        terrain_target = terrain_target_full
+                    if self.terrain_recon_target_clip > 0:
+                        terrain_target = terrain_target.clamp(
+                            -self.terrain_recon_target_clip,
+                            self.terrain_recon_target_clip,
+                        )
+                    target_mean = terrain_target.mean()
+                    target_std = terrain_target.std().clamp(min=1e-6)
+                    terrain_target_norm = (terrain_target - target_mean) / target_std
+                    terrain_recon_loss = nn.functional.mse_loss(terrain_pred, terrain_target_norm)
+
+            loss += vel_weight * vel_loss + terrain_weight * terrain_recon_loss
+
             # Symmetry loss
             if self.symmetry:
                 # obtain the symmetric actions
@@ -465,6 +560,8 @@ class AMPPPO:
             mean_grad_pen_loss += grad_pen_loss.item()
             mean_policy_pred += policy_d.mean().item()
             mean_expert_pred += expert_d.mean().item()
+            mean_vel_loss += vel_loss.item()
+            mean_terrain_recon_loss += terrain_recon_loss.item()
             # -- RND loss
             if mean_rnd_loss is not None:
                 mean_rnd_loss += rnd_loss.item()
@@ -488,6 +585,8 @@ class AMPPPO:
         mean_grad_pen_loss /= num_updates
         mean_policy_pred /= num_updates
         mean_expert_pred /= num_updates
+        mean_vel_loss /= num_updates
+        mean_terrain_recon_loss /= num_updates
         self.storage.clear()
 
         # construct the loss dictionary
@@ -504,7 +603,14 @@ class AMPPPO:
             loss_dict["rnd"] = mean_rnd_loss
         if self.symmetry:
             loss_dict["symmetry"] = mean_symmetry_loss
+        if self.vel_estimation_coef > 0:
+            loss_dict["vel_estimation"] = mean_vel_loss
+            loss_dict["vel_estimation_coef_current"] = vel_weight
+        if self.terrain_recon_coef > 0:
+            loss_dict["terrain_recon"] = mean_terrain_recon_loss
+            loss_dict["terrain_recon_coef_current"] = terrain_weight
 
+        self.current_iteration += 1
         return loss_dict
 
     """
@@ -514,7 +620,7 @@ class AMPPPO:
     def broadcast_parameters(self):
         """Broadcast model parameters to all GPUs."""
         # obtain the model parameters on current GPU
-        model_params = [self.policy.state_dict()]
+        model_params = [self.policy.state_dict(), self.discriminator.state_dict()]
         if self.rnd:
             model_params.append(self.rnd.predictor.state_dict())
         # broadcast the model parameters
@@ -525,7 +631,7 @@ class AMPPPO:
         self.discriminator.load_state_dict(model_params[1])
         #
         if self.rnd:
-            self.rnd.predictor.load_state_dict(model_params[1])
+            self.rnd.predictor.load_state_dict(model_params[2])
 
     def reduce_parameters(self):
         """Collect gradients from all GPUs and average them."""
