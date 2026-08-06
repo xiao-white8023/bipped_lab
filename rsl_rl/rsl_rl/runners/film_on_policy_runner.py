@@ -13,6 +13,7 @@ from rsl_rl.env import VecEnv
 from rsl_rl.modules import (
     ActorCritic,
     EmpiricalNormalization,
+    MhaActorCritic,
     MoeActorCritic,
 )
 from rsl_rl.utils import store_code_state
@@ -59,7 +60,7 @@ class FilmOnPolicyRunner:
         if "CnnMlp" in self.policy_cfg and isinstance(self.policy_cfg["CnnMlp"], dict):
             self.policy_cfg["CnnMlp"].pop("num_heads", None)
             self.policy_cfg["CnnMlp"].pop("embed_dim", None)
-        policy: ActorCritic | MoeActorCritic = policy_class(
+        policy: ActorCritic | MoeActorCritic | MhaActorCritic = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
 

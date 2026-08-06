@@ -14,6 +14,7 @@ from rsl_rl.modules import (
     ActorCritic,
     Discriminator,
     EmpiricalNormalization,
+    MhaActorCritic,
 )
 from rsl_rl.utils import AMPLoader, Normalizer, store_code_state
 
@@ -61,7 +62,7 @@ class AmpOnPolicyRunner:
         if "CnnMlp" in self.policy_cfg and isinstance(self.policy_cfg["CnnMlp"], dict):
             self.policy_cfg["CnnMlp"].pop("num_heads", None)
             self.policy_cfg["CnnMlp"].pop("embed_dim", None)
-        policy: ActorCritic = policy_class(
+        policy: ActorCritic | MhaActorCritic = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
 
@@ -346,6 +347,13 @@ class AmpOnPolicyRunner:
                             irewbuffer.extend(cur_ireward_sum[new_ids][:, 0].cpu().numpy().tolist())
                             cur_ereward_sum[new_ids] = 0
                             cur_ireward_sum[new_ids] = 0
+
+                if hasattr(self.env, "update_depth_noise_curriculum_once"):
+                    self.env.update_depth_noise_curriculum_once()
+                    if self.log_dir is not None and hasattr(self.env, "get_depth_noise_curriculum_log"):
+                        depth_noise_log = self.env.get_depth_noise_curriculum_log()
+                        if depth_noise_log:
+                            ep_infos.append(depth_noise_log)
 
                 stop = time.time()
                 collection_time = stop - start
