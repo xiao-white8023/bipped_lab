@@ -21,6 +21,7 @@
 from .amp_on_policy_runner import AmpOnPolicyRunner
 from .on_policy_runner import OnPolicyRunner
 from .film_on_policy_runner import FilmOnPolicyRunner
+from .renet_amp_on_policy_runner import RENetAmpOnPolicyRunner
 
 
 class _RemovedRunner:
@@ -43,5 +44,6 @@ __all__ = [
     "MoeAmpOnPolicyRunner",
     "MoeOnPolicyRunner",
     "G1OnPolicyRunner",
-    "FilmOnPolicyRunner"
+    "FilmOnPolicyRunner",
+    "RENetAmpOnPolicyRunner",
 ]

@@ -27,6 +27,7 @@ from .film_cnn_mlp import FiLMCnnMlp
 
 from .moe_actor_critic import MoeActorCritic
 from .mha_actor_critic import MhaActorCritic
+from .renet_actor_critic import RENetActorCritic
 
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     "FiLMCnnMlp",
     "MoeActorCritic",
     "MhaActorCritic",
+    "RENetActorCritic",
 ]
