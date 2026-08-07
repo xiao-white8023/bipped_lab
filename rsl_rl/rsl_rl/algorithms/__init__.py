@@ -20,6 +20,7 @@
 from .amp_ppo import AMPPPO
 from .moe_ppo import MoePPO
 from .ppo import PPO
+from .renet_amp_ppo import RENetAMPPPO
 
 
 class _RemovedAlgorithm:
@@ -32,4 +33,4 @@ class _RemovedAlgorithm:
 
 MoeAmpPpO = _RemovedAlgorithm
 
-__all__ = ["PPO", "AMPPPO", "MoeAmpPpO", "MoePPO"]
+__all__ = ["PPO", "AMPPPO", "MoeAmpPpO", "MoePPO", "RENetAMPPPO"]
