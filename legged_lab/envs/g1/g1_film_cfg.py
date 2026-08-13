@@ -546,7 +546,7 @@ class  G129MOE_FILMAGENTENV:
         activation="elu",
         num_experts=4,
         gate_hidden_dim=[256,128,64],
-        single_proprio_dim=100, # 100
+        single_proprio_dim=96, # 100
         his_encoder_dims = [256, 128],
         his_latent_dim = 64,
         use_gru=False,
@@ -611,15 +611,15 @@ class  G129MOE_FILMAGENTENV:
         terrain_recon_grid_cols=17,
         terrain_recon_grid_rows=11,
         terrain_recon_x_min=0.0,
-        single_critic_dim =124, # 124
+        single_critic_dim =120, # 124
         critic_history_len = 10,
-        vel_in_critic_offset= 102, # 102
+        vel_in_critic_offset= 98, # 102
         terrain_recon_target_clip=1,
         terrain_recon_warmup_iters=500,
         vel_estimation_warmup_iters=0,
         use_moe_balance_loss=True,
         moe_balance_coef=0.01,
-        use_moe_gate_entropy_loss=True,
+        use_moe_gate_entropy_loss=False,
         moe_gate_entropy_coef=0.001
     )
 

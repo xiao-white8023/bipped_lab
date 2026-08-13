@@ -3,7 +3,6 @@ import isaacsim.core.utils.torch as torch_utils  # type: ignore
 import numpy as np
 import torch
 import torchvision.transforms as T
-from collections import deque
 
 from isaaclab.assets.articulation import Articulation
 from isaaclab.envs.mdp.commands import UniformVelocityCommand, UniformVelocityCommandCfg
@@ -20,8 +19,6 @@ from scipy.spatial.transform import Rotation
 
 from legged_lab.envs.g1.atten_cfg import AttenCFG
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
-from legged_lab.utils.camera_noise import camera_noise_cfg
-from legged_lab.utils.camera_noise.camera_noise import range_based_gaussian_noise
 from legged_lab.utils.env_utils.scene import SceneCfg
 
 from rsl_rl.env import VecEnv
@@ -46,19 +43,10 @@ class AttenEnv(VecEnv):
         self.physics_dt = self.cfg.sim.dt
         self.step_dt = self.cfg.sim.decimation * self.cfg.sim.dt
         self.num_envs = self.cfg.scene.num_envs
-        self.training_stage_cfg = getattr(self.cfg, "training_stage", None)
-        self.use_domain_randomization = not bool(
-            getattr(self.training_stage_cfg, "disable_domain_rand", False)
-        )
-        self.use_proprio_noise = not bool(
-            getattr(self.training_stage_cfg, "disable_proprio_noise", False)
-        )
-        self.use_depth_noise = not bool(
-            getattr(self.training_stage_cfg, "disable_depth_noise", False)
-        )
-        self.use_camera_randomization = not bool(
-            getattr(self.training_stage_cfg, "disable_camera_randomization", False)
-        )
+        self.use_domain_randomization = True
+        self.use_proprio_noise = False
+        self.use_depth_noise = False
+        self.use_camera_randomization = False
 
         sim_cfg = sim_utils.SimulationCfg(
             device=cfg.device,
@@ -305,15 +293,6 @@ class AttenEnv(VecEnv):
         self.action_buffer.compute(
             torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
         )
-        if self.use_domain_randomization and self.cfg.domain_rand.action_delay.enable:
-            time_lags = torch.randint(
-                low=self.cfg.domain_rand.action_delay.params["min_delay"],
-                high=self.cfg.domain_rand.action_delay.params["max_delay"] + 1,
-                size=(self.num_envs,),
-                dtype=torch.int,
-                device=self.device,
-            )
-            self.action_buffer.set_time_lag(time_lags, torch.arange(self.num_envs, device=self.device))
         
         '''
         通过SceneEntityCfg（场景实体配置类）精准定位场景中的关键实体 / 刚体（机器人本体、触发终止的刚体、脚部刚体）
@@ -332,9 +311,7 @@ class AttenEnv(VecEnv):
                                         # 用于判断脚是否接触地面了
         
         self.obs_scales = self.cfg.normalization.obs_scales
-        self.add_noise = bool(self.cfg.noise.add_noise and self.use_proprio_noise)
-        if self.add_noise:
-            self.noisy=self.cfg.noise.noise_scales
+        self.add_noise = False
         # 创建「episode 步数缓冲区」，记录每个环境当前 episode 已经运行的步数
         self.episode_length_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.sim_step_counter = 0 # 创建「全局仿真步数计数器」，记录整个仿真运行的总步数（所有环境共享），而非单个环境的 episode 步数
@@ -372,53 +349,36 @@ class AttenEnv(VecEnv):
                 ),
                 device=self.device, dtype=torch.float
             )
-        #
-        self.depth_noise_curriculum_cfg = getattr(self.cfg, "depth_noise_curriculum", None)
-        self.use_depth_noise_curriculum = bool(
-            self.camera is not None
-            and self.use_depth_noise
-            and self.depth_noise_curriculum_cfg is not None
-            and self.depth_noise_curriculum_cfg.enable
-        )
-        self.use_depth_camera_noise = bool(
-            self.camera is not None
-            and self.use_depth_noise
-            and (self.cfg.scene.camera.add_camera_noise or self.use_depth_noise_curriculum)
-        )
-        self._init_depth_noise_curriculum()
-        self._init_camera_domain_randomization()
 
-        if self.use_depth_camera_noise:
-            initial_failure_probability = self.cfg.depth_noise_curriculum.failure_probability_range[1]
-            initial_gaussian_std = self.cfg.depth_noise_curriculum.gaussian_std_range[1]
-            if self.use_depth_noise_curriculum:
-                initial_failure_probability = self._lerp_cfg_range(
-                    self.depth_noise_curriculum_cfg.failure_probability_range,
-                    self.depth_noise_strength,
+        if self.cfg.scene.height_scanner.enable_height_scan:
+            scan_resolution = float(self.cfg.scene.height_scanner.resolution)
+            scan_size_x = float(self.cfg.scene.height_scanner.size[0])
+            scan_size_y = float(self.cfg.scene.height_scanner.size[1])
+            self.height_scan_cols = int(round(scan_size_x / scan_resolution)) + 1
+            self.height_scan_rows = int(round(scan_size_y / scan_resolution)) + 1
+            self.height_scan_point_count = self.height_scan_rows * self.height_scan_cols
+            self.height_scan_front_col_start = self.height_scan_cols // 2
+            self.height_scan_front_cols = self.height_scan_cols - self.height_scan_front_col_start
+            actual_point_count = int(self.height_scanner.data.ray_hits_w.shape[1])
+            if actual_point_count != self.height_scan_point_count:
+                raise RuntimeError(
+                    "Height scanner point count does not match the AME map shape: "
+                    f"expected {self.height_scan_rows}x{self.height_scan_cols}="
+                    f"{self.height_scan_point_count}, got {actual_point_count}."
                 )
-                initial_gaussian_std = self._lerp_cfg_range(
-                    self.depth_noise_curriculum_cfg.gaussian_std_range,
-                    self.depth_noise_strength,
-                )
-            self.structured_depth_failure_model = camera_noise_cfg.StructuredDepthFailureModel(
-                cfg=camera_noise_cfg.StructuredDepthFailureCfg(
-                    failure_probability=initial_failure_probability,
-                    failure_duration_range=(2, 4),
-                    consecutive_dropout_duration_range=(2, 4),
-                    freeze_duration_range=(2, 4),
-                    distant_dust_duration_range=(2, 4),
-                    distant_dust_start=1.5,
-                    device=self.device,
+            self.height_scan_history_frames = max(1, int(getattr(self.cfg.robot, "depth_history_frames", 1)))
+            self.height_scan_map_buffer = torch.zeros(
+                (
+                    self.num_envs,
+                    self.height_scan_history_frames,
+                    3,
+                    self.height_scan_rows,
+                    self.height_scan_front_cols,
                 ),
-                num_envs=self.num_envs,
                 device=self.device,
+                dtype=torch.float,
             )
-            self.gaussian_cfg = camera_noise_cfg.RangeBasedGaussianNoiseCfg(
-                noise_std=initial_gaussian_std,
-                min_value=0.0,
-                max_value=self.cfg.scene.camera.depth_max,
-                device=self.device,
-            )
+        self._init_camera_domain_randomization()
 
         amp_joint_names = [
             "left_hip_pitch_joint",
@@ -529,114 +489,7 @@ class AttenEnv(VecEnv):
         self.avg_feet_speed_per_step = torch.zeros(
             self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
         )
-        self.obs_noisy_vec_and_buffer()
-
-    def _init_depth_noise_curriculum(self):
-        window_size = 1
-        if self.use_depth_noise_curriculum:
-            window_size = max(1, int(self.depth_noise_curriculum_cfg.return_window_size))
-        self.depth_noise_episode_returns = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
-        self.depth_noise_return_window = deque(maxlen=window_size)
-        self.depth_noise_strength = torch.zeros((), dtype=torch.float, device=self.device)
-        self.depth_noise_return_cv = torch.zeros((), dtype=torch.float, device=self.device)
-        self.depth_noise_return_mean = torch.zeros((), dtype=torch.float, device=self.device)
-        self.depth_noise_return_std = torch.zeros((), dtype=torch.float, device=self.device)
-
-    @staticmethod
-    def _lerp_cfg_range(value_range, alpha) -> float:
-        if isinstance(alpha, torch.Tensor):
-            alpha = float(alpha.detach().cpu().item())
-        alpha = max(0.0, min(1.0, float(alpha)))
-        return float(value_range[0] + (value_range[1] - value_range[0]) * alpha)
-
-    def _accumulate_depth_noise_returns(self, reward_buf: torch.Tensor):
-        if not self.use_depth_noise_curriculum:
-            return
-        rewards = reward_buf.detach().reshape(self.num_envs, -1).sum(dim=1)
-        self.depth_noise_episode_returns += rewards
-
-    def _collect_depth_noise_completed_returns(self, env_ids: torch.Tensor):
-        if torch.is_tensor(env_ids):
-            env_ids = env_ids.to(device=self.device, dtype=torch.long)
-        else:
-            env_ids = torch.tensor(env_ids, dtype=torch.long, device=self.device)
-        if not self.use_depth_noise_curriculum or env_ids.numel() == 0:
-            return
-        completed_returns = self.depth_noise_episode_returns[env_ids].detach().cpu().tolist()
-        self.depth_noise_return_window.extend(completed_returns)
-
-    def update_depth_noise_curriculum_once(self):
-        if not self.use_depth_noise_curriculum:
-            return
-
-        returns = torch.tensor(list(self.depth_noise_return_window), dtype=torch.float, device=self.device)
-        self.depth_noise_return_mean = returns.mean() if returns.numel() > 0 else torch.zeros((), device=self.device)
-        self.depth_noise_return_std = (
-            returns.std(unbiased=False) if returns.numel() > 1 else torch.zeros((), device=self.device)
-        )
-
-        if returns.numel() < 2:
-            self.depth_noise_return_cv = torch.zeros((), dtype=torch.float, device=self.device)
-            self.depth_noise_strength = torch.zeros((), dtype=torch.float, device=self.device)
-            self._apply_depth_noise_curriculum_strength()
-            self._add_depth_noise_curriculum_logs()
-            return
-
-        eps = self.depth_noise_curriculum_cfg.cv_epsilon
-        return_cv = self.depth_noise_return_std / (self.depth_noise_return_mean.abs() + eps)
-        raw_strength = torch.clamp(1.0 - torch.tanh(return_cv), min=0.0, max=1.0)
-        ema_beta = max(0.0, min(1.0, float(self.depth_noise_curriculum_cfg.ema_beta)))
-
-        self.depth_noise_return_cv = return_cv.detach()
-        self.depth_noise_strength = torch.clamp(
-            ema_beta * self.depth_noise_strength + (1.0 - ema_beta) * raw_strength,
-            min=0.0,
-            max=1.0,
-        ).detach()
-        self._apply_depth_noise_curriculum_strength()
-        self._add_depth_noise_curriculum_logs()
-
-    def _reset_depth_noise_returns(self, env_ids: torch.Tensor):
-        if torch.is_tensor(env_ids):
-            env_ids = env_ids.to(device=self.device, dtype=torch.long)
-        else:
-            env_ids = torch.tensor(env_ids, dtype=torch.long, device=self.device)
-        if self.use_depth_noise_curriculum and env_ids.numel() > 0:
-            self.depth_noise_episode_returns[env_ids] = 0.0
-
-    def _apply_depth_noise_curriculum_strength(self):
-        if not self.use_depth_noise_curriculum:
-            return
-        self.gaussian_cfg.noise_std = self._lerp_cfg_range(
-            self.depth_noise_curriculum_cfg.gaussian_std_range,
-            self.depth_noise_strength
-        )
-        self.structured_depth_failure_model.cfg.failure_probability = self._lerp_cfg_range(
-            self.depth_noise_curriculum_cfg.failure_probability_range,
-            self.depth_noise_strength,
-        )
-
-    def get_depth_noise_curriculum_log(self):
-        if not self.use_depth_camera_noise:
-            return {}
-        self._apply_depth_noise_curriculum_strength()
-        log = {}
-        if self.use_depth_noise_curriculum:
-            log["Curriculum/depth_noise_strength"] = self.depth_noise_strength
-            log["Curriculum/depth_noise_return_cv"] = self.depth_noise_return_cv
-            log["Curriculum/depth_noise_return_mean"] = self.depth_noise_return_mean
-            log["Curriculum/depth_noise_return_std"] = self.depth_noise_return_std
-        log["Curriculum/depth_noise_std"] = torch.tensor(self.gaussian_cfg.noise_std, device=self.device)
-        log["Curriculum/depth_noise_failure_probability"] = torch.tensor(
-            self.structured_depth_failure_model.cfg.failure_probability,
-            device=self.device,
-        )
-        return log
-
-    def _add_depth_noise_curriculum_logs(self):
-        if not self.use_depth_camera_noise:
-            return
-        self.extras.setdefault("log", {}).update(self.get_depth_noise_curriculum_log())
+        self.init_obs_buffers()
 
     def _init_camera_domain_randomization(self):
         self.camera_domain_rand_cfg = getattr(self.cfg, "camera_domain_rand", None)
@@ -749,6 +602,8 @@ class AttenEnv(VecEnv):
         command = self.command_generator.command # 速度命令
         joint_pos = robot.data.joint_pos - robot.data.default_joint_pos  # 关节的位相对默认角度的位置
         joint_vel = robot.data.joint_vel - robot.data.default_joint_vel  # 关节速度相对于默认关节速度的速度
+        root_lin_vel = robot.data.root_lin_vel_b # 根节点的线速度
+        feet_contact = torch.max(torch.norm(net_contact_forces[:, :, self.feet_cfg.body_ids], dim=-1), dim=1)[0] > 0.5
         '''
         self.action_buffer：类实例中保存的动作缓冲区实例，用于缓存智能体之前输出的动作（强化学习中，智能体通常需要参考近期的动作来做决策，保持动作的连续性）。
         _circular_buffer：循环缓冲区（环形缓冲区），一种高效的缓存数据结构，当缓冲区满时，新数据会覆盖最旧的数据，无需频繁移动数据。
@@ -776,44 +631,19 @@ class AttenEnv(VecEnv):
             [
                 ang_vel * self.obs_scales.ang_vel,  # 3
                 projected_gravity * self.obs_scales.projected_gravity,  # 3
+                root_lin_vel, # 3
                 command * self.obs_scales.commands,  # 3
+                feet_contact, # 2
                 joint_pos * self.obs_scales.joint_pos,  # 23
                 joint_vel * self.obs_scales.joint_vel,  # 23
                 action * self.obs_scales.actions,  # 23
             ],
             dim=-1,
         )
-        
-        root_lin_vel = robot.data.root_lin_vel_b # 根节点的线速度
-        feet_contact = torch.max(torch.norm(net_contact_forces[:, :, self.feet_cfg.body_ids], dim=-1), dim=1)[0] > 0.5
-        current_critic_obs = torch.cat([current_actor_obs, root_lin_vel * self.obs_scales.lin_vel, feet_contact], dim=-1)
+        current_critic_obs = torch.cat([current_actor_obs], dim=-1)
         return current_actor_obs, current_critic_obs
     
-    def obs_noisy_vec_and_buffer(self):
-        if self.add_noise:
-        
-            current_actor_obs, _ = self.compute_current_observations()
-        
-            noise_obs_vec = torch.zeros_like(current_actor_obs[0]) # 定义一个和current_actor_obs维度一样的向量
-            noise_obs_vec[0:3] = self.obs_scales.ang_vel*self.noisy.ang_vel
-            noise_obs_vec[3:6] = self.obs_scales.projected_gravity*self.noisy.projected_gravity
-            noise_obs_vec[6:9] = 0
-            noise_obs_vec[9:9+self.num_actions]=self.obs_scales.joint_pos*self.noisy.joint_pos
-            noise_obs_vec[9 + self.num_actions : 9 + self.num_actions * 2] = self.obs_scales.joint_vel*self.noisy.joint_vel 
-            noise_obs_vec[9 + self.num_actions * 2 : 9 + self.num_actions * 3] = 0.0
-            self.noise_obs_vec=noise_obs_vec
-        
-        if self.cfg.scene.height_scanner.enable_height_scan:
-            height_scan = (
-                    self.height_scanner.data.pos_w[:, 2].unsqueeze(1)
-                    - self.height_scanner.data.ray_hits_w[..., 2]
-                    - self.cfg.normalization.height_scan_offset
-                )
-            height_scan_noise_vec = torch.zeros_like(height_scan[0])
-            if self.add_noise:
-                height_scan_noise_vec[:] = self.noisy.height_scan * self.obs_scales.height_scan
-            self.height_scan_noise_vec = height_scan_noise_vec
-        
+    def init_obs_buffers(self):
         # 定义actor缓存区 存入单帧观测数据后，self.actor_obs_buffer 的核心存储张量（buffer）是一个 3 维张量，维度为 [num_envs, max_len, single_actor_obs_dim]
         self.actor_obs_buffer = CircularBuffer(
             max_len=self.cfg.robot.actor_obs_history_length, batch_size=self.num_envs, device=self.device
@@ -825,14 +655,7 @@ class AttenEnv(VecEnv):
     
     def compute_observations(self):
         current_actor_obs, current_critic_obs = self.compute_current_observations()
-        '''
-        torch.rand_like(current_actor_obs)：生成一个和current_actor_obs形状完全相同的张量，元素值服从[0, 1]之间的均匀分布。
-        `2 * torch.rand_like(...) - 1：将均匀分布从[0, 1]映射到[-1, 1]。
-        * self.noise_scale_vec：乘以噪声缩放系数（self.noise_scale_vec是与观测特征维度匹配的张量），控制噪声的大小，避免噪声过大覆盖有效观测。
-        ''' 
-        if self.add_noise:
-            current_actor_obs += (2 * torch.rand_like(current_actor_obs) - 1) * self.noise_obs_vec
-        
+
         self.actor_obs_buffer.append(current_actor_obs)
         self.critic_obs_buffer.append(current_critic_obs)
 
@@ -840,15 +663,17 @@ class AttenEnv(VecEnv):
         self.critic_obs = self.critic_obs_buffer.buffer.reshape(self.num_envs, -1)
 
         if self.cfg.scene.height_scanner.enable_height_scan:
+            hit_z = self.height_scanner.data.ray_hits_w[..., 2]
+            valid_hit = torch.isfinite(hit_z)
+            fallback_hit_z = self.robot.data.root_state_w[:, 2:3] - 5.0
+            hit_z = torch.where(valid_hit, hit_z, fallback_hit_z.expand_as(hit_z))
             height_scan = (
                 self.height_scanner.data.pos_w[:, 2].unsqueeze(1)
-                - self.height_scanner.data.ray_hits_w[..., 2]
+                - hit_z
                 - self.cfg.normalization.height_scan_offset
             ) * self.obs_scales.height_scan
+            height_scan = self.get_front_height_scan_flat(height_scan)
             self.critic_obs = torch.cat([self.critic_obs, height_scan], dim=-1)
-            if self.add_noise:
-                height_scan += (2 * torch.rand_like(height_scan) - 1) * self.height_scan_noise_vec
-            
         
         self.actor_obs = torch.clip(self.actor_obs, -self.clip_obs, self.clip_obs)
         self.critic_obs = torch.clip(self.critic_obs, -self.clip_obs, self.clip_obs)
@@ -877,25 +702,25 @@ class AttenEnv(VecEnv):
                 dt=self.step_dt,
                 global_env_step_count=self.sim_step_counter // self.cfg.sim.decimation,
             )
+        else:
+            self._reset_robot_deterministic(env_ids)
 
         reward_extras = self.reward_manager.reset(env_ids)
         self.extras["log"].update(reward_extras)
         self.extras["time_outs"] = self.time_out_buf
-        self._add_depth_noise_curriculum_logs()
 
         self.command_generator.reset(env_ids)
         self.actor_obs_buffer.reset(env_ids)
         self.critic_obs_buffer.reset(env_ids)
         self.action_buffer.reset(env_ids)
         self.episode_length_buf[env_ids] = 0
-        self._reset_depth_noise_returns(env_ids)
 
         #
         if self.camera is not None:
             self.depth_buffer[env_ids]=0
             self._randomize_camera_domain(env_ids)
-        if self.use_depth_camera_noise:
-            self.structured_depth_failure_model.reset(env_ids)
+        if self.cfg.scene.height_scanner.enable_height_scan:
+            self.height_scan_map_buffer[env_ids] = 0
         #
         self.scene.write_data_to_sim()
         self.sim.forward()
@@ -905,7 +730,6 @@ class AttenEnv(VecEnv):
         # 1. 处理动作
         # ---------------------------------------------------------
         delayed_actions = self.action_buffer.compute(actions)
-
         self.action = torch.clip(
             delayed_actions,
             -self.clip_actions,
@@ -989,12 +813,10 @@ class AttenEnv(VecEnv):
         reward_buf = self.reward_manager.compute(
             self.step_dt
         )
-        self._accumulate_depth_noise_returns(reward_buf)
 
         self.reset_env_ids = self.reset_buf.nonzero(
             as_tuple=False
         ).flatten()
-        self._collect_depth_noise_completed_returns(self.reset_env_ids)
 
         # ---------------------------------------------------------
         # 5. 关键：必须在reset前保存真实终止AMP状态
@@ -1028,7 +850,6 @@ class AttenEnv(VecEnv):
         # 6. reset终止环境
         # ---------------------------------------------------------
         self.reset(self.reset_env_ids)
-        self._add_depth_noise_curriculum_logs()
         self.extras.setdefault("observations", {})
 
         # ---------------------------------------------------------
@@ -1036,7 +857,24 @@ class AttenEnv(VecEnv):
         # ---------------------------------------------------------
         actor_obs, critic_obs = self.compute_observations()
 
-        if self.camera is not None:
+        if self.cfg.scene.height_scanner.enable_height_scan:
+            map_obs = self.get_height_scan_map_history()
+
+            flat_map = map_obs.reshape(
+                self.num_envs,
+                -1,
+            )
+
+            self.extras["observations"]["height_scan_map"] = (
+                flat_map
+            )
+
+            actor_obs = torch.cat(
+                [actor_obs, flat_map],
+                dim=-1,
+            )
+
+        elif self.camera is not None:
             depth_obs = self.get_deepcamera_history()
 
             flat_depth = depth_obs.reshape(
@@ -1082,6 +920,18 @@ class AttenEnv(VecEnv):
         reset_buf |= time_out_buf
         return reset_buf, time_out_buf
     
+    def _reset_robot_deterministic(self, env_ids):
+        root_state = self.robot.data.default_root_state[env_ids].clone()
+        root_state[:, :3] += self.scene.env_origins[env_ids]
+        self.robot.write_root_pose_to_sim(root_state[:, :7], env_ids=env_ids)
+        self.robot.write_root_velocity_to_sim(root_state[:, 7:13], env_ids=env_ids)
+
+        joint_pos = self.robot.data.default_joint_pos[env_ids].clone()
+        joint_vel = self.robot.data.default_joint_vel[env_ids].clone()
+        self.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+        self.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
+        self.robot.set_joint_velocity_target(joint_vel, env_ids=env_ids)
+
     def update_terrain_levels(self, env_ids):
         distance = torch.norm(self.robot.data.root_pos_w[env_ids, :2] - self.scene.env_origins[env_ids, :2], dim=1)
         move_up = distance > self.scene.terrain.cfg.terrain_generator.size[0] / 2
@@ -1100,7 +950,14 @@ class AttenEnv(VecEnv):
         if "observations" not in self.extras:
             self.extras["observations"] = {}
 
-        if self.camera is not None:
+        if self.cfg.scene.height_scanner.enable_height_scan:
+            map_obs = self.get_height_scan_map_history()
+            flat_map = map_obs.reshape(self.num_envs, -1)
+            self.extras["observations"]["height_scan_map"] = flat_map
+            actor_obs = torch.cat([actor_obs, flat_map], dim=-1)
+            critic_obs = torch.cat([critic_obs], dim=-1)
+
+        elif self.camera is not None:
             depth_obs = self.get_deepcamera_history()
             flat_depth = depth_obs.reshape(self.num_envs, -1)
             self.extras["observations"]["depth"] = flat_depth
@@ -1189,15 +1046,72 @@ class AttenEnv(VecEnv):
             )
 
         return amp_obs
-    
-    def add_camera_noise(self, depth, env_ids):
-        depth = depth.unsqueeze(-1)
-        self._apply_depth_noise_curriculum_strength()
-        depth = range_based_gaussian_noise(depth, self.gaussian_cfg, env_ids)
-        depth = self.structured_depth_failure_model(depth, self.structured_depth_failure_model.cfg, env_ids)
-        return depth.squeeze(-1)
 
-    def get_processed_deepcamera(self, env_ids=None, return_metric=False, apply_noise=True):
+    def get_front_height_scan_flat(self, height_scan):
+        return height_scan.reshape(
+            -1,
+            self.height_scan_rows,
+            self.height_scan_cols,
+        )[:, :, self.height_scan_front_col_start :].reshape(height_scan.shape[0], -1)
+
+    def get_height_scan_feature_image(self, env_ids=None):
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        elif not torch.is_tensor(env_ids):
+            env_ids = torch.tensor(env_ids, device=self.device, dtype=torch.long)
+        else:
+            env_ids = env_ids.to(device=self.device, dtype=torch.long)
+
+        ray_hits_w = self.height_scanner.data.ray_hits_w[env_ids].clone()
+        valid_hit = torch.isfinite(ray_hits_w).all(dim=-1, keepdim=True)
+        if not valid_hit.all():
+            if hasattr(self.height_scanner, "_ray_starts_w"):
+                fallback_hits_w = self.height_scanner._ray_starts_w[env_ids].clone()
+            else:
+                sensor_pos_w = self.height_scanner.data.pos_w[env_ids].unsqueeze(1)
+                fallback_hits_w = sensor_pos_w.expand_as(ray_hits_w).clone()
+            fallback_hits_w[..., 2] = self.robot.data.root_state_w[env_ids, 2:3] - 5.0
+            ray_hits_w = torch.where(valid_hit, ray_hits_w, fallback_hits_w)
+
+        root_state_w = self.robot.data.root_state_w[env_ids]
+        points_rel_w = ray_hits_w - root_state_w[:, None, :3]
+        root_quat_inv = quat_conjugate(root_state_w[:, 3:7])
+        flat_quat = root_quat_inv[:, None, :].expand(-1, self.height_scan_point_count, -1).reshape(-1, 4)
+        points_b = quat_apply(flat_quat, points_rel_w.reshape(-1, 3)).view(
+            -1,
+            self.height_scan_point_count,
+            3,
+        )
+
+        points_b = points_b.view(
+            -1,
+            self.height_scan_rows,
+            self.height_scan_cols,
+            3,
+        )
+        points_b = points_b[:, :, self.height_scan_front_col_start :, :]
+        return points_b.permute(0, 3, 1, 2).contiguous()
+
+    def get_height_scan_map_history(self):
+        current_feature = self.get_height_scan_feature_image()
+        self.height_scan_map_buffer = torch.roll(self.height_scan_map_buffer, shifts=-1, dims=1)
+        self.height_scan_map_buffer[:, -1] = current_feature
+
+        reset_mask = self.episode_length_buf == 0
+        if reset_mask.any():
+            reset_feature = current_feature[reset_mask]
+            reset_frames = reset_feature.unsqueeze(1).repeat(
+                1,
+                self.height_scan_history_frames,
+                1,
+                1,
+                1,
+            )
+            self.height_scan_map_buffer[reset_mask] = reset_frames
+
+        return self.height_scan_map_buffer
+    
+    def get_processed_deepcamera(self, env_ids=None, return_metric=False):
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
         elif not torch.is_tensor(env_ids):
@@ -1221,17 +1135,6 @@ class AttenEnv(VecEnv):
             min=self.cfg.scene.camera.camera.min_distance,
             max=self.cfg.scene.camera.depth_max,
         )
-
-        if apply_noise and self.use_camera_domain_randomization:
-            depth = (
-                depth * self.camera_depth_scale[env_ids].view(-1, 1, 1)
-                + self.camera_depth_bias[env_ids].view(-1, 1, 1)
-            )
-            depth = torch.clip(depth, min=0.0, max=self.cfg.scene.camera.depth_max)
-
-        if apply_noise and self.use_depth_camera_noise:
-            depth = self.add_camera_noise(depth, env_ids)
-            depth = torch.clip(depth, min=0.0, max=self.cfg.scene.camera.depth_max)
 
         if return_metric:
             return depth
@@ -1273,11 +1176,11 @@ class AttenEnv(VecEnv):
         else:
             env_ids = env_ids.to(device=self.device, dtype=torch.long)
 
-        depth_metric = self.get_processed_deepcamera(env_ids=env_ids, return_metric=True, apply_noise=True)
+        depth_metric = self.get_processed_deepcamera(env_ids=env_ids, return_metric=True)
         if self.depth_input_mode == "depth":
             return (depth_metric / self.cfg.scene.camera.depth_max).unsqueeze(1)
 
-        raw_depth_metric = self.get_processed_deepcamera(env_ids=env_ids, return_metric=True, apply_noise=False)
+        raw_depth_metric = self.get_processed_deepcamera(env_ids=env_ids, return_metric=True)
         return self.depth_to_base_xyz_image(depth_metric, env_ids, raw_depth_metric)
 
     def get_deepcamera_history(self):

@@ -103,7 +103,6 @@ ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
             border_width=1.0,
             holes=False,
         ),
-
         "boxes": terrain_gen.MeshRandomGridTerrainCfg(
             proportion=0.1, grid_width=0.45, grid_height_range=(0.0, 0.15), platform_width=3.0        
         ),
@@ -156,25 +155,28 @@ ROUGH_PERLIN_TERRAINS_CFG=TerrainGeneratorCfg(
     use_cache=False,
     curriculum=True,
     sub_terrains={
-        "pyramid_stairs_28": terrain_gen.MeshPyramidStairsTerrainCfg(                  
-            proportion=0.99,
-            step_height_range=(0.15, 0.15),
-            step_width=0.28,
-            platform_width=3.0,
-            border_width=1.0,
-            holes=False,
-        ),
-
-        # "gap": terrain_gen.MeshGapTerrainCfg(
+        # "pyramid_stairs_28": terrain_gen.MeshPyramidStairsTerrainCfg(                  
         #     proportion=0.99,
-        #     gap_width_range=(0.3, 0.3),
+        #     step_height_range=(0.15, 0.15),
+        #     step_width=0.28,
         #     platform_width=3.0,
+        #     border_width=1.0,
+        #     holes=False,
         # ),
+
+        "gap": terrain_gen.MeshGapTerrainCfg(
+            proportion=0.99,
+            gap_width_range=(0.2, 0.2),
+            platform_width=3.0,
+        ),
         # "up_slope_terrain":terrain_gen.HfPyramidSlopedTerrainCfg(
         #         proportion=0.99,
         #         slope_range=(0.4,0.4),
         #         platform_width=3,
         #         inverted = True
+        # ),
+        # "high_platform": terrain_gen.MeshPitTerrainCfg(
+        #     proportion=0.99, pit_depth_range=(0.3, 0.3), platform_width=3.0, double_pit=True
         # ),
     },
 )

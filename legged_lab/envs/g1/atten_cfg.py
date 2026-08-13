@@ -44,7 +44,7 @@ from legged_lab.envs.base.base_config import (
     left_feet_ray_caster_cfg,
     right_feet_ray_caster_cfg
 )
-from legged_lab.terrains import GRAVEL_TERRAINS_CFG, ROUGH_TERRAINS_CFG,Flat_terrain  # noqa:F401
+from legged_lab.terrains import GRAVEL_TERRAINS_CFG, ROUGH_PERLIN_TERRAINS_CFG, ROUGH_TERRAINS_CFG, Flat_terrain  # noqa:F401
 from legged_lab.assets.g1.g1_29 import G1_29CFG,G1_29DOF_LINKS,G1_23CFG,G1_23DOF_LINKS
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCameraCfg
@@ -62,25 +62,8 @@ class GaitCfg:
     offset: float = 0.5
 
 @configclass
-class DepthNoiseCurriculumCfg:
-    enable: bool = True
-    return_window_size: int = 4096
-    cv_epsilon: float = 1.0e-6
-    ema_beta: float = 0.9
-    gaussian_std_range: tuple[float, float] = (0.0, 0.1)
-    failure_probability_range: tuple[float, float] = (0.0, 0.06)
-
-@configclass
-class TrainingStageCfg:
-    stage: int = 1
-    disable_domain_rand: bool = True
-    disable_proprio_noise: bool = True
-    disable_depth_noise: bool = True
-    disable_camera_randomization: bool = True
-
-@configclass
 class CameraDomainRandCfg:
-    enable: bool = True
+    enable: bool = False
     pos_range: tuple[tuple[float, float], tuple[float, float], tuple[float, float]] = (
         (-0.02, 0.02),
         (-0.02, 0.02),
@@ -94,6 +77,11 @@ class CameraDomainRandCfg:
     fov_scale_range: tuple[float, float] = (0.95, 1.05)
     depth_scale_range: tuple[float, float] = (0.98, 1.02)
     depth_bias_range: tuple[float, float] = (-0.02, 0.02)
+
+@configclass
+class AttenCameraCfg(CameraCfg):
+    depth_input_mode: str = "xyz"
+    normalize_depth_points: bool = True
 
 @configclass
 class Reward:
@@ -163,7 +151,7 @@ class Reward:
     )
     joint_deviation_ankle = RewTerm(
         func=mdp.joint_deviation_l1_always,
-        weight=-0.4,
+        weight=-0.2,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ankle.*"])},
     )
     joint_deviation_arms = RewTerm(
@@ -199,7 +187,7 @@ class Reward:
 
     feet_air_time = RewTerm(
         func=mdp.feet_air_time_positive_biped,
-        weight=0.15,
+        weight=0.25,
         params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=".*ankle_roll.*"), "threshold": 0.4},
     )
 
@@ -219,28 +207,28 @@ class Reward:
     #     },
     # )
 
-    # stair_edge_penalty_L = RewTerm(
-    #     func=mdp.single_foot_contact_area_penalty,
-    #     weight=-0.1,  # 权重可以根据训练效果调整
-    #     params={
-    #         "contact_sensor_cfg": SceneEntityCfg("contact_sensor", body_names="left_ankle_roll_link"),
-    #         "ray_sensor_cfg": SceneEntityCfg("left_feet_ray_caster"), # 在 SceneCfg 中定义的左脚射线
-    #         "threshold": 0.04
-    #     }
-    # )
-    # stair_edge_penalty_R = RewTerm(
-    #     func=mdp.single_foot_contact_area_penalty,
-    #     weight=-0.1, 
-    #     params={
-    #         "contact_sensor_cfg": SceneEntityCfg("contact_sensor", body_names="right_ankle_roll_link"),
-    #         "ray_sensor_cfg": SceneEntityCfg("right_feet_ray_caster"), # 在 SceneCfg 中定义的右脚射线
-    #         "threshold": 0.04
-    #     }
-    # )
+    stair_edge_penalty_L = RewTerm(
+        func=mdp.single_foot_contact_area_penalty,
+        weight=-0.05,
+        params={
+            "contact_sensor_cfg": SceneEntityCfg("contact_sensor", body_names="left_ankle_roll_link"),
+            "ray_sensor_cfg": SceneEntityCfg("left_feet_ray_caster"),
+            "threshold": 0.04,
+        },
+    )
+    stair_edge_penalty_R = RewTerm(
+        func=mdp.single_foot_contact_area_penalty,
+        weight=-0.05,
+        params={
+            "contact_sensor_cfg": SceneEntityCfg("contact_sensor", body_names="right_ankle_roll_link"),
+            "ray_sensor_cfg": SceneEntityCfg("right_feet_ray_caster"),
+            "threshold": 0.04,
+        },
+    )
 
 @configclass
 class AttenCFG:
-    amp_motion_files_display=[f'{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_visualization/new_stand_to_walk.txt']
+    amp_motion_files_display=[f'{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_visualization/stand_to_walk.txt']
     device: str = "cuda:0"
     scene: BaseSceneCfg = BaseSceneCfg(  
         max_episode_length_s=20.0,
@@ -248,19 +236,19 @@ class AttenCFG:
         env_spacing=2.5,
         robot=G1_23CFG,
         terrain_type="generator",
-        terrain_generator=Flat_terrain,
+        terrain_generator=ROUGH_PERLIN_TERRAINS_CFG,
         max_init_terrain_level=5,
         height_scanner=HeightScannerCfg(
             enable_height_scan=True,
-            prim_body_name="torso_link",
+            prim_body_name="pelvis",
             resolution=0.1,
-            size=(1.6, 1.0),
+            size=(2.4, 1.0),
             debug_vis=False,
             drift_range=(0.0, 0.0),
         ),
-        camera=CameraCfg(
-            add_camera_noise=True,
-            add_camera=True,
+        camera=AttenCameraCfg(
+            add_camera_noise=False,
+            add_camera=False,
             camera = GroupedRayCasterCameraCfg(
                 prim_path="/World/envs/env_.*/Robot/torso_link", 
                 pattern_cfg=PinholeCameraPatternCfg(
@@ -286,19 +274,19 @@ class AttenCFG:
             depth_max = 2.5,
             depth_update_interval=5,
             depth_crop=(18,0,16,16),
-            depth_history_frames=2,
+            depth_history_frames=1,
             depth_input_mode="xyz",
             normalize_depth_points=True,
         ),
         left_feet_ray_caster=left_feet_ray_caster_cfg(
-            add_left_feet_ray_caster=False,
+            add_left_feet_ray_caster=True,
             left_feet_ray_caster = RayCasterCfg(
                     prim_path="{ENV_REGEX_NS}/Robot/left_ankle_roll_link",
                     mesh_prim_paths=["/World/ground"],
                     offset=RayCasterCfg.OffsetCfg(pos=(0.035, 0.0, -0.025)),
                     pattern_cfg=GridPatternCfg(
                         resolution=0.02,  # 每0.02米一个射线
-                        size=[0.12, 0.035] # 使用内接矩形避免边缘空气噪点
+                        size=[0.16, 0.06] # 使用内接矩形避免边缘空气噪点
                     ),
                     ray_alignment="base",
                     update_period=0.02,
@@ -306,14 +294,14 @@ class AttenCFG:
             ),
         ),
         right_feet_ray_caster=right_feet_ray_caster_cfg(
-            add_right_feet_ray_caster=False,
+            add_right_feet_ray_caster=True,
             right_feet_ray_caster = RayCasterCfg(
                     prim_path="{ENV_REGEX_NS}/Robot/right_ankle_roll_link",
                     mesh_prim_paths=["/World/ground"],
                     offset=RayCasterCfg.OffsetCfg(pos=(0.035, 0.0, -0.025)),
                     pattern_cfg=GridPatternCfg(
                         resolution=0.02,  # 每0.02米一个射线
-                        size=[0.12, 0.035] # 使用内接矩形避免边缘空气噪点
+                        size=[0.16, 0.06] # 使用内接矩形避免边缘空气噪点
                     ),
                     ray_alignment="base",
                     update_period=0.02,
@@ -326,16 +314,12 @@ class AttenCFG:
 
     gait=GaitCfg()
 
-    training_stage: TrainingStageCfg = TrainingStageCfg()
-
     camera_domain_rand: CameraDomainRandCfg = CameraDomainRandCfg()
 
-    depth_noise_curriculum: DepthNoiseCurriculumCfg = DepthNoiseCurriculumCfg()
-
     robot: RobotCfg = RobotCfg(
-        actor_obs_history_length=10,
-        critic_obs_history_length=10,
-        depth_history_frames=2,
+        actor_obs_history_length=1,
+        critic_obs_history_length=1,
+        depth_history_frames=1,
         depth_max=2.5,
         depth_update_interval=5,
         depth_crop=(18,0,16,16), # up=18, down=0, left=16, right=16
@@ -366,20 +350,20 @@ class AttenCFG:
         rel_heading_envs=1.0,
         heading_command=True,
         heading_control_stiffness=0.5,
-        debug_vis=True,
+        debug_vis=False,
         ranges=CommandRangesCfg(
-            lin_vel_x=(-0.6, 1.0), lin_vel_y=(-0.5,0.5), ang_vel_z=(-1.57, 1.57), heading=(-math.pi, math.pi)
+            lin_vel_x=(-0.6, 1.0), lin_vel_y=(-0.5, 0.5), ang_vel_z=(-1.57, 1.57), heading=(-math.pi, math.pi)
         ),
     )
 
     noise: NoiseCfg = NoiseCfg(
-        add_noise=True,
+        add_noise=False,
         noise_scales=NoiseScalesCfg(
-            ang_vel=0.2,
-            projected_gravity=0.05,
-            joint_pos=0.01,
-            joint_vel=1.5,
-            height_scan=0.1,
+            ang_vel=0.0,
+            projected_gravity=0.0,
+            joint_pos=0.0,
+            joint_vel=0.0,
+            height_scan=0.0,
         ),
     )
 
@@ -434,9 +418,9 @@ class AttenCFG:
                 mode="interval",
                 interval_range_s=(10.0, 15.0),
                 params={"velocity_range": {"x": (-1.0, 1.0), "y": (-1.0, 1.0)}},
-            )  
+            )
     ),
-        action_delay=ActionDelayCfg(enable=True, params={"max_delay": 5, "min_delay": 0}),
+        action_delay=ActionDelayCfg(enable=False, params={"max_delay": 5, "min_delay": 0}),
     )
     sim: SimCfg = SimCfg(dt=0.005, decimation=4, physx=PhysxCfg(  
                                                                 use_gpu=True,            # 开启 GPU 物理
@@ -477,11 +461,11 @@ class CustomRslRlPpoActorCriticCfg(RslRlPpoActorCriticCfg):
     use_terrain_recon:bool=False
     terrain_activation:str = "elu"
     terrain_hidden_dim:list=[256,128]
-    terrain_scan_dim:int=187
+    terrain_scan_dim:int=143
     terrain_recon_front_only:bool=True
-    terrain_recon_grid_cols:int=17
+    terrain_recon_grid_cols:int=13
     terrain_recon_grid_rows:int=11
-    terrain_recon_x_min:float=0.0
+    terrain_recon_x_min:float=-0.6
     use_vel_estimation:bool=True
     vel_activation:str = "elu"
     vel_hidden_dim:list=[32]
@@ -499,13 +483,13 @@ class CustomAmpPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
     terrain_recon_coef: float = 0.5
     terrain_recon_warmup_iters:int=500
     terrain_recon_target_clip: float = 1.0
-    terrain_scan_dim: int = 187
+    terrain_scan_dim: int = 143
     terrain_recon_front_only: bool = True
-    terrain_recon_grid_cols: int = 17
+    terrain_recon_grid_cols: int = 13
     terrain_recon_grid_rows: int = 11
-    terrain_recon_x_min: float = 0.0
+    terrain_recon_x_min: float = -0.6
     single_critic_dim: int = 83
-    critic_history_len: int = 10
+    critic_history_len: int = 1
     vel_in_critic_offset: int = 78
     vel_dim: int = 3
 
@@ -523,18 +507,18 @@ class AttenAGENTENV:
         actor_hidden_dims=[512, 256, 128],
         critic_hidden_dims=[512, 256, 128],
         activation="elu",
-        single_proprio_dim=78,
+        single_proprio_dim=83,
         his_encoder_dims=[256, 128],
         his_latent_dim=64,
-        use_vel_estimation=True,
+        use_vel_estimation=False,
         use_terrain_recon=True,
         terrain_activation="elu",
         terrain_hidden_dim=[256, 128],
-        terrain_scan_dim=187,
-        terrain_recon_front_only=True,
-        terrain_recon_grid_cols=17,
+        terrain_scan_dim=143,
+        terrain_recon_front_only=False,
+        terrain_recon_grid_cols=13,
         terrain_recon_grid_rows=11,
-        terrain_recon_x_min=0.0,
+        terrain_recon_x_min=-0.6,
         vel_activation="elu",
         vel_hidden_dim=[32],
         vel_dim=3,
@@ -544,8 +528,8 @@ class AttenAGENTENV:
         mha_kernel_size=5,
         point_feature_dim=3,
         CnnMlp=CnnMlpCfg(
-                input_dim = (18,32),
-                input_channels = 6,
+                input_dim = (11,13),
+                input_channels = 3,
                 output_channels = [16],
                 kernel_size = [5],
                 stride = [1],
@@ -578,15 +562,15 @@ class AttenAGENTENV:
         normalize_advantage_per_mini_batch=False,
         symmetry_cfg=None,  # RslRlSymmetryCfg()
         rnd_cfg=None,  # RslRlRndCfg()
-        vel_estimation_coef=1.0,
+        vel_estimation_coef=0,
         terrain_recon_coef=0.5,
-        terrain_scan_dim=187,
-        terrain_recon_front_only=True,
-        terrain_recon_grid_cols=17,
+        terrain_scan_dim=143,
+        terrain_recon_front_only=False,
+        terrain_recon_grid_cols=13,
         terrain_recon_grid_rows=11,
-        terrain_recon_x_min=0.0,
+        terrain_recon_x_min=-0.6,
         single_critic_dim=83,
-        critic_history_len=10,
+        critic_history_len=1,
         vel_in_critic_offset=78,
         terrain_recon_target_clip=1.0,
         terrain_recon_warmup_iters=500,
@@ -607,7 +591,7 @@ class AttenAGENTENV:
     load_checkpoint = "model_.*.pt"
 
     # amp parameter
-    amp_reward_coef = 0.4  # 风格奖励系数 动作像专家数据。
+    amp_reward_coef = 0.3  # 风格奖励系数 动作像专家数据。
     amp_motion_files = [    f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/stand_to_walk.txt",
 
@@ -619,10 +603,10 @@ class AttenAGENTENV:
 
         f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/walk_turn_right.txt",]
-    amp_num_preload_transitions = 200000 
+    amp_num_preload_transitions = 200000
     '''
-    Taskfinal​=Taskraw​×[0.7+(1−0.7)×D] 判别器输入的就是0或1 如果任务奖励100分 完成的很好 但是不像专家数据 判别器打0分 则作中的任务奖励只有70分 
+    Taskfinal​=Taskraw​×[0.7+(1−0.7)×D] 判别器输入的就是0或1 如果任务奖励100分 完成的很好 但是不像专家数据 判别器打0分 则作中的任务奖励只有70分
     '''
-    amp_task_reward_lerp = 0.6  # 这是一个惩罚机制。它把“任务奖励”和“动作质量”挂钩了 
+    amp_task_reward_lerp = 0.7  # 这是一个惩罚机制。它把“任务奖励”和“动作质量”挂钩了
     amp_discr_hidden_dims = [1024, 512, 256]
     min_normalized_std = [0.05] * 23

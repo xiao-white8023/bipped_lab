@@ -450,8 +450,8 @@ class G1MOEFILMEnv(VecEnv):
                 joint_pos * self.obs_scales.joint_pos,  # 29
                 joint_vel * self.obs_scales.joint_vel,  # 29
                 action * self.obs_scales.actions,  # 29
-                torch.sin(2 * torch.pi * self.leg_phase),
-                torch.cos(2 * torch.pi * self.leg_phase)
+                # torch.sin(2 * torch.pi * self.leg_phase),
+                # torch.cos(2 * torch.pi * self.leg_phase)
             ],
             dim=-1,
         )

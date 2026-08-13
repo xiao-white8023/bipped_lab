@@ -778,6 +778,8 @@ def dont_wait(
     )
     lin_vel_x = vel_yaw[:, 0]
     return (lin_vel_cmd_x > 0.3) * ((lin_vel_x < 0.15).float() + (lin_vel_x < 0).float() + (lin_vel_x < -0.15).float())
+
+
 def feet_orientation_contact(
     env: BaseEnv | G1ROUGHEnv |G1Env, 
     sensor_cfg: SceneEntityCfg, 

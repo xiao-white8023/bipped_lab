@@ -67,8 +67,6 @@ class Reward:
     track_lin_vel_xy_exp = RewTerm(func=mdp.track_lin_vel_xy_yaw_frame_exp, weight=3.0, params={"std": 0.5})
     track_ang_vel_z_exp = RewTerm(func=mdp.track_ang_vel_z_world_exp, weight=2.0, params={"std": 0.5})
 
-    # lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-1.0)
-    
     ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
 
     energy = RewTerm(func=mdp.energy, weight=-1e-3)
@@ -115,13 +113,6 @@ class Reward:
             "max_reward": 400,
         },
     )
-
-    # feet_too_near = RewTerm(
-    #     func=mdp.feet_too_near_humanoid,
-    #     weight=-2.0,
-    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=[".*ankle_roll.*"]), "threshold": 0.2},
-    # ) 
-
     # feet_stumble = RewTerm(
     #     func=mdp.feet_stumble,
     #     weight=-2.0,
@@ -153,17 +144,17 @@ class Reward:
     )
     joint_deviation_waist=RewTerm(
         func=mdp.joint_deviation_l1_always,
-        weight=-0.1,
+        weight=-0.2,
         params={
             "asset_cfg": SceneEntityCfg(
                 "robot", 
-                joint_names=[".*waist.*"]
+                joint_names=["waist_yaw_joint"]
             )
         },
     )
     joint_deviation_legs = RewTerm(
         func=mdp.joint_deviation_l1_always,
-        weight=-0.03,
+        weight=-0.02,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_pitch.*", ".*_knee.*"])},
     )
 
@@ -173,7 +164,7 @@ class Reward:
 
     feet_air_time = RewTerm(
         func=mdp.feet_air_time_positive_biped,
-        weight=0.15,
+        weight=0.2,
         params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=".*ankle_roll.*"), "threshold": 0.4},
     )
 
@@ -214,7 +205,7 @@ class Reward:
 
 @configclass
 class G129WALK_ROUGHENVCFG:
-    amp_motion_files_display=[f'{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_visualization/new_stand_to_walk.txt']
+    amp_motion_files_display=[f'{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_visualization/stand_to_walk.txt']
     device: str = "cuda:0"
     scene: BaseSceneCfg = BaseSceneCfg(  
         max_episode_length_s=20.0,
@@ -503,7 +494,7 @@ class G129WALK_ROUGHAGENTENV:
     load_checkpoint = "model_.*.pt"
 
     # amp parameter
-    amp_reward_coef = 0.4  # 风格奖励系数 动作像专家数据。值越大 机器人越重视模仿专家数据 从而忘记走路
+    amp_reward_coef = 0.3  # 风格奖励系数 动作像专家数据。
     amp_motion_files = [    f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/stand_to_walk.txt",
 
@@ -519,6 +510,6 @@ class G129WALK_ROUGHAGENTENV:
     '''
     Taskfinal​=Taskraw​×[0.7+(1−0.7)×D] 判别器输入的就是0或1 如果任务奖励100分 完成的很好 但是不像专家数据 判别器打0分 则作中的任务奖励只有70分 
     '''
-    amp_task_reward_lerp = 0.6  # 这是一个惩罚机制。它把“任务奖励”和“动作质量”挂钩了 
+    amp_task_reward_lerp = 0.7  # 这是一个惩罚机制。它把“任务奖励”和“动作质量”挂钩了 
     amp_discr_hidden_dims = [1024, 512, 256]
     min_normalized_std = [0.05] * 23

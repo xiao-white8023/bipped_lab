@@ -75,6 +75,10 @@ class MoePPO:
         single_critic_dim: int = 107,
         critic_history_len: int = 10,
         vel_in_critic_offset: int = 104,
+        feet_height_coef: float = 0.0,
+        feet_height_warmup_iters: int = 0,
+        feet_height_dim: int = 2,
+        feet_height_in_critic_offset: int = 0,
         use_moe_balance_loss: bool = False,
         moe_balance_coef: float = 0.0,
         use_moe_gate_entropy_loss: bool = False,
@@ -164,7 +168,15 @@ class MoePPO:
         self.critic_history_len = critic_history_len
         self.vel_in_critic_offset = vel_in_critic_offset
         self.vel_obs_start_idx = (self.critic_history_len - 1) * self.single_critic_dim + self.vel_in_critic_offset
+        self.feet_height_coef = feet_height_coef
+        self.feet_height_warmup_iters = feet_height_warmup_iters
+        self.feet_height_dim = feet_height_dim
+        self.feet_height_in_critic_offset = feet_height_in_critic_offset
+        self.feet_height_obs_start_idx = (
+            (self.critic_history_len - 1) * self.single_critic_dim + self.feet_height_in_critic_offset
+        )
         print(f"[MoeAmpPpO] Computed vel_obs_start_idx = {self.vel_obs_start_idx}")
+        print(f"[MoeAmpPpO] Computed feet_height_obs_start_idx = {self.feet_height_obs_start_idx}")
         self.use_moe_balance_loss = use_moe_balance_loss
         self.moe_balance_coef = moe_balance_coef
         self.use_moe_gate_entropy_loss = use_moe_gate_entropy_loss
@@ -193,6 +205,9 @@ class MoePPO:
             print(f"[MoeAMPPPO] Terrain reconstruction AUX TASK enabled:")
             print(f"  - coef: {terrain_recon_coef}, warmup: {terrain_recon_warmup_iters} iters")
             print(f"  - front_only: {terrain_recon_front_only}, predict {self.terrain_recon_target_dim} points")
+        if feet_height_coef > 0:
+            print(f"[MoeAMPPPO] Feet height AUX TASK enabled:")
+            print(f"  - coef: {feet_height_coef}, warmup: {feet_height_warmup_iters} iters")
         print(
             "[MoePPO] MoE load-balance loss: "
             f"enabled={self.use_moe_balance_loss}, coef={self.moe_balance_coef}"
@@ -256,7 +271,39 @@ class MoePPO:
             # Record the curiosity gates
             self.transition.rnd_state = rnd_state.clone()
 
-        # Bootstrapping on time outs
+        # Bootstrapping on time outs  如果 episode 只是因为时间限制结束，不应该把该环境的未来价值直接砍成 0。而要补一个 value estimate：r_t​⟶r_t​+γV(⋅)
+        # Values的形状是[4096,1]
+        '''
+        假设有4个并行环境：
+        env0   env1   env2   env3
+          0      1      0      1
+        env0：没 timeout
+        env1：因为时间限制结束
+        env2：没 timeout
+        env3：因为时间限制结束
+        infos["time_outs"].unsqueeze(1)： 把[4]变成[4,1]
+        values * time_outs 相当于 mask:
+        values:
+            [[ 5],
+            [ 8],
+            [ 3],
+            [10]]
+
+            timeouts:
+            [[0],
+            [1],
+            [0],
+            [1]]
+        values * timeouts
+
+        [[ 0],
+        [ 8],
+        [ 0],
+        [10]]
+
+        torch.squeeze(..., 1):变成[0, 8, 0, 10] 方便与reward相加。这样就做到了只有 timeout 的环境 reward 被补偿
+
+        '''
         if "time_outs" in infos:
             self.transition.rewards += self.gamma * torch.squeeze(
                 self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
@@ -266,7 +313,20 @@ class MoePPO:
         self.storage.add_transitions(self.transition)
         self.transition.clear()
         self.policy.reset(dones)
+    '''
+    last_values = self.policy.evaluate(obs).detach() 算最后一个状态的 value
 
+    假设这次 rollout 一共收集 24 步：
+                                t = 0
+                                t = 1
+                                ...
+                                t = 23
+    在 storage 里已经保存了：V(s0​),V(s1​),...,V(s23​)
+    但是为了算最后一步的 TD error：siga_23=r_23+gamma*V(S_24)-V(S_23)
+    还缺：V(S_24)
+    所以 rollout 结束后，当前的 obs 已经是S_24
+    于是self.policy.evaluate(obs) 再计算一次V(S_24)
+    '''
     def compute_returns(self, last_critic_obs):
         self._set_policy_moe_iteration()
         # compute value for the last step
@@ -302,7 +362,10 @@ class MoePPO:
 
         # ========== Auxiliary losses ==========
         mean_vel_loss = 0
+        mean_op_vel_loss = 0
+        mean_vp_vel_loss = 0
         mean_terrain_recon_loss = 0
+        mean_feet_height_loss = 0
         mean_moe_balance_loss = 0
         mean_moe_gate_entropy = 0
         mean_moe_gate_entropy_loss = 0
@@ -315,6 +378,9 @@ class MoePPO:
         )
         terrain_weight = self._get_warmup_weight(
             self.current_iteration, self.terrain_recon_warmup_iters, self.terrain_recon_coef
+        )
+        feet_height_weight = self._get_warmup_weight(
+            self.current_iteration, self.feet_height_warmup_iters, self.feet_height_coef
         )
 
 
@@ -469,12 +535,25 @@ class MoePPO:
             # ========== Auxiliary Losses ==========
             # 1. Velocity estimation loss
             vel_loss = torch.tensor(0.0, device=self.device)
+            op_vel_loss = torch.tensor(0.0, device=self.device)
+            vp_vel_loss = torch.tensor(0.0, device=self.device)
             if vel_weight > 0 and hasattr(self.policy, 'use_vel_estimation') and self.policy.use_vel_estimation:
                 vel_estimate = self.policy.predict_velocity()
                 if vel_estimate is not None and self.vel_obs_start_idx is not None:
                     # Extract velocity ground truth from critic_obs_batch
                     vel_target = critic_obs_batch[:, self.vel_obs_start_idx:self.vel_obs_start_idx + self.vel_dim].detach()
-                    vel_loss = nn.functional.mse_loss(vel_estimate, vel_target)
+                    if isinstance(vel_estimate, dict):
+                        vel_losses = []
+                        if "op" in vel_estimate:
+                            op_vel_loss = nn.functional.mse_loss(vel_estimate["op"], vel_target)
+                            vel_losses.append(op_vel_loss)
+                        if "vp" in vel_estimate:
+                            vp_vel_loss = nn.functional.mse_loss(vel_estimate["vp"], vel_target)
+                            vel_losses.append(vp_vel_loss)
+                        if vel_losses:
+                            vel_loss = torch.stack(vel_losses).mean()
+                    else:
+                        vel_loss = nn.functional.mse_loss(vel_estimate, vel_target)
 
             # 2. Terrain reconstruction loss
             terrain_recon_loss = torch.tensor(0.0, device=self.device)
@@ -500,8 +579,24 @@ class MoePPO:
                     terrain_target_norm = (terrain_target - target_mean) / target_std
                     terrain_recon_loss = nn.functional.mse_loss(terrain_pred, terrain_target_norm)
 
+            # 3. Feet height prediction loss
+            feet_height_loss = torch.tensor(0.0, device=self.device)
+            if (
+                feet_height_weight > 0
+                and hasattr(self.policy, "use_feet_height_prediction")
+                and self.policy.use_feet_height_prediction
+            ):
+                feet_height_pred = self.policy.predict_feet_height()
+                if feet_height_pred is not None:
+                    feet_height_target = critic_obs_batch[
+                        :,
+                        self.feet_height_obs_start_idx : self.feet_height_obs_start_idx + self.feet_height_dim,
+                    ].detach()
+                    feet_height_loss = nn.functional.mse_loss(feet_height_pred, feet_height_target)
+
             # Add auxiliary losses to total loss
             loss += vel_weight * vel_loss + terrain_weight * terrain_recon_loss
+            loss += feet_height_weight * feet_height_loss
             if self.use_moe_balance_loss and self.moe_balance_coef > 0:
                 loss += self.moe_balance_coef * moe_balance_loss
             if self.use_moe_gate_entropy_loss and self.moe_gate_entropy_coef != 0:
@@ -580,7 +675,10 @@ class MoePPO:
 
             # -- Auxiliary losses
             mean_vel_loss += vel_loss.item()
+            mean_op_vel_loss += op_vel_loss.item()
+            mean_vp_vel_loss += vp_vel_loss.item()
             mean_terrain_recon_loss += terrain_recon_loss.item()
+            mean_feet_height_loss += feet_height_loss.item()
             mean_moe_balance_loss += moe_balance_loss.item()
             mean_moe_gate_entropy += moe_gate_entropy.item()
             mean_moe_gate_entropy_loss += moe_gate_entropy_loss.item()
@@ -621,7 +719,10 @@ class MoePPO:
 
         # -- For Auxiliary tasks
         mean_vel_loss /= num_updates
+        mean_op_vel_loss /= num_updates
+        mean_vp_vel_loss /= num_updates
         mean_terrain_recon_loss /= num_updates
+        mean_feet_height_loss /= num_updates
         mean_moe_balance_loss /= num_updates
         mean_moe_gate_entropy /= num_updates
         mean_moe_gate_entropy_loss /= num_updates
@@ -656,9 +757,14 @@ class MoePPO:
         if self.vel_estimation_coef > 0:
             loss_dict["vel_estimation"] = mean_vel_loss
             loss_dict["vel_estimation_coef_current"] = vel_weight
+            loss_dict["vel_estimation/op"] = mean_op_vel_loss
+            loss_dict["vel_estimation/vp"] = mean_vp_vel_loss
         if self.terrain_recon_coef > 0:
             loss_dict["terrain_recon"] = mean_terrain_recon_loss
             loss_dict["terrain_recon_coef_current"] = terrain_weight
+        if self.feet_height_coef > 0:
+            loss_dict["feet_height"] = mean_feet_height_loss
+            loss_dict["feet_height_coef_current"] = feet_height_weight
         loss_dict["moe_gate_entropy"] = mean_moe_gate_entropy
         loss_dict["moe/action_disagreement"] = mean_moe_action_disagreement
         if mean_moe_expert_usage is not None:

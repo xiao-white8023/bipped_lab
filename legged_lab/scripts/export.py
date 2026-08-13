@@ -26,6 +26,16 @@ class FullPolicyExporter(nn.Module):
         pass
 
 
+def _get_policy_obs_dim(policy):
+    if hasattr(policy, "num_actor_obs"):
+        return int(policy.num_actor_obs)
+    return int(
+        getattr(policy, "proprio_actor_dim", 0)
+        + getattr(policy, "depth_flat_dim", 0)
+        + getattr(policy, "estimator_mask_dim", 0)
+    )
+
+
 class G1StudentDeploymentExporter(nn.Module):
     """
     g1_student 部署包装器。
@@ -104,7 +114,7 @@ def export_policy_as_jit(policy, normalizer, path, filename="policy.pt"):
     exporter.to("cpu")
     exporter.eval()
 
-    obs_dim = policy.proprio_actor_dim + policy.depth_flat_dim
+    obs_dim = _get_policy_obs_dim(policy)
     dummy_input = torch.zeros(1, obs_dim)
 
     traced_model = torch.jit.trace(
@@ -157,9 +167,8 @@ def export_policy_as_onnx(policy, normalizer, path, filename="policy.onnx"):
     exporter.to("cpu")
     exporter.eval()
 
-    # 动态计算输入总维度: 1020 (本体) + 4608 (视觉)
-    # 注意：这里使用的属性名必须和你 ActorCritic 类中定义的一致
-    obs_dim = policy.proprio_actor_dim + policy.depth_flat_dim
+    # 动态计算输入总维度，RENet 还包含最后 1 维 estimator_mask。
+    obs_dim = _get_policy_obs_dim(policy)
     dummy_input = torch.zeros(1, obs_dim)
 
     torch.onnx.export(

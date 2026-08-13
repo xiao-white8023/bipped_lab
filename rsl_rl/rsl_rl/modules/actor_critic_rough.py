@@ -427,6 +427,20 @@ class ActorCritic(nn.Module):
         self.update_distribution(observations)
         return self.distribution.sample()
 
+
+    '''
+    给定刚才采样后的整组动作 actions，计算当前 Actor 的概率分布对这组动作的“认可程度”，并表示成联合对数概率密度。
+    关于self.distribution:在 G1 这种连续动作控制里，Actor 并不是直接给每一个关节输出一个确定的动作。而通常先输出一个高斯分布的参数：均值和标准差.
+            针对三个关节：
+                a_1∼N(0.2,0.4)
+                a_2∼N(−0.5,0.3)
+                a_3∼N(1.0,0.5)
+            然后每一个关节冲的动作从这里边采样
+    关于log_prob(actions)：
+            现在已经采样到了[0.3 -0.4 1.4] 我们反过来问当前的高斯分布：“你觉得 [0.3, -0.4, 1.4] 这组动作有多符合你？”
+        那又为什么要反问呢：
+            和优势函数有关
+    '''
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
 

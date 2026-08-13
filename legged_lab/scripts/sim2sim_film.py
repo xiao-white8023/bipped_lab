@@ -84,7 +84,7 @@ class G1FlatSim2SimCfg:
     class sim:
         sim_duration = 100.0
         num_actions = 29
-        num_obs_per_step = 100 # 96
+        num_obs_per_step = 96 #100
         actor_obs_history_length = 10
         dt = 0.005
         decimation = 4
@@ -95,14 +95,10 @@ class G1FlatSim2SimCfg:
     class robot:
         # G1 初始高度
         init_height = 0.793
-        gait_air_ratio_l: float = 0.38
-        gait_air_ratio_r: float = 0.38
-        gait_phase_offset_l: float = 0.38
-        gait_phase_offset_r: float = 0.88
-        gait_cycle: float = 0.85
-
+        gait_period = 0.8  # 对应 cfg.gait.period
+        gait_offset = 0.5  # 对应 cfg.gait.offset
         depth_update_interval = 5
-        depth_history_frames = 8
+        depth_history_frames = 4
         camera_height = 36
         camera_width = 64
 
@@ -183,9 +179,9 @@ class G1FlatMujocoRunner:
         self.dof_vel = np.zeros(self.num_actions)
         
         self.gait_phase = np.zeros(2)
-        self.gait_cycle = self.cfg.robot.gait_cycle
-        self.phase_ratio = np.array([self.cfg.robot.gait_air_ratio_l, self.cfg.robot.gait_air_ratio_r])
-        self.phase_offset = np.array([self.cfg.robot.gait_phase_offset_l, self.cfg.robot.gait_phase_offset_r])
+        self.gait_period = self.cfg.robot.gait_period  # 0.8s
+        self.gait_offset = self.cfg.robot.gait_offset  # 0.5
+
 
         # 动作 (Isaac Lab 顺序)
         self.action = np.zeros(self.num_actions, dtype=np.float32)
@@ -202,16 +198,16 @@ class G1FlatMujocoRunner:
         # PD 增益 (MuJoCo 顺序) - 与 G1_CFG 训练配置一致
         # MuJoCo 顺序: hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll, ...
         self.kps = np.array([
-            200, 150, 150, 200, 20, 20,    # 左腿: 200, 150, 150, 200, 20, 20,
-            200, 150, 150, 200, 20, 20,    # 右腿200, 150, 150, 200, 20, 20, 
+            200, 150, 150, 200, 20, 20,    # 左腿: hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll
+            200, 150, 150, 200, 20, 20,    # 右腿
             200, 200, 200,                  # 腰部: waist_yaw, waist_roll, waist_pitch
-            100, 100, 50, 50, 15, 15,15,  # 左臂: shoulder_pitch, shoulder_roll, shoulder_yaw, elbow, wrist_*
-            100, 100, 50, 50, 15, 15, 15   # 右臂
+            100, 100, 50, 50, 40, 40,40,  # 左臂: shoulder_pitch, shoulder_roll, shoulder_yaw, elbow, wrist_*
+            100, 100, 50, 50, 40, 40, 40   # 右臂
         ], dtype=np.float32)
         
         self.kds = np.array([
-            5, 5, 5, 5, 2, 2,              # 左腿 5, 5, 5, 5, 2, 2,
-            5, 5, 5, 5, 2, 2,              # 右腿 # 5, 5, 5, 5, 2, 2, 
+            5, 5, 5, 5, 2, 2,              # 左腿
+            5, 5, 5, 5, 2, 2,              # 右腿
             5, 5, 5,                        # 腰部
             2, 2, 2, 2, 2, 2, 2,           # 左臂
             2, 2, 2, 2, 2, 2, 2            # 右臂
@@ -360,7 +356,7 @@ class G1FlatMujocoRunner:
         depth_blurred = self.blur_transform(depth_cropped).squeeze(0)
         
         # 6. 截断与归一化
-        depth_clipped = torch.clip(depth_blurred, min=0.1, max=2.5)
+        depth_clipped = torch.clip(depth_blurred, min=0, max=2.5)
         depth_normalized = depth_clipped / 2.5
         
         print(f"[VISION DEBUG] Depth Min: {depth_normalized.min().item():.3f}, Max: {depth_normalized.max().item():.3f}, Mean: {depth_normalized.mean().item():.3f}")
@@ -386,6 +382,11 @@ class G1FlatMujocoRunner:
         """
         H, W = depth_tensor.shape
         device = depth_tensor.device
+
+        full_occlusion_prob = 1  # 单次触发全遮挡的概率，可自行调整
+        if torch.rand(1, device=device).item() < full_occlusion_prob:
+            # 全遮挡：所有像素设为无效深度0，和你代码里“过曝失效”的表示方式一致
+            return torch.full_like(depth_tensor, 0.0)
 
         # 1. 距离依赖的高斯噪声 (立体深度误差 ∝ z²/fb)
         noise_std = 0.005 * (depth_tensor ** 2)
@@ -430,25 +431,11 @@ class G1FlatMujocoRunner:
             size=(H, W), mode='bilinear', align_corners=False
         ).squeeze()  # (H, W)，强对比光照分布
 
-        # 5a. 暗区噪声暴增 — 光照 < 0.4 的阴影区，SNR 崩溃
-        dark_mask = light_lowres < 0.4
-        dark_boost = torch.randn(H, W, device=device) * 0.8 + 0.5
-        depth_tensor[dark_mask] = (
-            depth_tensor[dark_mask] + dark_boost[dark_mask]
-        ).clamp(min=0.0)
-
-        # 5b. 暗区大面积像素丢失 — 阴影中匹配几乎完全失效
-        dark_dropout = torch.rand(H, W, device=device) < 0.35
-        dark_dropout = dark_dropout & dark_mask
-        depth_tensor[dark_dropout] = torch.rand(
-            (dark_dropout.sum().item(),), device=device
-        ) * 2.5
-
-        # 5c. 过曝区域 — 强光直射导致传感器饱和，深度直接清零
+        # # 5c. 过曝区域 — 强光直射导致传感器饱和，深度直接清零
         bright_mask = light_lowres > 0.6
         depth_tensor[bright_mask] = 0.0
 
-        # 5d. 光照过渡带散斑噪声 — 半影区强烈激光散斑
+        # # 5d. 光照过渡带散斑噪声 — 半影区强烈激光散斑
         penumbra_mask = (light_lowres >= 0.2) & (light_lowres <= 0.5)
         speckle = torch.randn(H, W, device=device) * 0.3
         depth_tensor[penumbra_mask] += speckle[penumbra_mask]
@@ -486,9 +473,8 @@ class G1FlatMujocoRunner:
             joint_pos_isaac,                  # 29: 关节位置偏差
             joint_vel_isaac,                  # 29: 关节速度
             np.clip(self.action, -self.cfg.sim.clip_actions, self.cfg.sim.clip_actions),  # 29: 上一步动作
-            # np.sin(2 * np.pi * self.gait_phase),  # 2
-            # np.cos(2 * np.pi * self.gait_phase),  # 2
-            # self.phase_ratio,  # 2
+            # np.sin(2 * np.pi * self.gait_phase),                       # 2
+            # np.cos(2 * np.pi * self.gait_phase),                       # 2
         ], axis=0).astype(np.float32)
         
         # 更新观测历史 (滚动更新)
@@ -499,11 +485,18 @@ class G1FlatMujocoRunner:
 
     def calculate_gait_para(self) -> None:
         """
-        Update gait phase parameters based on simulation time and offset.
+        Update gait phase parameters (与 Isaac Lab _calculate_gait_para 完全一致)
         """
-        t = self.episode_length_buf * self.dt / self.gait_cycle
-        self.gait_phase[0] = (t + self.phase_offset[0]) % 1.0
-        self.gait_phase[1] = (t + self.phase_offset[1]) % 1.0
+        t = self.episode_length_buf * self.dt
+        period = self.gait_period
+        offset = self.gait_offset
+        
+        # 1. 计算全局相位
+        phase = (t % period) / period
+        
+        # 2. 分配给左右腿
+        self.gait_phase[0] = phase  # 左腿直接用全局相位
+        self.gait_phase[1] = (phase + offset) % 1.0  # 右腿加偏移
 
     def position_control(self) -> np.ndarray:
         """

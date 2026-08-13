@@ -9,7 +9,7 @@ lowcmd_topic: "rt/lowcmd"
 lowstate_topic: "rt/lowstate"
 
 # 策略路径 (导出的 TorchScript JIT 模型)
-policy_path: "/home/cjh/TienKung-Lab/logs/g1_noamp/2026-07-21_21-01-51/exported/policy.pt"
+policy_path: "/home/cjh/TienKung-Lab/logs/g1_noamp/2026-07-21_24-01-51/exported/policy.pt"
 
 # 使用 10 帧观测历史 (与训练一致)
 obs_history_length: 10
@@ -35,15 +35,15 @@ command_scale: [1.0, 1.0, 1.0]
 # 观测维度 (带步态相位版本)
 # ang_vel(3) + gravity(3) + command(3) + joint_pos(29) + joint_vel(29) + action(29) + gait_phase(4) = 100
 num_actions: 29
-num_obs: 100  # 单帧本体观测的维度  # 100
-num_policy_obs: 3304 # 10帧的本体观测历史+4帧的展平后的深度图 # 3304
+num_obs: 96  # 单帧本体观测的维度  # 100
+num_policy_obs: 3264 # 10帧的本体观测历史+4帧的展平后的深度图 # 3304
 
 # DWAQ encoder 输出维度: velocity(3) + latent(16) = 19
 # cenet_out_dim: 19
 
 # 步态相位配置
 gait_phase:
-  enable: true
+  enable: false
   period: 0.8    # 步态周期 0.8s
   offset: 0.5    # 左右腿相位差 50%
 

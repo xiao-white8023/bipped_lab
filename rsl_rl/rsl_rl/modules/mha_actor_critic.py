@@ -28,6 +28,7 @@ class MhaMapEncoder(nn.Module):
         point_feature_dim: int = 3,
         conv_hidden_channels: int = 16,
         kernel_size: int = 5,
+        stride: int = 1,
         activation: str = "elu",
     ):
         super().__init__()
@@ -39,17 +40,26 @@ class MhaMapEncoder(nn.Module):
             )
         if embed_dim % num_heads != 0:
             raise ValueError(f"embed_dim ({embed_dim}) must be divisible by num_heads ({num_heads}).")
+        if stride < 1:
+            raise ValueError(f"stride must be at least 1, got {stride}.")
 
         self.input_channels = input_channels
         self.input_h, self.input_w = input_dim
         self.point_feature_dim = point_feature_dim
         self.history_frames = input_channels // point_feature_dim
         self.embed_dim = embed_dim
+        self.stride = stride
 
         act_fn = resolve_nn_activation(activation)
         padding = kernel_size // 2
         self.local_cnn = nn.Sequential(
-            nn.Conv2d(input_channels, conv_hidden_channels, kernel_size=kernel_size, padding=padding),
+            nn.Conv2d(
+                input_channels,
+                conv_hidden_channels,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+            ),
             act_fn,
             nn.Conv2d(conv_hidden_channels, embed_dim - point_feature_dim, kernel_size=kernel_size, padding=padding),
             act_fn,
@@ -72,18 +82,37 @@ class MhaMapEncoder(nn.Module):
         current_points = point_history[:, -1]
 
         local_features = self.local_cnn(visual)
+        if self.stride > 1:
+            current_points = current_points[:, :, :: self.stride, :: self.stride]
+        if current_points.shape[-2:] != local_features.shape[-2:]:
+            raise RuntimeError(
+                "Point-coordinate and local-feature resolutions do not match: "
+                f"{current_points.shape[-2:]} != {local_features.shape[-2:]}."
+            )
         point_tokens = torch.cat([current_points, local_features], dim=1)
         point_tokens = point_tokens.flatten(2).transpose(1, 2)
 
         query = self.query_proj(query_context).unsqueeze(1)
-        attended, attn_weights = self.attention(
-            query,
-            point_tokens,
-            point_tokens,
-            need_weights=True,
-            average_attn_weights=False,
-        )
-        self.last_attention_weights = attn_weights.detach()
+        if self.training:
+            # The SDPA path selected by need_weights=False is slower for this
+            # Q=1, head_dim=4 workload. Keep the faster path but discard weights.
+            attended, _ = self.attention(
+                query,
+                point_tokens,
+                point_tokens,
+                need_weights=True,
+                average_attn_weights=False,
+            )
+            self.last_attention_weights = None
+        else:
+            attended, attn_weights = self.attention(
+                query,
+                point_tokens,
+                point_tokens,
+                need_weights=True,
+                average_attn_weights=False,
+            )
+            self.last_attention_weights = attn_weights.detach()
         return self.output_norm(attended.squeeze(1) + query.squeeze(1))
 
 
@@ -157,6 +186,8 @@ class MhaActorCritic(nn.Module):
         act_fn = resolve_nn_activation(activation)
         self.cnn_channels = _cfg_get(CnnMlp, "input_channels")
         input_dim = _cfg_get(CnnMlp, "input_dim")
+        stride_cfg = _cfg_get(CnnMlp, "stride")
+        self.cnn_stride = int(stride_cfg[0] if isinstance(stride_cfg, (list, tuple)) else stride_cfg)
         self.cnn_h = input_dim[0]
         self.cnn_w = input_dim[1]
         self.depth_flat_dim = self.cnn_channels * self.cnn_h * self.cnn_w
@@ -188,6 +219,7 @@ class MhaActorCritic(nn.Module):
             point_feature_dim=self.point_feature_dim,
             conv_hidden_channels=self.mha_conv_hidden_channels,
             kernel_size=self.mha_kernel_size,
+            stride=self.cnn_stride,
             activation=activation,
         )
 

@@ -162,17 +162,32 @@ class RolloutStorage:
     def clear(self):
         self.step = 0
 
+    # 这个函数就是 GAE（Generalized Advantage Estimation）真正发生的地方
+    '''
+    假设 num_steps_per_env = 24，那么调用这个函数之前，storage 大致已经有：
+    step       reward       value       done
+    -----------------------------------------
+    0           r0           V0          d0
+    1           r1           V1          d1
+    2           r2           V2          d2
+    ...
+    22          r22          V22         d22
+    23          r23          V23         d23
+    还有V(S_24)
+
+    A_t=siga_t + gamma*lam*A_{t+1} 
+    '''
     def compute_returns(self, last_values, gamma, lam, normalize_advantage: bool = True):
         advantage = 0
-        for step in reversed(range(self.num_transitions_per_env)):
+        for step in reversed(range(self.num_transitions_per_env)):  # 倒着算，因为当前时刻的优势函数需要下一时刻的优势函数进行计算。例如我想计算A_3 就必须要先知道A_4
             # if we are at the last step, bootstrap the return value
             if step == self.num_transitions_per_env - 1:
                 next_values = last_values
             else:
                 next_values = self.values[step + 1]
             # 1 if we are not in a terminal state, 0 otherwise
-            next_is_not_terminal = 1.0 - self.dones[step].float()
-            # TD error: r_t + gamma * V(s_{t+1}) - V(s_t)
+            next_is_not_terminal = 1.0 - self.dones[step].float()  # 为什么不是step+1：因为这个down就是S_{t+1}的状态了
+            # TD error: r_t + gamma * V(s_{t+1}) - V(s_t) 
             delta = self.rewards[step] + next_is_not_terminal * gamma * next_values - self.values[step]
             # Advantage: A(s_t, a_t) = delta_t + gamma * lambda * A(s_{t+1}, a_{t+1})
             advantage = delta + next_is_not_terminal * gamma * lam * advantage

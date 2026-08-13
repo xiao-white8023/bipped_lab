@@ -308,6 +308,7 @@ class AMPPPO:
         mean_vp_vel_loss = 0
         mean_op_supervised_loss = 0
         mean_vp_supervised_loss = 0
+        uses_renet_separate_supervision = False
         mean_terrain_recon_loss = 0
         mean_feet_height_loss = 0
         vel_weight = self._get_warmup_weight(
@@ -470,6 +471,7 @@ class AMPPPO:
                     ].detach()
                     if isinstance(vel_estimate, dict):
                         use_renet_separate_supervision = True
+                        uses_renet_separate_supervision = True
                         if "op" in vel_estimate:
                             op_vel_loss = nn.functional.mse_loss(vel_estimate["op"], vel_target)
                         if "vp" in vel_estimate:
@@ -675,10 +677,11 @@ class AMPPPO:
         if self.vel_estimation_coef > 0:
             loss_dict["vel_estimation"] = mean_vel_loss
             loss_dict["vel_estimation_coef_current"] = vel_weight
-            loss_dict["vel_estimation/op"] = mean_op_vel_loss
-            loss_dict["vel_estimation/vp"] = mean_vp_vel_loss
-            loss_dict["renet/op_supervised"] = mean_op_supervised_loss
-            loss_dict["renet/vp_supervised"] = mean_vp_supervised_loss
+            if uses_renet_separate_supervision:
+                loss_dict["vel_estimation/op"] = mean_op_vel_loss
+                loss_dict["vel_estimation/vp"] = mean_vp_vel_loss
+                loss_dict["renet/op_supervised"] = mean_op_supervised_loss
+                loss_dict["renet/vp_supervised"] = mean_vp_supervised_loss
         if self.terrain_recon_coef > 0:
             loss_dict["terrain_recon"] = mean_terrain_recon_loss
             loss_dict["terrain_recon_coef_current"] = terrain_weight

@@ -20,6 +20,7 @@
 
 from .amp_on_policy_runner import AmpOnPolicyRunner
 from .on_policy_runner import OnPolicyRunner
+from .constrained_on_policy_runner import ConstrainedOnPolicyRunner
 from .film_on_policy_runner import FilmOnPolicyRunner
 from .renet_amp_on_policy_runner import RENetAmpOnPolicyRunner
 
@@ -39,6 +40,7 @@ G1OnPolicyRunner = _RemovedRunner
 
 __all__ = [
     "OnPolicyRunner",
+    "ConstrainedOnPolicyRunner",
     "AmpOnPolicyRunner",
     "DWAQAmpOnPolicyRunner",
     "MoeAmpOnPolicyRunner",

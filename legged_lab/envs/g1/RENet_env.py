@@ -527,20 +527,20 @@ class G1RENetEnv(VecEnv):
         self.renet_training_iteration = int(iteration)
 
     def resolve_renet_hard_terrain_type_ids(self):
-        terrain_generator = getattr(self.cfg.scene, "terrain_generator", None)
-        hard_names = set(getattr(self.cfg.renet, "force_vp_terrain_names", []))
+        terrain_generator = getattr(self.cfg.scene, "terrain_generator", None) # 拿到ROUGH_TERRAINS_CFG
+        hard_names = set(getattr(self.cfg.renet, "force_vp_terrain_names", [])) # 拿到困难地形的名字
         if terrain_generator is None or not hard_names or not getattr(terrain_generator, "curriculum", False):
             return torch.empty(0, dtype=torch.long, device=self.device)
 
-        sub_terrains = getattr(terrain_generator, "sub_terrains", {})
+        sub_terrains = getattr(terrain_generator, "sub_terrains", {})  # 拿到所有的地形
         if not sub_terrains:
             return torch.empty(0, dtype=torch.long, device=self.device)
 
-        sub_terrain_names = list(sub_terrains.keys())
-        proportions = np.array([sub_terrains[name].proportion for name in sub_terrain_names], dtype=np.float64)
+        sub_terrain_names = list(sub_terrains.keys()) # 地形的名字
+        proportions = np.array([sub_terrains[name].proportion for name in sub_terrain_names], dtype=np.float64) # 拿到每一个地形的比例
         if proportions.sum() <= 0.0:
             return torch.empty(0, dtype=torch.long, device=self.device)
-        proportions /= proportions.sum()
+        proportions /= proportions.sum() # 进行比例归一化
         cumulative = np.cumsum(proportions)
 
         hard_type_ids = []
@@ -554,7 +554,8 @@ class G1RENetEnv(VecEnv):
                 hard_type_ids.append(col_idx)
 
         return torch.tensor(hard_type_ids, dtype=torch.long, device=self.device)
-
+        # 
+    # 当前这 4096 个并行环境里，哪些环境现在正处在这些困难地形上，因此必须强制使用 VP。
     def get_renet_force_vp_envs(self):
         force_vp = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         terrain = getattr(self.scene, "terrain", None)
@@ -591,7 +592,7 @@ class G1RENetEnv(VecEnv):
             raise ValueError(f"Unsupported RENet mask_mode: {mask_mode}")
 
         force_vp_envs = self.get_renet_force_vp_envs()
-        self.renet_estimator_mask[force_vp_envs] = 0.0
+        self.renet_estimator_mask[force_vp_envs] = 0.0 # 强制这些环境使用VP
         return self.renet_estimator_mask
 
     def append_renet_training_inputs(self, actor_obs):
@@ -666,7 +667,6 @@ class G1RENetEnv(VecEnv):
             if self.add_noise:
                 height_scan += (2 * torch.rand_like(height_scan) - 1) * self.height_scan_noise_vec
             
-        
         self.actor_obs = torch.clip(self.actor_obs, -self.clip_obs, self.clip_obs)
         self.critic_obs = torch.clip(self.critic_obs, -self.clip_obs, self.clip_obs)
 

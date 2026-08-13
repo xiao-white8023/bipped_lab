@@ -160,7 +160,7 @@ class GroupedRayCasterCamera(RayCasterCamera, GroupedRayCaster):
         mesh_transforms, mesh_inv_transforms = self._get_mesh_transforms_and_inv_transforms()
 
         mesh_wp = [i for i in GroupedRayCaster.meshes.values()][0]
-        self.ray_hits_w, ray_depth, ray_normal, _, _ = raycast_mesh_grouped(
+        ray_hits_w, ray_depth, ray_normal, _, _ = raycast_mesh_grouped(
             mesh_wp_device=mesh_wp.device,             # 指定运行所在的 GPU 设备
             mesh_wp_ids=self._mesh_wp_ids,             # 参与计算的 Mesh 的底层 ID
             mesh_transforms=mesh_transforms,           # Mesh 的世界坐标变换
@@ -179,6 +179,7 @@ class GroupedRayCasterCamera(RayCasterCamera, GroupedRayCaster):
             return_distance=True,                      # 要求返回射线命中的距离 (ray_depth)
             return_normal=True,                        # 要求返回命中点表面的法线向量 (ray_normal)
         )
+        self.ray_hits_w[env_ids] = ray_hits_w
         # 断言确保 GPU 正确返回了深度和法线数据
         assert ray_depth is not None
         assert ray_normal is not None

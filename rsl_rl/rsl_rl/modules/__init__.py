@@ -19,11 +19,13 @@
 """Definitions for neural-network components for RL-agents."""
 
 from .actor_critic_rough import ActorCritic
+from .actor_critic_cost import ActorCriticCost
 from .discriminator import Discriminator
 from .normalizer import EmpiricalNormalization
 from .rnd import RandomNetworkDistillation
 from .cnn_mlp import CnnMlp
 from .film_cnn_mlp import FiLMCnnMlp
+from .estimator import Estimator, MLPHistoryEncoder
 
 from .moe_actor_critic import MoeActorCritic
 from .mha_actor_critic import MhaActorCritic
@@ -32,11 +34,14 @@ from .renet_actor_critic import RENetActorCritic
 
 __all__ = [
     "ActorCritic",
+    "ActorCriticCost",
     "EmpiricalNormalization",
     "RandomNetworkDistillation",
     "Discriminator",
     'CnnMlp',
     "FiLMCnnMlp",
+    "Estimator",
+    "MLPHistoryEncoder",
     "MoeActorCritic",
     "MhaActorCritic",
     "RENetActorCritic",

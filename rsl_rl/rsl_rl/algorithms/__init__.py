@@ -18,6 +18,7 @@
 
 """Implementation of different RL agents."""
 from .amp_ppo import AMPPPO
+from .constrained_ppo import ConstrainedPPO
 from .moe_ppo import MoePPO
 from .ppo import PPO
 from .renet_amp_ppo import RENetAMPPPO
@@ -33,4 +34,4 @@ class _RemovedAlgorithm:
 
 MoeAmpPpO = _RemovedAlgorithm
 
-__all__ = ["PPO", "AMPPPO", "MoeAmpPpO", "MoePPO", "RENetAMPPPO"]
+__all__ = ["PPO", "ConstrainedPPO", "AMPPPO", "MoeAmpPpO", "MoePPO", "RENetAMPPPO"]

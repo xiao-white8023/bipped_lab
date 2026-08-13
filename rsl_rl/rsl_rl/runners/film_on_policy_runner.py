@@ -108,9 +108,9 @@ class FilmOnPolicyRunner:
             self.training_type,
             self.env.num_envs,
             self.num_steps_per_env,
-            [num_obs],
-            [num_privileged_obs],
-            [self.env.num_actions],
+            [num_obs],  # actor网络接收到的维度
+            [num_privileged_obs], # critic网络接收到的维度
+            [self.env.num_actions], # 输出关节的数量
         )
 
         # Decide whether to disable logging
@@ -161,10 +161,46 @@ class FilmOnPolicyRunner:
         self.train_mode()  # switch to train mode (for dropout for example)
 
         # Book keeping
+        '''
+        这个列表通常用来收集每个结束 episode 返回的额外统计信息.
+        runner 会把这些 episode 信息暂存到 ep_infos，后面用于日志统计，比如 TensorBoard / WandB 输出平均 tracking reward、energy penalty 等
+        '''
         ep_infos = []
-        rewbuffer = deque(maxlen=100)
+        '''
+        这是一个长度最多为 100 的双端队列
+        它保存最近 100 个完整 episode 的总 reward
+        例如最近几个 episode：
+                    episode 1:  42.3
+                    episode 2:  51.7
+                    episode 3:  48.9
+                    ...
+        所以之后可以计算：mean_reward = statistics.mean(rewbuffer)  也就是终端中保存的 Mean reward: 57.3
+        '''
+        rewbuffer = deque(maxlen=100) 
+        '''
+        和上面完全一样，不过它保存的是：
+
+        最近 100 个完整 episode 的 episode length
+        episode 1: 320 steps
+        episode 2: 450 steps
+        episode 3: 217 steps
+
+        之后计算：Mean episode length
+        '''
         lenbuffer = deque(maxlen=100)
+        '''
+        当前每一个并行环境，从这个 episode 开始到现在累计得到了多少 reward
+        环境0 当前 episode 已累计 reward = 12.3
+        环境1 当前 episode 已累计 reward = 8.7
+        环境2 当前 episode 已累计 reward = 31.2
+        环境3 当前 episode 已累计 reward = 4.8
+        每一步环境返回：rewards
+        之后通常会看到：cur_reward_sum += rewards
+        '''
         cur_reward_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
+        '''
+        当前这个 episode 已经运行了多少 timestep
+        '''
         cur_episode_length = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
 
         # create buffers for logging extrinsic and intrinsic rewards
@@ -184,7 +220,8 @@ class FilmOnPolicyRunner:
         # Start training
         start_iter = self.current_learning_iteration
         tot_iter = start_iter + num_learning_iterations
-        for it in range(start_iter, tot_iter):
+
+        for it in range(start_iter, tot_iter): # 在这个 runner 里，一次 rollout collection 就是执行 self.num_steps_per_env 次内层循环。  就是一次迭代要循环24次，然后进入到下一次循环  所以一次迭代收集的数据是 4096 x 24 = 98304
             start = time.time()
             # Rollout
             with torch.inference_mode():
@@ -192,8 +229,8 @@ class FilmOnPolicyRunner:
                     # Sample actions
                     actions = self.alg.act(obs, privileged_obs)
                     # Step the environment
-                    obs, rewards, dones, infos = self.env.step(actions.to(self.env.device))
-                    # Move to device
+                    obs, rewards, dones, infos = self.env.step(actions.to(self.env.device))  # 也就是说一次迭代会产生24个奖励(因为一次迭代会循环24次，循环一次就要进入一次step得到一个reward)  这个down包括超时  并且此时就是S_{t+1}了  S_t ---> S_{t+1}    reward的形状是(num_envs,)
+                    # Move to device 
                     obs, rewards, dones = (obs.to(self.device), rewards.to(self.device), dones.to(self.device))
                     # perform normalization
                     obs = self.obs_normalizer(obs)
@@ -210,7 +247,7 @@ class FilmOnPolicyRunner:
                     # Extract intrinsic rewards (only for logging)
                     intrinsic_rewards = self.alg.intrinsic_rewards if self.alg.rnd else None
 
-                    # book keeping
+                    # book keeping  从环境返回的 infos 里提取“本轮/本 episode 的统计信息”，暂时放进 ep_infos，后面统一写到 TensorBoard / WandB / 日志里。
                     if self.log_dir is not None:
                         if "episode" in infos:
                             ep_infos.append(self._copy_log_info(infos["episode"]))
@@ -227,11 +264,11 @@ class FilmOnPolicyRunner:
                             cur_ireward_sum += intrinsic_rewards  # type: ignore
                             cur_reward_sum += rewards + intrinsic_rewards
                         else:
-                            cur_reward_sum += rewards
+                            cur_reward_sum += rewards  # 这个reward就不包含因时间到达而重置的那部分补偿的reward
                         # Update episode length
                         cur_episode_length += 1
                         # Clear data for completed episodes
-                        # -- common
+                        # -- common  统计每个并行环境当前 episode 的长度和累计 reward；一旦某个环境 episode 结束，就把它这一局的数据存进日志 buffer，然后把这个环境的计数清零，开始统计下一局。
                         new_ids = (dones > 0).nonzero(as_tuple=False)
                         rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
                         lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())

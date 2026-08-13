@@ -45,8 +45,8 @@ class RENetActorCritic(nn.Module):
         self.num_critic_obs = num_critic_obs
         self.num_actions = num_actions
 
-        self.single_proprio_dim = kwargs.pop("single_proprio_dim", 78)
-        self.estimator_mask_dim = kwargs.pop("estimator_mask_dim", 1)
+        self.single_proprio_dim = kwargs.pop("single_proprio_dim", 78) # 单个actor的维度78维
+        self.estimator_mask_dim = kwargs.pop("estimator_mask_dim", 1) # 
         self.estimator_latent_dim = kwargs.pop("estimator_latent_dim", 64)
         self.proprio_embed_dim = kwargs.pop("proprio_embed_dim", 64)
         proprio_embed_dims = kwargs.pop("proprio_embed_dims", [256, 128])
@@ -102,7 +102,7 @@ class RENetActorCritic(nn.Module):
         self.cnn_h = CnnMlp["input_dim"][0]
         self.cnn_w = CnnMlp["input_dim"][1]
         self.depth_flat_dim = self.depth_history_frames * self.cnn_h * self.cnn_w
-        self.proprio_actor_dim = num_actor_obs - self.depth_flat_dim - self.estimator_mask_dim
+        self.proprio_actor_dim = num_actor_obs - self.depth_flat_dim - self.estimator_mask_dim # 本体感知观测
         if self.proprio_actor_dim <= 0:
             raise ValueError(
                 "Invalid RENet actor observation layout: "
@@ -118,10 +118,10 @@ class RENetActorCritic(nn.Module):
         self.history_len = self.proprio_actor_dim // self.single_proprio_dim
 
         self.proprio_embedding = self._build_mlp(
-            self.single_proprio_dim,
-            proprio_embed_dims,
+            self.single_proprio_dim, # 78
+            proprio_embed_dims, # 
             activation_fn,
-            self.proprio_embed_dim,
+            self.proprio_embed_dim, # 64
         )
 
         cnn_cfg = dict(CnnMlp)

@@ -51,7 +51,7 @@ import torch
 from export import  export_policy_as_jit, export_policy_as_onnx,export_g1_student_policy_as_jit
 from isaaclab_tasks.utils import get_checkpoint_path
 
-from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner,MoeAmpOnPolicyRunner,DWAQAmpOnPolicyRunner,MoeOnPolicyRunner,FilmOnPolicyRunner
+from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner,MoeAmpOnPolicyRunner,DWAQAmpOnPolicyRunner,MoeOnPolicyRunner,FilmOnPolicyRunner, RENetAmpOnPolicyRunner
 from rsl_rl.runners.g1_student_on_policy_runner import G1StudentOnPolicyRunner
 from legged_lab.envs import * # noqa:F401, F403
 from legged_lab.utils.cli_args import update_rsl_rl_cfg
@@ -59,7 +59,7 @@ from legged_lab.terrains import GRAVEL_TERRAINS_CFG, ROUGH_TERRAINS_CFG,flex_ter
 
 
 def play():
-    runner: OnPolicyRunner | AmpOnPolicyRunner | MoeAmpOnPolicyRunner|DWAQAmpOnPolicyRunner|MoeOnPolicyRunner|G1StudentOnPolicyRunner|FilmOnPolicyRunner
+    runner: OnPolicyRunner | AmpOnPolicyRunner | RENetAmpOnPolicyRunner | MoeAmpOnPolicyRunner|DWAQAmpOnPolicyRunner|MoeOnPolicyRunner|G1StudentOnPolicyRunner|FilmOnPolicyRunner
     
     env_class_name = args_cli.task
     env_cfg, agent_cfg = task_registry.get_cfgs(env_class_name)

@@ -347,7 +347,7 @@ class G1RENETENVCFG:
         rel_heading_envs=1.0,
         heading_command=True,
         heading_control_stiffness=0.5,
-        debug_vis=True,
+        debug_vis=False,
         ranges=CommandRangesCfg(
             lin_vel_x=(-0.6, 1.0), lin_vel_y=(-0.5,0.5), ang_vel_z=(-1.57, 1.57), heading=(-math.pi, math.pi)
         ),
@@ -611,7 +611,10 @@ class G1RENETAGENTCFG:
     load_checkpoint = "model_.*.pt"
 
     # amp parameter
-    amp_reward_coef = 0.4  # 风格奖励系数 动作像专家数据。
+    amp_reward_coef = 0.3
+
+
+      # 风格奖励系数 动作像专家数据。
     amp_motion_files = [    f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/stand_to_walk.txt",
 
@@ -627,6 +630,6 @@ class G1RENETAGENTCFG:
     '''
     Taskfinal​=Taskraw​×[0.7+(1−0.7)×D] 判别器输入的就是0或1 如果任务奖励100分 完成的很好 但是不像专家数据 判别器打0分 则作中的任务奖励只有70分 
     '''
-    amp_task_reward_lerp = 0.6  # 这是一个惩罚机制。它把“任务奖励”和“动作质量”挂钩了 
+    amp_task_reward_lerp = 0.7  # 这是一个惩罚机制。它把“任务奖励”和“动作质量”挂钩了 
     amp_discr_hidden_dims = [1024, 512, 256]
     min_normalized_std = [0.05] * 23

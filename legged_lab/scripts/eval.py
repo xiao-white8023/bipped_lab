@@ -32,8 +32,8 @@ parser.add_argument("--success_distance", type=float, default=None)
 
 # 目标区域的横向范围：只在“到达目标区域”那一刻判断，不要求整个过程都在范围内。
 # 使用相对 env_origin 的 root_y，避免并行 env spacing 污染。
-parser.add_argument("--success_y_min", type=float, default=-1.5)
-parser.add_argument("--success_y_max", type=float, default=1.5)
+parser.add_argument("--success_y_min", type=float, default=-3)
+parser.add_argument("--success_y_max", type=float, default=3)
 
 # feet stumble 参数：足端水平力显著大于竖直力，近似脚部撞边/绊脚
 parser.add_argument("--feet_stumble_ratio", type=float, default=5.0)
@@ -69,11 +69,13 @@ from isaaclab_tasks.utils import get_checkpoint_path
 
 from rsl_rl.runners import (
     AmpOnPolicyRunner,
+    ConstrainedOnPolicyRunner,
     OnPolicyRunner,
     MoeAmpOnPolicyRunner,
     DWAQAmpOnPolicyRunner,
     MoeOnPolicyRunner,
     FilmOnPolicyRunner,
+    RENetAmpOnPolicyRunner,
 )
 from rsl_rl.runners.g1_student_on_policy_runner import G1StudentOnPolicyRunner
 
@@ -156,23 +158,24 @@ def configure_eval_env(env_cfg):
         if hasattr(env_cfg.scene.terrain_generator, "curriculum"):
             env_cfg.scene.terrain_generator.curriculum = False
 
-    # depth noise 设置
-    env_cfg.depth_noise_curriculum.enable = False
+    # depth noise 设置；没有 depth-noise 配置的任务保持无噪声。
+    env_cfg.scene.camera.add_camera_noise = False
+    if hasattr(env_cfg, "depth_noise_curriculum"):
+        env_cfg.depth_noise_curriculum.enable = False
 
-    if args_cli.eval_depth_noise:
-        env_cfg.scene.camera.add_camera_noise = True
-        env_cfg.depth_noise_curriculum.gaussian_std_range = (
-            0.0,
-            args_cli.depth_noise_std,
-        )
-        env_cfg.depth_noise_curriculum.failure_probability_range = (
-            0.0,
-            args_cli.depth_failure_prob,
-        )
-    else:
-        env_cfg.scene.camera.add_camera_noise = False
-        env_cfg.depth_noise_curriculum.gaussian_std_range = (0.0, 0.0)
-        env_cfg.depth_noise_curriculum.failure_probability_range = (0.0, 0.0)
+        if args_cli.eval_depth_noise:
+            env_cfg.scene.camera.add_camera_noise = True
+            env_cfg.depth_noise_curriculum.gaussian_std_range = (
+                0.0,
+                args_cli.depth_noise_std,
+            )
+            env_cfg.depth_noise_curriculum.failure_probability_range = (
+                0.0,
+                args_cli.depth_failure_prob,
+            )
+        else:
+            env_cfg.depth_noise_curriculum.gaussian_std_range = (0.0, 0.0)
+            env_cfg.depth_noise_curriculum.failure_probability_range = (0.0, 0.0)
 
     # eval 不需要可视化 camera ray
     if hasattr(env_cfg.scene.camera, "camera"):

@@ -1,0 +1,140 @@
+<mujoco model="g1 stairs scene">
+<!--  包含带 motor actuator 的机器人模型 (daf = direct actuator force)  -->
+<include file="g1_23dof_rev_1_0.xml"/>
+<statistic center="2 0 0.8" extent="4.0"/>
+<visual>
+<headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+<rgba haze="0.15 0.25 0.35 1"/>
+<global azimuth="-130" elevation="-20"/>
+</visual>
+<asset>
+<texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+<texture type="2d" name="cd_groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300"/>
+<material name="cd_groundplane" texture="cd_groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+<material name="stairs" rgba="0.6 0.6 0.6 1"/>
+<material name="gap_platform" rgba="0.42 0.44 0.46 1" specular="0" reflectance="0.0"/>
+<material name="rough_box" rgba="0.45 0.50 0.46 1" specular="0" reflectance="0.0"/>
+<material name="slope_mat" rgba="0.5 0.6 0.5 1"/>
+</asset>
+<worldbody>
+<light pos="2 0 3" dir="0 0 -1" directional="true"/>
+<geom name="cd_floor" type="box" size="100 100 0.02" pos="-98.5 0 -0.02" material="cd_groundplane" friction="1.0 0.005 0.0001"/>
+<geom name="cd_floor_right" type="box" size="100 100 0.02" pos="101.85 0 -0.02" material="cd_groundplane" friction="1.0 0.005 0.0001"/>
+<geom name="cd_floor_front" type="box" size="0.175 100 0.02" pos="1.675 -98.0 -0.02" material="cd_groundplane" friction="1.0 0.005 0.0001"/>
+<geom name="cd_floor_back" type="box" size="0.175 100 0.02" pos="1.675 104.0 -0.02" material="cd_groundplane" friction="1.0 0.005 0.0001"/>
+<!--  台阶配置: 10级上楼 + 10级下楼  -->
+<!--  台阶参数: step_height=0.15m, step_depth=0.31m  -->
+<!--  上楼台阶 (从 x=1.31 开始)  -->
+<geom name="stair_up_1" type="box" size="0.155 0.8 0.075" pos="1.31 0 0.075" material="stairs"/>
+<geom name="stair_up_2" type="box" size="0.155 0.8 0.075" pos="1.62 0 0.225" material="stairs"/>
+<geom name="stair_up_3" type="box" size="0.155 0.8 0.075" pos="1.93 0 0.375" material="stairs"/>
+<geom name="stair_up_4" type="box" size="0.155 0.8 0.075" pos="2.24 0 0.525" material="stairs"/>
+<geom name="stair_up_5" type="box" size="0.155 0.8 0.075" pos="2.55 0 0.675" material="stairs"/>
+<geom name="stair_up_6" type="box" size="0.155 0.8 0.075" pos="2.86 0 0.825" material="stairs"/>
+<geom name="stair_up_7" type="box" size="0.155 0.8 0.075" pos="3.17 0 0.975" material="stairs"/>
+<geom name="stair_up_8" type="box" size="0.155 0.8 0.075" pos="3.48 0 1.125" material="stairs"/>
+<geom name="stair_up_9" type="box" size="0.155 0.8 0.075" pos="3.79 0 1.275" material="stairs"/>
+<geom name="stair_up_10" type="box" size="0.155 0.8 0.075" pos="4.10 0 1.425" material="stairs"/>
+<!--  平台  -->
+<geom name="platform" type="box" size="0.31 0.8 0.075" pos="4.56 0 1.575" material="stairs"/>
+<!--  下楼台阶  -->
+<geom name="stair_down_1" type="box" size="0.155 0.8 0.075" pos="5.02 0 1.425" material="stairs"/>
+<geom name="stair_down_2" type="box" size="0.155 0.8 0.075" pos="5.33 0 1.275" material="stairs"/>
+<geom name="stair_down_3" type="box" size="0.155 0.8 0.075" pos="5.64 0 1.125" material="stairs"/>
+<geom name="stair_down_4" type="box" size="0.155 0.8 0.075" pos="5.95 0 0.975" material="stairs"/>
+<geom name="stair_down_5" type="box" size="0.155 0.8 0.075" pos="6.26 0 0.825" material="stairs"/>
+<geom name="stair_down_6" type="box" size="0.155 0.8 0.075" pos="6.57 0 0.675" material="stairs"/>
+<geom name="stair_down_7" type="box" size="0.155 0.8 0.075" pos="6.88 0 0.525" material="stairs"/>
+<geom name="stair_down_8" type="box" size="0.155 0.8 0.075" pos="7.19 0 0.375" material="stairs"/>
+<geom name="stair_down_9" type="box" size="0.155 0.8 0.075" pos="7.50 0 0.225" material="stairs"/>
+<geom name="stair_down_10" type="box" size="0.155 0.8 0.075" pos="7.81 0 0.075" material="stairs"/>
+
+<!-- 独立 gap 地形: y=3.0, 仅中间 0.35m x 2.0m 区域无底  -->
+<geom name="gap_start_platform" type="box" size="1.5 1.0 0.25" pos="0 3.0 0.04" material="gap_platform" friction="1.0 0.005 0.0001"/>
+<geom name="gap_end_platform" type="box" size="4.0 1.0 0.25" pos="5.85 3.0 0.04" material="gap_platform" friction="1.0 0.005 0.0001"/>
+<geom name="gap_edge_before" type="box" size="0.02 1.0 0.001" pos="1.50 3.0 0.083" material="gap_platform" contype="0" conaffinity="0"/>
+<geom name="gap_edge_after" type="box" size="0.02 1.0 0.001" pos="1.85 3.0 0.083" material="gap_platform" contype="0" conaffinity="0"/>
+
+<!--  独立坡道侧区: 从 slope_scene.xml 复制, y 方向整体平移 +6m  -->
+<geom name="slope_up_15" type="box" size="1.5 0.8 0.05" pos="2.5 6.0 0.4" euler="0 -0.2618 0" material="slope_mat" friction="1.0 0.005 0.0001"/>
+<geom name="platform_15" type="box" size="1.0 0.8 0.05" pos="4.5 6.0 0.78" material="slope_mat" friction="1.0 0.005 0.0001"/>
+<geom name="slope_down_15" type="box" size="1.5 0.8 0.05" pos="6.5 6.0 0.4" euler="0 0.2618 0" material="slope_mat" friction="1.0 0.005 0.0001"/>
+
+<geom name="slope_up_20" type="box" size="1.5 0.8 0.05" pos="2.5 8.0 0.513" euler="0 -0.3491 0" material="slope_mat" friction="1.0 0.005 0.0001"/>
+<geom name="platform_20" type="box" size="1.0 0.8 0.05" pos="4.5 8.0 1.026" material="slope_mat" friction="1.0 0.005 0.0001"/>
+<geom name="slope_down_20" type="box" size="1.5 0.8 0.05" pos="6.5 8.0 0.513" euler="0 0.3491 0" material="slope_mat" friction="1.0 0.005 0.0001"/>
+
+<geom name="slope_up_25" type="box" size="1.5 0.8 0.05" pos="2.5 10.0 0.634" euler="0 -0.4363 0" material="slope_mat" friction="1.0 0.005 0.0001"/>
+<geom name="platform_25" type="box" size="1.0 0.8 0.05" pos="4.5 10.0 1.268" material="slope_mat" friction="1.0 0.005 0.0001"/>
+<geom name="slope_down_25" type="box" size="1.5 0.8 0.05" pos="6.5 10.0 0.634" euler="0 0.4363 0" material="slope_mat" friction="1.0 0.005 0.0001"/>
+
+<geom name="slope_up_30" type="box" size="1.5 0.8 0.05" pos="2.5 12.0 0.75" euler="0 -0.5236 0" material="slope_mat" friction="1.0 0.005 0.0001"/>
+<geom name="platform_30" type="box" size="1.0 0.8 0.05" pos="4.5 12.0 1.500" material="slope_mat" friction="1.0 0.005 0.0001"/>
+<geom name="slope_down_30" type="box" size="1.5 0.8 0.05" pos="6.5 12.0 0.75" euler="0 0.5236 0" material="slope_mat" friction="1.0 0.005 0.0001"/>
+
+<!--  独立高低不平 boxes 侧区: y=-3.0, grid_width=0.45  -->
+<geom name="rough_box_0_0" type="box" size="0.225 0.225 0.020" pos="1.50 -4.350 0.020" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_0_1" type="box" size="0.225 0.225 0.050" pos="1.95 -4.350 0.050" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_0_2" type="box" size="0.225 0.225 0.010" pos="2.40 -4.350 0.010" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_0_3" type="box" size="0.225 0.225 0.070" pos="2.85 -4.350 0.070" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_0_4" type="box" size="0.225 0.225 0.035" pos="3.30 -4.350 0.035" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_0_5" type="box" size="0.225 0.225 0.060" pos="3.75 -4.350 0.060" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_0_6" type="box" size="0.225 0.225 0.025" pos="4.20 -4.350 0.025" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_0_7" type="box" size="0.225 0.225 0.075" pos="4.65 -4.350 0.075" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_0_8" type="box" size="0.225 0.225 0.040" pos="5.10 -4.350 0.040" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_1_0" type="box" size="0.225 0.225 0.060" pos="1.50 -3.900 0.060" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_1_1" type="box" size="0.225 0.225 0.025" pos="1.95 -3.900 0.025" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_1_2" type="box" size="0.225 0.225 0.075" pos="2.40 -3.900 0.075" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_1_3" type="box" size="0.225 0.225 0.040" pos="2.85 -3.900 0.040" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_1_4" type="box" size="0.225 0.225 0.015" pos="3.30 -3.900 0.015" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_1_5" type="box" size="0.225 0.225 0.030" pos="3.75 -3.900 0.030" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_1_6" type="box" size="0.225 0.225 0.065" pos="4.20 -3.900 0.065" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_1_7" type="box" size="0.225 0.225 0.020" pos="4.65 -3.900 0.020" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_1_8" type="box" size="0.225 0.225 0.055" pos="5.10 -3.900 0.055" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_2_0" type="box" size="0.225 0.225 0.030" pos="1.50 -3.450 0.030" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_2_1" type="box" size="0.225 0.225 0.065" pos="1.95 -3.450 0.065" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_2_2" type="box" size="0.225 0.225 0.020" pos="2.40 -3.450 0.020" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_2_3" type="box" size="0.225 0.225 0.055" pos="2.85 -3.450 0.055" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_2_4" type="box" size="0.225 0.225 0.045" pos="3.30 -3.450 0.045" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_2_5" type="box" size="0.225 0.225 0.075" pos="3.75 -3.450 0.075" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_2_6" type="box" size="0.225 0.225 0.035" pos="4.20 -3.450 0.035" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_2_7" type="box" size="0.225 0.225 0.060" pos="4.65 -3.450 0.060" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_2_8" type="box" size="0.225 0.225 0.025" pos="5.10 -3.450 0.025" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_3_0" type="box" size="0.225 0.225 0.075" pos="1.50 -3.000 0.075" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_3_1" type="box" size="0.225 0.225 0.035" pos="1.95 -3.000 0.035" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_3_2" type="box" size="0.225 0.225 0.060" pos="2.40 -3.000 0.060" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_3_3" type="box" size="0.225 0.225 0.025" pos="2.85 -3.000 0.025" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_3_4" type="box" size="0.225 0.225 0.050" pos="3.30 -3.000 0.050" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_3_5" type="box" size="0.225 0.225 0.020" pos="3.75 -3.000 0.020" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_3_6" type="box" size="0.225 0.225 0.050" pos="4.20 -3.000 0.050" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_3_7" type="box" size="0.225 0.225 0.010" pos="4.65 -3.000 0.010" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_3_8" type="box" size="0.225 0.225 0.070" pos="5.10 -3.000 0.070" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_4_0" type="box" size="0.225 0.225 0.015" pos="1.50 -2.550 0.015" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_4_1" type="box" size="0.225 0.225 0.045" pos="1.95 -2.550 0.045" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_4_2" type="box" size="0.225 0.225 0.070" pos="2.40 -2.550 0.070" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_4_3" type="box" size="0.225 0.225 0.030" pos="2.85 -2.550 0.030" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_4_4" type="box" size="0.225 0.225 0.065" pos="3.30 -2.550 0.065" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_4_5" type="box" size="0.225 0.225 0.020" pos="3.75 -2.550 0.020" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_4_6" type="box" size="0.225 0.225 0.055" pos="4.20 -2.550 0.055" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_4_7" type="box" size="0.225 0.225 0.045" pos="4.65 -2.550 0.045" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_4_8" type="box" size="0.225 0.225 0.075" pos="5.10 -2.550 0.075" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_5_0" type="box" size="0.225 0.225 0.040" pos="1.50 -2.100 0.040" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_5_1" type="box" size="0.225 0.225 0.010" pos="1.95 -2.100 0.010" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_5_2" type="box" size="0.225 0.225 0.060" pos="2.40 -2.100 0.060" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_5_3" type="box" size="0.225 0.225 0.025" pos="2.85 -2.100 0.025" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_5_4" type="box" size="0.225 0.225 0.075" pos="3.30 -2.100 0.075" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_5_5" type="box" size="0.225 0.225 0.035" pos="3.75 -2.100 0.035" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_5_6" type="box" size="0.225 0.225 0.015" pos="4.20 -2.100 0.015" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_5_7" type="box" size="0.225 0.225 0.065" pos="4.65 -2.100 0.065" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_5_8" type="box" size="0.225 0.225 0.030" pos="5.10 -2.100 0.030" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_6_0" type="box" size="0.225 0.225 0.055" pos="1.50 -1.650 0.055" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_6_1" type="box" size="0.225 0.225 0.075" pos="1.95 -1.650 0.075" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_6_2" type="box" size="0.225 0.225 0.020" pos="2.40 -1.650 0.020" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_6_3" type="box" size="0.225 0.225 0.050" pos="2.85 -1.650 0.050" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_6_4" type="box" size="0.225 0.225 0.010" pos="3.30 -1.650 0.010" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_6_5" type="box" size="0.225 0.225 0.070" pos="3.75 -1.650 0.070" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_6_6" type="box" size="0.225 0.225 0.040" pos="4.20 -1.650 0.040" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_6_7" type="box" size="0.225 0.225 0.025" pos="4.65 -1.650 0.025" material="rough_box" friction="1.0 0.005 0.0001"/>
+<geom name="rough_box_6_8" type="box" size="0.225 0.225 0.060" pos="5.10 -1.650 0.060" material="rough_box" friction="1.0 0.005 0.0001"/>
+</worldbody>
+</mujoco>

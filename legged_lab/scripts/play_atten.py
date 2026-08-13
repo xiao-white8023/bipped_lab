@@ -51,7 +51,7 @@ import torch
 from export import  export_policy_as_jit, export_policy_as_onnx,export_g1_student_policy_as_jit
 from isaaclab_tasks.utils import get_checkpoint_path
 
-from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner,MoeAmpOnPolicyRunner,DWAQAmpOnPolicyRunner,MoeOnPolicyRunner,FilmOnPolicyRunner, RENetAmpOnPolicyRunner,ConstrainedOnPolicyRunner
+from rsl_rl.runners import AmpOnPolicyRunner, OnPolicyRunner,MoeAmpOnPolicyRunner,DWAQAmpOnPolicyRunner,MoeOnPolicyRunner,FilmOnPolicyRunner, RENetAmpOnPolicyRunner
 from rsl_rl.runners.g1_student_on_policy_runner import G1StudentOnPolicyRunner
 from legged_lab.envs import * # noqa:F401, F403
 from legged_lab.utils.cli_args import update_rsl_rl_cfg
@@ -60,7 +60,7 @@ from legged_lab.terrains import GRAVEL_TERRAINS_CFG, ROUGH_TERRAINS_CFG,flex_ter
 
 
 def play():
-    runner: OnPolicyRunner |ConstrainedOnPolicyRunner | AmpOnPolicyRunner | RENetAmpOnPolicyRunner | MoeAmpOnPolicyRunner|DWAQAmpOnPolicyRunner|MoeOnPolicyRunner|G1StudentOnPolicyRunner|FilmOnPolicyRunner
+    runner: OnPolicyRunner | AmpOnPolicyRunner | RENetAmpOnPolicyRunner | MoeAmpOnPolicyRunner|DWAQAmpOnPolicyRunner|MoeOnPolicyRunner|G1StudentOnPolicyRunner|FilmOnPolicyRunner
     
     env_class_name = args_cli.task
     env_cfg, agent_cfg = task_registry.get_cfgs(env_class_name)
@@ -72,7 +72,7 @@ def play():
     env_cfg.scene.num_envs = 50 if args_cli.num_envs is None else args_cli.num_envs
     env_cfg.scene.env_spacing = 2.5
     env_cfg.commands.rel_standing_envs = 0.0
-    env_cfg.commands.ranges.lin_vel_x = (1.0, 1.0)
+    env_cfg.commands.ranges.lin_vel_x = (0.0, 0.0)
     env_cfg.commands.ranges.lin_vel_y = (0.0, 0.0)
     env_cfg.commands.ranges.ang_vel_z = (0.0, 0.0)
     env_cfg.commands.ranges.heading = (0.0, 0.0)
@@ -198,23 +198,36 @@ def play():
                 break
             dev.close()
         if gamepad is None:
-            print("[WARN] 未找到 Xbox 手柄，使用随机指令运行。")
+            print("[WARN] 未找到 Xbox 手柄，速度命令保持为零。")
 
+    def apply_gamepad_command():
+        if gamepad is None:
+            return None
+        gamepad_cmd = gamepad.advance()
+        env.command_generator.command[:] = gamepad_cmd.unsqueeze(0).expand(env.num_envs, -1)
+        return gamepad_cmd
+
+    apply_gamepad_command()
     obs, _ = env.get_observations()
     step_counter = 0
 
     while simulation_app.is_running():
         with torch.inference_mode():
+            gamepad_cmd = apply_gamepad_command()
+            if gamepad_cmd is not None:
+                obs, _ = env.get_observations()
+                if step_counter % 100 == 0:
+                    print(
+                        f"[DEBUG] step={step_counter}, "
+                        f"gamepad_cmd={gamepad_cmd.cpu().numpy()}, "
+                        f"env_cmd={env.command_generator.command[0].cpu().numpy()}"
+                    )
             actions = policy(obs)
             if attention_visualizer is not None:
                 attention_visualizer.update(step_counter)
             obs, _, _, _ = env.step(actions)
             if gamepad is not None:
-                gamepad_cmd = gamepad.advance()
-                if step_counter % 100 == 0:
-                    print(f"[DEBUG] step={step_counter}, gamepad_cmd={gamepad_cmd.cpu().numpy()}, "
-                          f"env_cmd={env.command_generator.command[0].cpu().numpy()}")
-                env.command_generator.command[:] = gamepad_cmd.unsqueeze(0)
+                apply_gamepad_command()
                 obs, _ = env.get_observations()
 
             step_counter += 1

@@ -20,5 +20,6 @@
 
 from .replay_buffer import ReplayBuffer
 from .rollout_storage import RolloutStorage
+from .constrained_rollout_storage import ConstrainedRolloutStorage
 
-__all__ = ["RolloutStorage", "ReplayBuffer"]
+__all__ = ["RolloutStorage", "ConstrainedRolloutStorage", "ReplayBuffer"]

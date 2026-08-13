@@ -60,13 +60,13 @@ G1_23DOF_LINKS=[
     #'left_shoulder_roll_link', 
     #'left_shoulder_yaw_link',
     'left_elbow_link',
-    'left_wrist_roll_link',  
+    #'left_wrist_roll_link',  
     #'left_rubber_hand',
     #'right_shoulder_pitch_link', 
     #'right_shoulder_roll_link', 
     #'right_shoulder_yaw_link',
     'right_elbow_link',
-    'right_wrist_roll_link', 
+    #'right_wrist_roll_link', 
     #'right_rubber_hand'
 ]
 @configclass
