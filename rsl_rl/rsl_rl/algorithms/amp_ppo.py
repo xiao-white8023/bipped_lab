@@ -240,7 +240,7 @@ class AMPPPO:
         self.amp_transition.observations = amp_obs
         return self.transition.actions
 
-    def process_env_step(self, rewards, dones, infos, amp_obs):
+    def process_env_step(self, rewards, dones, infos, amp_obs, recovery_mask_t=None):
         # Record the rewards and dones
         # Note: we clone here because later on we bootstrap the rewards based on timeouts
         self.transition.rewards = rewards.clone()
@@ -265,11 +265,20 @@ class AMPPPO:
             )
 
         # record the transition
-        self.amp_storage.insert(self.amp_transition.observations, amp_obs)
+        self._store_amp_transition(self.amp_transition.observations, amp_obs, recovery_mask_t)
         self.storage.add_transitions(self.transition)
         self.transition.clear()
         self.amp_transition.clear()
         self.policy.reset(dones)
+
+    def _store_amp_transition(self, amp_obs, next_amp_obs, recovery_mask_t=None):
+        """Store one AMP transition batch.
+
+        ``recovery_mask_t`` is accepted so specialized algorithms can route
+        transitions without changing the legacy single-discriminator API.
+        """
+        del recovery_mask_t
+        self.amp_storage.insert(amp_obs, next_amp_obs)
 
     def compute_returns(self, last_critic_obs):
         # compute value for the last step
@@ -285,14 +294,78 @@ class AMPPPO:
             return target_weight
         return target_weight * (iteration / warmup_iters)
 
+    def _amp_mini_batch_generator(self, num_updates: int, mini_batch_size: int):
+        """Yield policy/expert AMP pairs for the legacy discriminator."""
+        policy_generator = self.amp_storage.feed_forward_generator(num_updates, mini_batch_size)
+        expert_generator = self.amp_data.feed_forward_generator(num_updates, mini_batch_size)
+        yield from zip(policy_generator, expert_generator)
+
+    def _compute_single_amp_discriminator_loss(
+        self,
+        discriminator,
+        normalizer,
+        sample_amp_policy,
+        sample_amp_expert,
+    ):
+        """Compute one discriminator branch without coupling it to PPO."""
+        policy_state, policy_next_state = sample_amp_policy
+        expert_state, expert_next_state = sample_amp_expert
+        if normalizer is not None:
+            with torch.no_grad():
+                policy_state = normalizer.normalize_torch(policy_state, self.device)
+                policy_next_state = normalizer.normalize_torch(policy_next_state, self.device)
+                expert_state = normalizer.normalize_torch(expert_state, self.device)
+                expert_next_state = normalizer.normalize_torch(expert_next_state, self.device)
+
+        policy_d = discriminator(torch.cat([policy_state, policy_next_state], dim=-1))
+        expert_d = discriminator(torch.cat([expert_state, expert_next_state], dim=-1))
+        expert_loss = torch.nn.MSELoss()(expert_d, torch.ones(expert_d.size(), device=self.device))
+        policy_loss = torch.nn.MSELoss()(policy_d, -torch.ones(policy_d.size(), device=self.device))
+        amp_loss = 0.5 * (expert_loss + policy_loss)
+        # Preserve the existing AMP behavior: gradient penalty is evaluated on
+        # the raw expert batch rather than the normalized local tensors above.
+        grad_pen_loss = discriminator.compute_grad_pen(*sample_amp_expert, lambda_=10)
+        total_loss = self.amploss_coef * amp_loss + self.amploss_coef * grad_pen_loss
+        metrics = {
+            "loss": amp_loss,
+            "grad_pen": grad_pen_loss,
+            "policy_pred": policy_d.mean(),
+            "expert_pred": expert_d.mean(),
+        }
+        normalizer_update = None
+        if normalizer is not None:
+            normalizer_update = (normalizer, policy_state, expert_state)
+        return total_loss, metrics, normalizer_update
+
+    def _compute_amp_loss(self, sample_amp):
+        """Compute the legacy discriminator loss and legacy log fields."""
+        sample_amp_policy, sample_amp_expert = sample_amp
+        total_loss, branch_metrics, normalizer_update = self._compute_single_amp_discriminator_loss(
+            self.discriminator,
+            self.amp_normalizer,
+            sample_amp_policy,
+            sample_amp_expert,
+        )
+        metrics = {
+            "amp": branch_metrics["loss"],
+            "amp_grad_pen": branch_metrics["grad_pen"],
+            "amp_policy_pred": branch_metrics["policy_pred"],
+            "amp_expert_pred": branch_metrics["expert_pred"],
+        }
+        normalizer_updates = [] if normalizer_update is None else [normalizer_update]
+        return total_loss, metrics, normalizer_updates
+
+    @staticmethod
+    def _update_amp_normalizers(normalizer_updates):
+        for normalizer, policy_state, expert_state in normalizer_updates:
+            normalizer.update(policy_state.detach().cpu().numpy())
+            normalizer.update(expert_state.detach().cpu().numpy())
+
     def update(self):  # noqa: C901
         mean_value_loss = 0
         mean_surrogate_loss = 0
         mean_entropy = 0
-        mean_amp_loss = 0
-        mean_grad_pen_loss = 0
-        mean_policy_pred = 0
-        mean_expert_pred = 0
+        amp_metric_sums = {}
         # -- RND loss
         if self.rnd:
             mean_rnd_loss = 0
@@ -327,20 +400,12 @@ class AMPPPO:
         else:
             generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs) # 分成4个批次 每一个批次利用5轮
 
-        # AMP 算法中专门为判别器提供「机器人生成的运动数据」的采样生成器
-        # 专家数据（来自 amp_data，是 “真” 数据）。
-        # 机器人数据（来自 amp_storage，是 “假” 数据，也就是机器人刚才在环境里跑出来的运动数据）。
-        amp_policy_generator = self.amp_storage.feed_forward_generator(
-            self.num_learning_epochs * self.num_mini_batches,
-            self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches,
-        )
-        amp_expert_generator = self.amp_data.feed_forward_generator(
-            self.num_learning_epochs * self.num_mini_batches,
-            self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches,
-        )
+        num_updates = self.num_learning_epochs * self.num_mini_batches
+        amp_mini_batch_size = self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches
+        amp_generator = self._amp_mini_batch_generator(num_updates, amp_mini_batch_size)
 
         # iterate over batches
-        for sample, sample_amp_policy, sample_amp_expert in zip(generator, amp_policy_generator, amp_expert_generator):
+        for sample, sample_amp in zip(generator, amp_generator):
             (
                 obs_batch,
                 critic_obs_batch,
@@ -571,22 +636,8 @@ class AMPPPO:
                 mseloss = torch.nn.MSELoss()
                 rnd_loss = mseloss(predicted_embedding, target_embedding)
 
-            # Discriminator loss.
-            policy_state, policy_next_state = sample_amp_policy
-            expert_state, expert_next_state = sample_amp_expert
-            if self.amp_normalizer is not None:
-                with torch.no_grad():
-                    policy_state = self.amp_normalizer.normalize_torch(policy_state, self.device)
-                    policy_next_state = self.amp_normalizer.normalize_torch(policy_next_state, self.device)
-                    expert_state = self.amp_normalizer.normalize_torch(expert_state, self.device)
-                    expert_next_state = self.amp_normalizer.normalize_torch(expert_next_state, self.device)
-            policy_d = self.discriminator(torch.cat([policy_state, policy_next_state], dim=-1))
-            expert_d = self.discriminator(torch.cat([expert_state, expert_next_state], dim=-1))
-            expert_loss = torch.nn.MSELoss()(expert_d, torch.ones(expert_d.size(), device=self.device))
-            policy_loss = torch.nn.MSELoss()(policy_d, -1 * torch.ones(policy_d.size(), device=self.device))
-            amp_loss = 0.5 * (expert_loss + policy_loss)
-            grad_pen_loss = self.discriminator.compute_grad_pen(*sample_amp_expert, lambda_=10)
-            loss += self.amploss_coef * amp_loss + self.amploss_coef * grad_pen_loss
+            amp_loss, amp_metrics, normalizer_updates = self._compute_amp_loss(sample_amp)
+            loss += amp_loss
 
             # Compute the gradients
             # -- For PPO
@@ -609,18 +660,16 @@ class AMPPPO:
             if self.rnd_optimizer:
                 self.rnd_optimizer.step()
 
-            if self.amp_normalizer is not None:
-                self.amp_normalizer.update(policy_state.cpu().numpy())
-                self.amp_normalizer.update(expert_state.cpu().numpy())
+            self._update_amp_normalizers(normalizer_updates)
 
             # Store the losses
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
             mean_entropy += entropy_batch.mean().item()
-            mean_amp_loss += amp_loss.item()
-            mean_grad_pen_loss += grad_pen_loss.item()
-            mean_policy_pred += policy_d.mean().item()
-            mean_expert_pred += expert_d.mean().item()
+            for key, value in amp_metrics.items():
+                if isinstance(value, torch.Tensor):
+                    value = value.item()
+                amp_metric_sums[key] = amp_metric_sums.get(key, 0.0) + value
             mean_vel_loss += vel_loss.item()
             mean_op_vel_loss += op_vel_loss.item()
             mean_vp_vel_loss += vp_vel_loss.item()
@@ -636,7 +685,6 @@ class AMPPPO:
                 mean_symmetry_loss += symmetry_loss.item()
 
         # -- For PPO
-        num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates
         mean_surrogate_loss /= num_updates
         mean_entropy /= num_updates
@@ -647,10 +695,7 @@ class AMPPPO:
         if mean_symmetry_loss is not None:
             mean_symmetry_loss /= num_updates
         # -- Clear the storage
-        mean_amp_loss /= num_updates
-        mean_grad_pen_loss /= num_updates
-        mean_policy_pred /= num_updates
-        mean_expert_pred /= num_updates
+        amp_metrics = {key: value / num_updates for key, value in amp_metric_sums.items()}
         mean_vel_loss /= num_updates
         mean_op_vel_loss /= num_updates
         mean_vp_vel_loss /= num_updates
@@ -665,11 +710,8 @@ class AMPPPO:
             "value_function": mean_value_loss,
             "surrogate": mean_surrogate_loss,
             "entropy": mean_entropy,
-            "amp": mean_amp_loss,
-            "amp_grad_pen": mean_grad_pen_loss,
-            "amp_policy_pred": mean_policy_pred,
-            "amp_expert_pred": mean_expert_pred,
         }
+        loss_dict.update(amp_metrics)
         if self.rnd:
             loss_dict["rnd"] = mean_rnd_loss
         if self.symmetry:
@@ -698,41 +740,50 @@ class AMPPPO:
 
     def broadcast_parameters(self):
         """Broadcast model parameters to all GPUs."""
-        # obtain the model parameters on current GPU
-        model_params = [self.policy.state_dict(), self.discriminator.state_dict()]
-        if self.rnd:
-            model_params.append(self.rnd.predictor.state_dict())
+        modules = self._modules_for_parameter_sync()
+        model_params = [module.state_dict() for module in modules]
         # broadcast the model parameters
         torch.distributed.broadcast_object_list(model_params, src=0)
         # load the model parameters on all GPUs from source GPU
-        self.policy.load_state_dict(model_params[0])
-        # 
-        self.discriminator.load_state_dict(model_params[1])
-        #
+        for module, state_dict in zip(modules, model_params):
+            module.load_state_dict(state_dict)
+
+    def _modules_for_parameter_sync(self):
+        modules = [self.policy, self.discriminator]
         if self.rnd:
-            self.rnd.predictor.load_state_dict(model_params[2])
+            modules.append(self.rnd.predictor)
+        return modules
+
+    def _parameters_for_gradient_reduction(self):
+        parameters = chain(self.policy.parameters(), self.discriminator.parameters())
+        if self.rnd:
+            parameters = chain(parameters, self.rnd.parameters())
+        return parameters
 
     def reduce_parameters(self):
         """Collect gradients from all GPUs and average them."""
-        # 1. 包含判别器的梯度
-        grads = [param.grad.view(-1) for param in self.policy.parameters() if param.grad is not None]
-        grads += [param.grad.view(-1) for param in self.discriminator.parameters() if param.grad is not None]
-        if self.rnd:
-            grads += [param.grad.view(-1) for param in self.rnd.parameters() if param.grad is not None]
-        
+        all_params = list(self._parameters_for_gradient_reduction())
+        # Ranks may observe different routed modes. Use zero placeholders for
+        # locally unused branches so every rank reduces an identical vector.
+        grad_flags = torch.tensor(
+            [param.grad is not None for param in all_params],
+            dtype=torch.int32,
+            device=self.device,
+        )
+        grads = [
+            param.grad.view(-1) if param.grad is not None else torch.zeros_like(param).view(-1)
+            for param in all_params
+        ]
         all_grads = torch.cat(grads)
         torch.distributed.all_reduce(all_grads, op=torch.distributed.ReduceOp.SUM)
+        torch.distributed.all_reduce(grad_flags, op=torch.distributed.ReduceOp.MAX)
         all_grads /= self.gpu_world_size
 
-        # 2. 包含判别器的参数
-        from itertools import chain
-        all_params = chain(self.policy.parameters(), self.discriminator.parameters())
-        if self.rnd:
-            all_params = chain(all_params, self.rnd.parameters())
-
         offset = 0
-        for param in all_params:
-            if param.grad is not None:
-                numel = param.numel()
+        for param, has_global_grad in zip(all_params, grad_flags):
+            numel = param.numel()
+            if has_global_grad:
+                if param.grad is None:
+                    param.grad = torch.zeros_like(param)
                 param.grad.data.copy_(all_grads[offset : offset + numel].view_as(param.grad.data))
-                offset += numel
+            offset += numel

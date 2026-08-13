@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import statistics
 import time
+import warnings
 from collections import deque
 
 import torch
@@ -84,32 +85,51 @@ class RENetAmpOnPolicyRunner:
             # this is used by the symmetry function for handling different observation terms
             self.alg_cfg["symmetry_cfg"]["_env"] = env
 
-        # init amp loader
-        amp_data = AMPLoader(
+        # Initialize fully independent locomotion/recovery AMP data paths.
+        amp_data_loco = AMPLoader(
             device,
             time_between_frames=self.env.step_dt,
             preload_transitions=True,
             num_preload_transitions=train_cfg["amp_num_preload_transitions"],
             motion_files=train_cfg["amp_motion_files"],
         )
-        
-        print(f"DEBUG: 数据集的维度: {amp_data.observation_dim}")
-        amp_obs_demo = self.env.get_amp_obs_for_expert_trans()  # 获得AMP样本的维度
-        print(f"DEBUG: 机器人输出的用来和数据集比较的维度: {amp_obs_demo.shape[1]}")
+        amp_data_recovery = AMPLoader(
+            device,
+            time_between_frames=self.env.step_dt,
+            preload_transitions=True,
+            num_preload_transitions=train_cfg["recovery_amp_num_preload_transitions"],
+            motion_files=train_cfg["recovery_amp_motion_files"],
+        )
 
-        if amp_data.observation_dim != amp_obs_demo.shape[1]:
+        amp_obs_demo = self.env.get_amp_obs_for_expert_trans()
+        if amp_obs_demo.ndim != 2:
+            raise ValueError(f"Environment AMP observations must be 2-D, got {tuple(amp_obs_demo.shape)}.")
+        if amp_data_loco.observation_dim != 50:
             raise ValueError(
-                "AMP observation dimension mismatch: "
-                f"dataset={amp_data.observation_dim}, policy={amp_obs_demo.shape[1]}."
+                f"Locomotion AMP expert observation dimension must be 50, got {amp_data_loco.observation_dim}."
             )
-        
-        amp_normalizer = Normalizer(amp_data.observation_dim)
-        discriminator = Discriminator(
-            amp_data.observation_dim * 2,
+        if amp_data_recovery.observation_dim != 50:
+            raise ValueError(
+                f"Recovery AMP expert observation dimension must be 50, got {amp_data_recovery.observation_dim}."
+            )
+        if amp_obs_demo.shape[1] != 50:
+            raise ValueError(f"Environment AMP observation dimension must be 50, got {amp_obs_demo.shape[1]}.")
+
+        amp_normalizer_loco = Normalizer(amp_data_loco.observation_dim)
+        amp_normalizer_recovery = Normalizer(amp_data_recovery.observation_dim)
+        discriminator_loco = Discriminator(
+            amp_data_loco.observation_dim * 2,
             train_cfg["amp_reward_coef"],      # 风格奖励系数
             train_cfg["amp_discr_hidden_dims"],
             device, 
             train_cfg["amp_task_reward_lerp"], # 惩罚系数 只注重任务奖励 不重视模仿
+        ).to(self.device)
+        discriminator_recovery = Discriminator(
+            amp_data_recovery.observation_dim * 2,
+            train_cfg["recovery_amp_reward_coef"],
+            train_cfg["recovery_amp_discr_hidden_dims"],
+            device,
+            train_cfg["recovery_amp_task_reward_lerp"],
         ).to(self.device)
         
         min_std = torch.tensor(
@@ -130,9 +150,12 @@ class RENetAmpOnPolicyRunner:
         self.alg_cfg.pop("share_cnn_encoders", None)
         self.alg: AMPPPO | RENetAMPPPO = alg_class(
             policy,
-            discriminator,
-            amp_data,
-            amp_normalizer,
+            discriminator_loco,
+            amp_data_loco,
+            amp_normalizer_loco,
+            recovery_discriminator=discriminator_recovery,
+            recovery_amp_data=amp_data_recovery,
+            recovery_amp_normalizer=amp_normalizer_recovery,
             device=self.device,
             min_std=min_std,
             **self.alg_cfg,
@@ -241,6 +264,10 @@ class RENetAmpOnPolicyRunner:
             # Rollout
             with torch.inference_mode():
                 for _ in range(self.num_steps_per_env):
+                    # Capture mode before the action. The transition produced
+                    # by this action must never be classified using a mode that
+                    # may change inside env.step().
+                    recovery_mask_t = self._get_recovery_mask_t()
                     # Sample actions
                     actions = self.alg.act(obs, privileged_obs, amp_obs)
                     # Step the environment
@@ -301,11 +328,11 @@ class RENetAmpOnPolicyRunner:
                             terminal_amp_states,
                         )
 
-                    rewards = self.alg.discriminator.predict_amp_reward(
+                    rewards = self.alg.predict_routed_amp_reward(
                         amp_obs,
                         next_amp_obs_with_term,
                         rewards,
-                        normalizer=self.alg.amp_normalizer,
+                        recovery_mask_t,
                     )[0]
 
                     # Start the next rollout transition from the post-reset states.
@@ -317,6 +344,7 @@ class RENetAmpOnPolicyRunner:
                         dones,
                         infos,
                         next_amp_obs_with_term,
+                        recovery_mask_t,
                     )
 
                     # Extract intrinsic rewards (only for logging)
@@ -507,8 +535,11 @@ class RENetAmpOnPolicyRunner:
         saved_dict = {
             "model_state_dict": self.alg.policy.state_dict(),
             "optimizer_state_dict": self.alg.optimizer.state_dict(),
-            "discriminator_state_dict": self.alg.discriminator.state_dict(),
-            "amp_normalizer": self.alg.amp_normalizer,
+            # Legacy keys continue to represent locomotion AMP.
+            "discriminator_state_dict": self.alg.discriminator_loco.state_dict(),
+            "amp_normalizer": self.alg.amp_normalizer_loco,
+            "recovery_discriminator_state_dict": self.alg.discriminator_recovery.state_dict(),
+            "recovery_amp_normalizer": self.alg.amp_normalizer_recovery,
             "iter": self.current_learning_iteration,
             "infos": infos,
         }
@@ -532,8 +563,23 @@ class RENetAmpOnPolicyRunner:
         loaded_dict = torch.load(path, weights_only=False)
         # -- Load model
         resumed_training = self.alg.policy.load_state_dict(loaded_dict["model_state_dict"])
-        self.alg.discriminator.load_state_dict(loaded_dict["discriminator_state_dict"])
-        self.alg.amp_normalizer = loaded_dict["amp_normalizer"]
+        self.alg.discriminator_loco.load_state_dict(loaded_dict["discriminator_state_dict"])
+        self.alg.amp_normalizer_loco = loaded_dict["amp_normalizer"]
+        self.alg.amp_normalizer = self.alg.amp_normalizer_loco
+        if "recovery_discriminator_state_dict" in loaded_dict:
+            self.alg.discriminator_recovery.load_state_dict(loaded_dict["recovery_discriminator_state_dict"])
+        else:
+            warnings.warn(
+                "Checkpoint has no recovery_discriminator_state_dict; recovery discriminator remains newly initialized.",
+                stacklevel=2,
+            )
+        if "recovery_amp_normalizer" in loaded_dict:
+            self.alg.amp_normalizer_recovery = loaded_dict["recovery_amp_normalizer"]
+        else:
+            warnings.warn(
+                "Checkpoint has no recovery_amp_normalizer; recovery AMP normalizer remains newly initialized.",
+                stacklevel=2,
+            )
         # -- Load RND model if used
         if self.alg.rnd:
             self.alg.rnd.load_state_dict(loaded_dict["rnd_state_dict"])
@@ -550,12 +596,25 @@ class RENetAmpOnPolicyRunner:
                 # is not loaded, as the observation space could differ from the previous rl training.
                 self.privileged_obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
         # -- load optimizer if used
-        if load_optimizer and resumed_training:
+        checkpoint_has_recovery_amp = "recovery_discriminator_state_dict" in loaded_dict
+        if load_optimizer and resumed_training and checkpoint_has_recovery_amp:
             # -- algorithm optimizer
-            self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
-            # -- RND optimizer if used
-            if self.alg.rnd:
-                self.alg.rnd_optimizer.load_state_dict(loaded_dict["rnd_optimizer_state_dict"])
+            try:
+                self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
+            except ValueError as error:
+                warnings.warn(
+                    f"Could not restore optimizer state ({error}); using the newly initialized optimizer.",
+                    stacklevel=2,
+                )
+        elif load_optimizer and resumed_training:
+            warnings.warn(
+                "Legacy checkpoint optimizer state does not contain recovery AMP parameter groups; "
+                "using the newly initialized optimizer.",
+                stacklevel=2,
+            )
+        # -- RND optimizer is independent of the AMP optimizer groups.
+        if load_optimizer and resumed_training and self.alg.rnd:
+            self.alg.rnd_optimizer.load_state_dict(loaded_dict["rnd_optimizer_state_dict"])
         # -- load current learning iteration
         if resumed_training:
             self.current_learning_iteration = loaded_dict["iter"]
@@ -577,7 +636,8 @@ class RENetAmpOnPolicyRunner:
     def train_mode(self):
         # -- PPO
         self.alg.policy.train()
-        self.alg.discriminator.train()
+        self.alg.discriminator_loco.train()
+        self.alg.discriminator_recovery.train()
         # -- RND
         if self.alg.rnd:
             self.alg.rnd.train()
@@ -589,7 +649,8 @@ class RENetAmpOnPolicyRunner:
     def eval_mode(self):
         # -- PPO
         self.alg.policy.eval()
-        self.alg.discriminator.eval()
+        self.alg.discriminator_loco.eval()
+        self.alg.discriminator_recovery.eval()
         # -- RND
         if self.alg.rnd:
             self.alg.rnd.eval()
@@ -604,6 +665,31 @@ class RENetAmpOnPolicyRunner:
     """
     Helper functions.
     """
+
+    def _get_recovery_mask_t(self):
+        """Read the action-time recovery mode, defaulting to all locomotion."""
+        mask = None
+        if hasattr(self.env, "get_recovery_mask"):
+            mask = self.env.get_recovery_mask()
+        elif hasattr(self.env, "recovery_mask"):
+            mask = self.env.recovery_mask
+        elif hasattr(self.env, "unwrapped") and hasattr(self.env.unwrapped, "get_recovery_mask"):
+            mask = self.env.unwrapped.get_recovery_mask()
+        elif hasattr(self.env, "unwrapped") and hasattr(self.env.unwrapped, "recovery_mask"):
+            mask = self.env.unwrapped.recovery_mask
+
+        if mask is None:
+            return torch.zeros(self.env.num_envs, dtype=torch.bool, device=self.device)
+        if not isinstance(mask, torch.Tensor):
+            raise TypeError("Environment recovery mask must be a torch.Tensor.")
+        mask = mask.to(device=self.device)
+        if mask.dtype != torch.bool:
+            raise TypeError(f"Environment recovery mask must have dtype bool, got {mask.dtype}.")
+        if mask.shape != (self.env.num_envs,):
+            raise ValueError(
+                f"Environment recovery mask must have shape ({self.env.num_envs},), got {tuple(mask.shape)}."
+            )
+        return mask.clone()
 
     def _configure_multi_gpu(self):
         """Configure multi-gpu training."""

@@ -4,20 +4,28 @@
 
 """Replay a G1 visualization trajectory and optionally save AMP expert frames.
 
-By default, playback uses the exact ``FrameDuration`` stored in the input
-visualization file. Passing ``--fps`` explicitly performs temporal resampling at
+By default, playback uses the exact `FrameDuration` stored in the input
+visualization file. Passing `--fps` explicitly performs temporal resampling at
 that target rate.
+
+During playback, the terminal displays:
+- output frame index
+- corresponding source frame index
+- current playback time
+- total motion duration
+
+This is useful for manually identifying recovery clip boundaries.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 import numpy as np
+
 
 # Ensure the repository-local rsl_rl package has priority.
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -25,15 +33,38 @@ LOCAL_RSL_RL_PATH = (CURRENT_DIR / "../../rsl_rl").resolve()
 if str(LOCAL_RSL_RL_PATH) not in sys.path:
     sys.path.insert(0, str(LOCAL_RSL_RL_PATH))
 
+
 # Isaac/Omniverse modules must not be imported before AppLauncher starts.
 from isaaclab.app import AppLauncher
 
 
-parser = argparse.ArgumentParser(description="Replay a G1 motion and generate AMP expert data.")
-parser.add_argument("--task", type=str, required=True, help="Registered G1 task name.")
-parser.add_argument("--num_envs", type=int, default=1, help="Number of environments. Saving requires 1.")
-parser.add_argument("--seed", type=int, default=None, help="Optional scene seed override.")
-parser.add_argument("--save_path", type=str, default=None, help="Output AMP expert JSON/TXT path.")
+parser = argparse.ArgumentParser(
+    description="Replay a G1 motion and generate AMP expert data."
+)
+parser.add_argument(
+    "--task",
+    type=str,
+    required=True,
+    help="Registered G1 task name.",
+)
+parser.add_argument(
+    "--num_envs",
+    type=int,
+    default=1,
+    help="Number of environments. Saving requires 1.",
+)
+parser.add_argument(
+    "--seed",
+    type=int,
+    default=None,
+    help="Optional scene seed override.",
+)
+parser.add_argument(
+    "--save_path",
+    type=str,
+    default=None,
+    help="Output AMP expert JSON/TXT path.",
+)
 parser.add_argument(
     "--fps",
     type=float,
@@ -46,6 +77,17 @@ parser.add_argument(
     default=0.5,
     help="MotionWeight written to the generated AMP expert file.",
 )
+parser.add_argument(
+    "--clip_ranges",
+    type=str,
+    default=None,
+    help=(
+        "Optional comma-separated time ranges to crop, e.g. "
+        "'12.9-18.65,28.5-34.4,40.1-44.8'. "
+        "Each range is saved as an independent AMP motion file."
+    ),
+)
+
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -54,6 +96,7 @@ if args_cli.task is not None and "sensor" in args_cli.task:
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
+
 
 # Safe to import simulation-dependent project modules after launching the app.
 from legged_lab.envs import *  # noqa: F401,F403,E402
@@ -85,10 +128,18 @@ def _disable_generation_randomization(env_cfg) -> None:
         _set_if_present(camera, "add_camera", False)
 
         left_feet_ray_caster = getattr(scene, "left_feet_ray_caster", None)
-        _set_if_present(left_feet_ray_caster, "add_left_feet_ray_caster", False)
+        _set_if_present(
+            left_feet_ray_caster,
+            "add_left_feet_ray_caster",
+            False,
+        )
 
         right_feet_ray_caster = getattr(scene, "right_feet_ray_caster", None)
-        _set_if_present(right_feet_ray_caster, "add_right_feet_ray_caster", False)
+        _set_if_present(
+            right_feet_ray_caster,
+            "add_right_feet_ray_caster",
+            False,
+        )
 
     domain_rand = getattr(env_cfg, "domain_rand", None)
     events = getattr(domain_rand, "events", None)
@@ -116,7 +167,9 @@ def _write_motion_file(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if frames.ndim != 2 or frames.shape[1] != 58:
-        raise ValueError(f"Expected AMP expert data with shape (T, 58), got {frames.shape}.")
+        raise ValueError(
+            f"Expected AMP expert data with shape (T, 58), got {frames.shape}."
+        )
     if not np.isfinite(frames).all():
         raise ValueError("Generated AMP expert frames contain NaN or Inf values.")
 
@@ -136,9 +189,107 @@ def _write_motion_file(
     print(
         f"Saved AMP expert motion to '{output_path}': "
         f"frames={frames.shape[0]}, dim={frames.shape[1]}, "
-        f"FrameDuration={frame_duration:.9f}, fps={1.0 / frame_duration:.6f}."
+        f"FrameDuration={frame_duration:.9f}, "
+        f"fps={1.0 / frame_duration:.6f}."
     )
 
+
+
+def _parse_clip_ranges(
+    clip_ranges: str | None,
+    source_duration: float,
+) -> list[tuple[float, float]]:
+    """Parse --clip_ranges into validated (start_time, end_time) pairs."""
+    if clip_ranges is None or not clip_ranges.strip():
+        return []
+
+    ranges: list[tuple[float, float]] = []
+
+    for item in clip_ranges.split(","):
+        item = item.strip()
+        if not item:
+            continue
+
+        parts = item.split("-")
+        if len(parts) != 2:
+            raise ValueError(
+                f"Invalid clip range '{item}'. "
+                "Expected format like '12.9-18.65,28.5-34.4'."
+            )
+
+        try:
+            start_time = float(parts[0].strip())
+            end_time = float(parts[1].strip())
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid numeric clip range '{item}'."
+            ) from exc
+
+        if not np.isfinite(start_time) or not np.isfinite(end_time):
+            raise ValueError(f"Clip range must be finite, got '{item}'.")
+        if start_time < 0.0:
+            raise ValueError(
+                f"Clip start time must be >= 0, got {start_time}."
+            )
+        if end_time <= start_time:
+            raise ValueError(
+                f"Clip end time must be greater than start time, got '{item}'."
+            )
+        if end_time > source_duration + 1e-8:
+            raise ValueError(
+                f"Clip '{item}' exceeds source duration "
+                f"{source_duration:.6f} s."
+            )
+
+        ranges.append((start_time, end_time))
+
+    if not ranges:
+        raise ValueError("--clip_ranges was provided but no valid ranges were found.")
+
+    return ranges
+
+
+def _make_clip_sample_times(
+    start_time: float,
+    end_time: float,
+    frame_duration: float,
+) -> np.ndarray:
+    """Generate timestamps inside one crop range without sampling beyond it."""
+    clip_duration = end_time - start_time
+
+    num_regular_frames = (
+        int(np.floor(clip_duration / frame_duration + 1e-9)) + 1
+    )
+    sample_times = (
+        start_time
+        + np.arange(num_regular_frames, dtype=np.float64) * frame_duration
+    )
+
+    # Preserve the requested end point if it does not lie exactly on the
+    # sampling grid. This makes manual time-based cropping intuitive.
+    if end_time - sample_times[-1] > 1e-8:
+        sample_times = np.concatenate(
+            [sample_times, np.array([end_time], dtype=np.float64)]
+        )
+
+    return np.minimum(sample_times, end_time)
+
+
+def _clip_save_path(
+    save_path: str,
+    clip_index: int,
+    num_clips: int,
+) -> str:
+    """Create an independent output path for each cropped clip."""
+    path = Path(save_path).expanduser()
+
+    if num_clips == 1:
+        return str(path)
+
+    suffix = path.suffix
+    stem = path.stem
+    clip_name = f"{stem}_{clip_index:02d}{suffix}"
+    return str(path.with_name(clip_name))
 
 def play_amp_animation() -> None:
     env_cfg, agent_cfg = task_registry.get_cfgs(args_cli.task)
@@ -149,6 +300,7 @@ def play_amp_animation() -> None:
     env_cfg.scene.env_spacing = 2.5
     env_cfg.scene.terrain_generator = None
     env_cfg.scene.terrain_type = "plane"
+
     if hasattr(env_cfg, "commands"):
         _set_if_present(env_cfg.commands, "debug_vis", False)
 
@@ -159,62 +311,183 @@ def play_amp_animation() -> None:
     _set_if_present(env_cfg.scene, "seed", scene_seed)
 
     if args_cli.save_path and int(args_cli.num_envs) != 1:
-        raise ValueError("Generating one AMP expert trajectory requires --num_envs=1.")
+        raise ValueError(
+            "Generating one AMP expert trajectory requires --num_envs=1."
+        )
 
     env_class = task_registry.get_task_class(args_cli.task)
     env = env_class(env_cfg, args_cli.headless)
 
-    source_num_frames = int(env.amp_loader_display.trajectory_num_frames[0])
-    source_frame_duration = float(env.amp_loader_display.trajectory_frame_durations[0])
-    source_duration = float(env.amp_loader_display.trajectory_lens[0])
+    source_num_frames = int(
+        env.amp_loader_display.trajectory_num_frames[0]
+    )
+    source_frame_duration = float(
+        env.amp_loader_display.trajectory_frame_durations[0]
+    )
+    source_duration = float(
+        env.amp_loader_display.trajectory_lens[0]
+    )
 
     if source_num_frames < 2:
-        raise ValueError("The source motion must contain at least two frames.")
+        raise ValueError(
+            "The source motion must contain at least two frames."
+        )
 
     if args_cli.fps is None:
         output_frame_duration = source_frame_duration
-        sample_times = np.arange(source_num_frames, dtype=np.float64) * source_frame_duration
     else:
         if not np.isfinite(args_cli.fps) or args_cli.fps <= 0.0:
-            raise ValueError(f"--fps must be positive and finite, got {args_cli.fps}.")
+            raise ValueError(
+                f"--fps must be positive and finite, got {args_cli.fps}."
+            )
         output_frame_duration = 1.0 / float(args_cli.fps)
-        # Include t=0 and the final source time without sampling beyond it.
-        output_num_frames = int(np.floor(source_duration / output_frame_duration + 1e-9)) + 1
-        sample_times = np.arange(output_num_frames, dtype=np.float64) * output_frame_duration
-        sample_times = np.minimum(sample_times, source_duration)
 
-    print(
-        "Starting G1 motion playback: "
-        f"source_frames={source_num_frames}, source_fps={1.0 / source_frame_duration:.6f}, "
-        f"output_frames={len(sample_times)}, output_fps={1.0 / output_frame_duration:.6f}."
+    clip_ranges = _parse_clip_ranges(
+        args_cli.clip_ranges,
+        source_duration=source_duration,
     )
 
-    all_frames: list[np.ndarray] = []
-    for frame_index, sample_time in enumerate(sample_times):
-        if not simulation_app.is_running():
-            print(f"Simulation stopped after {frame_index} frames.")
-            break
+    # No crop ranges: preserve the original full-motion behavior.
+    if not clip_ranges:
+        if args_cli.fps is None:
+            sample_times = (
+                np.arange(source_num_frames, dtype=np.float64)
+                * source_frame_duration
+            )
+        else:
+            output_num_frames = (
+                int(
+                    np.floor(
+                        source_duration / output_frame_duration + 1e-9
+                    )
+                )
+                + 1
+            )
+            sample_times = (
+                np.arange(output_num_frames, dtype=np.float64)
+                * output_frame_duration
+            )
+            sample_times = np.minimum(sample_times, source_duration)
 
-        frame = env.visualize_motion(float(sample_time))
+        playback_ranges = [(0.0, source_duration, sample_times)]
+    else:
+        playback_ranges = [
+            (
+                start_time,
+                end_time,
+                _make_clip_sample_times(
+                    start_time,
+                    end_time,
+                    output_frame_duration,
+                ),
+            )
+            for start_time, end_time in clip_ranges
+        ]
+
+    print(
+        "Starting G1 motion playback:\n"
+        f"  source_frames     = {source_num_frames}\n"
+        f"  source_fps        = {1.0 / source_frame_duration:.6f}\n"
+        f"  source_duration   = {source_duration:.6f} s\n"
+        f"  output_fps        = {1.0 / output_frame_duration:.6f}\n"
+        f"  crop_ranges       = {len(clip_ranges)}\n"
+    )
+
+    if clip_ranges:
+        print("Selected crop ranges:")
+        for clip_index, (start_time, end_time) in enumerate(
+            clip_ranges, start=1
+        ):
+            print(
+                f"  clip {clip_index:02d}: "
+                f"{start_time:.3f} -> {end_time:.3f} s "
+                f"({end_time - start_time:.3f} s)"
+            )
+        print()
+
+    num_playback_ranges = len(playback_ranges)
+
+    for clip_index, (start_time, end_time, sample_times) in enumerate(
+        playback_ranges,
+        start=1,
+    ):
+        total_output_frames = len(sample_times)
+        all_frames: list[np.ndarray] = []
+
+        if clip_ranges:
+            print(
+                f"\nPlaying clip {clip_index:02d}/{num_playback_ranges}: "
+                f"{start_time:.3f} -> {end_time:.3f} s"
+            )
+
+        for frame_index, sample_time in enumerate(sample_times):
+            if not simulation_app.is_running():
+                print(
+                    f"\nSimulation stopped after {frame_index} frames "
+                    f"in clip {clip_index}."
+                )
+                break
+
+            source_frame_index = int(
+                round(float(sample_time) / source_frame_duration)
+            )
+            source_frame_index = min(
+                max(source_frame_index, 0),
+                source_num_frames - 1,
+            )
+
+            if clip_ranges:
+                prefix = f"Clip {clip_index:02d} | "
+            else:
+                prefix = ""
+
+            print(
+                "\r"
+                f"{prefix}"
+                f"Output Frame: "
+                f"{frame_index:5d}/{total_output_frames - 1:5d} | "
+                f"Source Frame: "
+                f"{source_frame_index:5d}/{source_num_frames - 1:5d} | "
+                f"Time: "
+                f"{float(sample_time):8.3f}/{source_duration:8.3f} s",
+                end="",
+                flush=True,
+            )
+
+            frame = env.visualize_motion(float(sample_time))
+
+            if args_cli.save_path:
+                frame_np = frame.detach().cpu().numpy()
+
+                if frame_np.shape != (1, 58):
+                    raise ValueError(
+                        "env.visualize_motion() must return shape (1, 58) "
+                        "for full G1 23-DoF AMP, "
+                        f"but returned {frame_np.shape}."
+                    )
+
+                all_frames.append(frame_np[0].copy())
+
+        print()
 
         if args_cli.save_path:
-            frame_np = frame.detach().cpu().numpy()
-            if frame_np.shape != (1, 58):
-                raise ValueError(
-                    "env.visualize_motion() must return shape (1, 58) for full G1 23-DoF AMP, "
-                    f"but returned {frame_np.shape}."
+            if not all_frames:
+                raise RuntimeError(
+                    f"No AMP expert frames were generated for clip {clip_index}."
                 )
-            all_frames.append(frame_np[0].copy())
 
-    if args_cli.save_path:
-        if not all_frames:
-            raise RuntimeError("No AMP expert frames were generated.")
-        _write_motion_file(
-            save_path=args_cli.save_path,
-            frames=np.stack(all_frames, axis=0),
-            frame_duration=output_frame_duration,
-            motion_weight=args_cli.motion_weight,
-        )
+            current_save_path = _clip_save_path(
+                save_path=args_cli.save_path,
+                clip_index=clip_index,
+                num_clips=num_playback_ranges,
+            )
+
+            _write_motion_file(
+                save_path=current_save_path,
+                frames=np.stack(all_frames, axis=0),
+                frame_duration=output_frame_duration,
+                motion_weight=args_cli.motion_weight,
+            )
 
 
 if __name__ == "__main__":

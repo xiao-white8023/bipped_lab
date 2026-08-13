@@ -632,4 +632,23 @@ class G1RENETAGENTCFG:
     '''
     amp_task_reward_lerp = 0.7  # 这是一个惩罚机制。它把“任务奖励”和“动作质量”挂钩了 
     amp_discr_hidden_dims = [1024, 512, 256]
+
+    # Recovery expert frames are discriminator-only data. They must never be
+    # used as environment reset states.
+    recovery_amp_motion_files = [
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_no_ankle/"
+        "fallAndGetUp2_subject2_crop_01.txt",
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_no_ankle/"
+        "fallAndGetUp2_subject2_crop_02.txt",
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_no_ankle/"
+        "fallAndGetUp2_subject2_crop_03.txt",
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_no_ankle/"
+        "fallAndGetUp2_subject2_crop_04.txt",
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_no_ankle/"
+        "fallAndGetUp2_subject2_crop_05.txt",
+    ]
+    recovery_amp_num_preload_transitions = 200000
+    recovery_amp_reward_coef = 0.3
+    recovery_amp_task_reward_lerp = 0.7
+    recovery_amp_discr_hidden_dims = [1024, 512, 256]
     min_normalized_std = [0.05] * 23

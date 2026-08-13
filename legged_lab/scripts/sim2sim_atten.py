@@ -365,7 +365,7 @@ class G1AttenMujocoRunner(G1RoughMujocoRunner):
 
         debug_counter = 0
         try:
-            while self.viewer.is_running() and self.data.time < self.cfg.sim.sim_duration:
+            while self.viewer.is_running():
                 if self.update_command_from_joystick():
                     break
 

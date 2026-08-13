@@ -792,7 +792,7 @@ class G1RENetMujocoRunner:
         ax0 = self.apply_deadzone(self.joystick.get_axis_value(0))
         ax3 = self.apply_deadzone(self.joystick.get_axis_value(3))
 
-        self.command_vel[0] = np.clip(-ax1 * 1.0, *self.cfg.command.lin_vel_x)
+        self.command_vel[0] = np.clip(-ax1 * 1, *self.cfg.command.lin_vel_x)
         self.command_vel[1] = np.clip(-ax0 * 0.5, *self.cfg.command.lin_vel_y)
         self.command_vel[2] = np.clip(-ax3 * 1.57, *self.cfg.command.ang_vel_z)
         depth_noise_active = self.estimator == "vp" and self.joystick.is_button_pressed(JoystickButton.Y)
