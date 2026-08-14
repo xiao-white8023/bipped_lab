@@ -260,9 +260,10 @@ class AMPPPO:
 
         # Bootstrapping on time outs
         if "time_outs" in infos:
-            self.transition.rewards += self.gamma * torch.squeeze(
-                self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
-            )
+            self.transition.time_outs = infos["time_outs"].to(self.device).clone().bool()
+        else:
+            self.transition.time_outs = torch.zeros_like(dones, dtype=torch.bool, device=self.device)
+        self._apply_timeout_bootstrap()
 
         # record the transition
         self._store_amp_transition(self.amp_transition.observations, amp_obs, recovery_mask_t)
@@ -270,6 +271,12 @@ class AMPPPO:
         self.transition.clear()
         self.amp_transition.clear()
         self.policy.reset(dones)
+
+    def _apply_timeout_bootstrap(self):
+        """Apply the legacy PPO truncation correction using action-time V(s_t)."""
+        self.transition.rewards += self.gamma * torch.squeeze(
+            self.transition.values * self.transition.time_outs.unsqueeze(1), 1
+        )
 
     def _store_amp_transition(self, amp_obs, next_amp_obs, recovery_mask_t=None):
         """Store one AMP transition batch.
@@ -355,6 +362,41 @@ class AMPPPO:
         normalizer_updates = [] if normalizer_update is None else [normalizer_update]
         return total_loss, metrics, normalizer_updates
 
+    def _rollout_mini_batch_generator(self):
+        if self.policy.is_recurrent:
+            return self.storage.recurrent_mini_batch_generator(
+                self.num_mini_batches, self.num_learning_epochs
+            )
+        return self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+
+    @staticmethod
+    def _compute_surrogate_loss(surrogate, surrogate_clipped, rollout_data=None, ratio=None):
+        del rollout_data, ratio
+        return torch.max(surrogate, surrogate_clipped).mean()
+
+    def _compute_value_losses(
+        self,
+        value_batch,
+        target_values_batch,
+        returns_batch,
+        critic_obs_batch,
+        rollout_data=None,
+    ):
+        del critic_obs_batch, rollout_data
+        if self.use_clipped_value_loss:
+            value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(
+                -self.clip_param, self.clip_param
+            )
+            value_losses = (value_batch - returns_batch).pow(2)
+            value_losses_clipped = (value_clipped - returns_batch).pow(2)
+            value_loss = torch.max(value_losses, value_losses_clipped).mean()
+        else:
+            value_loss = (returns_batch - value_batch).pow(2).mean()
+        return value_loss, value_batch.sum() * 0.0, {}
+
+    def _parameters_for_gradient_clipping(self):
+        return self.policy.parameters()
+
     @staticmethod
     def _update_amp_normalizers(normalizer_updates):
         for normalizer, policy_state, expert_state in normalizer_updates:
@@ -366,6 +408,7 @@ class AMPPPO:
         mean_surrogate_loss = 0
         mean_entropy = 0
         amp_metric_sums = {}
+        value_metric_sums = {}
         # -- RND loss
         if self.rnd:
             mean_rnd_loss = 0
@@ -395,10 +438,7 @@ class AMPPPO:
         )
 
         # generator for mini batches
-        if self.policy.is_recurrent:
-            generator = self.storage.recurrent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
-        else:
-            generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs) # 分成4个批次 每一个批次利用5轮
+        generator = self._rollout_mini_batch_generator()
 
         num_updates = self.num_learning_epochs * self.num_mini_batches
         amp_mini_batch_size = self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches
@@ -406,6 +446,10 @@ class AMPPPO:
 
         # iterate over batches
         for sample, sample_amp in zip(generator, amp_generator):
+            rollout_data = None
+            if isinstance(sample[-1], dict):
+                rollout_data = sample[-1]
+                sample = sample[:-1]
             (
                 obs_batch,
                 critic_obs_batch,
@@ -452,6 +496,11 @@ class AMPPPO:
                 target_values_batch = target_values_batch.repeat(num_aug, 1)
                 advantages_batch = advantages_batch.repeat(num_aug, 1)
                 returns_batch = returns_batch.repeat(num_aug, 1)
+                if rollout_data is not None:
+                    rollout_data = {
+                        key: value.repeat(num_aug, *([1] * (value.ndim - 1)))
+                        for key, value in rollout_data.items()
+                    }
 
             # Recompute actions log prob and entropy for current batch of transitions
             # Note: we need to do this because we updated the policy with the new parameters
@@ -509,20 +558,24 @@ class AMPPPO:
             surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(
                 ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
             )
-            surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
+            surrogate_loss = self._compute_surrogate_loss(
+                surrogate, surrogate_clipped, rollout_data, ratio
+            )
 
             # Value function loss
-            if self.use_clipped_value_loss:
-                value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(
-                    -self.clip_param, self.clip_param
-                )
-                value_losses = (value_batch - returns_batch).pow(2)
-                value_losses_clipped = (value_clipped - returns_batch).pow(2)
-                value_loss = torch.max(value_losses, value_losses_clipped).mean()
-            else:
-                value_loss = (returns_batch - value_batch).pow(2).mean()
+            value_loss, auxiliary_value_loss, value_metrics = self._compute_value_losses(
+                value_batch,
+                target_values_batch,
+                returns_batch,
+                critic_obs_batch,
+                rollout_data,
+            )
 
-            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
+            loss = (
+                surrogate_loss
+                + self.value_loss_coef * (value_loss + auxiliary_value_loss)
+                - self.entropy_coef * entropy_batch.mean()
+            )
 
             vel_loss = torch.tensor(0.0, device=self.device)
             op_vel_loss = torch.tensor(0.0, device=self.device)
@@ -654,7 +707,7 @@ class AMPPPO:
 
             # Apply the gradients
             # -- For PPO
-            nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+            nn.utils.clip_grad_norm_(self._parameters_for_gradient_clipping(), self.max_grad_norm)
             self.optimizer.step()
             # -- For RND
             if self.rnd_optimizer:
@@ -670,6 +723,10 @@ class AMPPPO:
                 if isinstance(value, torch.Tensor):
                     value = value.item()
                 amp_metric_sums[key] = amp_metric_sums.get(key, 0.0) + value
+            for key, value in value_metrics.items():
+                if isinstance(value, torch.Tensor):
+                    value = value.item()
+                value_metric_sums[key] = value_metric_sums.get(key, 0.0) + value
             mean_vel_loss += vel_loss.item()
             mean_op_vel_loss += op_vel_loss.item()
             mean_vp_vel_loss += vp_vel_loss.item()
@@ -696,6 +753,7 @@ class AMPPPO:
             mean_symmetry_loss /= num_updates
         # -- Clear the storage
         amp_metrics = {key: value / num_updates for key, value in amp_metric_sums.items()}
+        value_metrics = {key: value / num_updates for key, value in value_metric_sums.items()}
         mean_vel_loss /= num_updates
         mean_op_vel_loss /= num_updates
         mean_vp_vel_loss /= num_updates
@@ -712,6 +770,7 @@ class AMPPPO:
             "entropy": mean_entropy,
         }
         loss_dict.update(amp_metrics)
+        loss_dict.update(value_metrics)
         if self.rnd:
             loss_dict["rnd"] = mean_rnd_loss
         if self.symmetry:

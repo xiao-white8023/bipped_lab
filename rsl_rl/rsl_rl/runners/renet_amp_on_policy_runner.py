@@ -17,6 +17,7 @@ from rsl_rl.modules import (
     EmpiricalNormalization,
     MhaActorCritic,
     RENetActorCritic,
+    RecoveryCritic,
 )
 from rsl_rl.utils import AMPLoader, Normalizer, store_code_state
 
@@ -61,11 +62,18 @@ class RENetAmpOnPolicyRunner:
         '''
         # evaluate the policy class
         policy_class = eval(self.policy_cfg.pop("class_name"))
+        policy_activation = self.policy_cfg.get("activation", "elu")
         if "CnnMlp" in self.policy_cfg and isinstance(self.policy_cfg["CnnMlp"], dict):
             self.policy_cfg["CnnMlp"].pop("num_heads", None)
             self.policy_cfg["CnnMlp"].pop("embed_dim", None)
         policy: ActorCritic | MhaActorCritic | RENetActorCritic = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
+        ).to(self.device)
+        recovery_critic_hidden_dims = self.alg_cfg.pop("recovery_critic_hidden_dims", [512, 256])
+        recovery_critic = RecoveryCritic(
+            num_critic_obs=num_privileged_obs,
+            hidden_dims=recovery_critic_hidden_dims,
+            activation=policy_activation,
         ).to(self.device)
 
         # resolve dimension of rnd gated state
@@ -156,6 +164,8 @@ class RENetAmpOnPolicyRunner:
             recovery_discriminator=discriminator_recovery,
             recovery_amp_data=amp_data_recovery,
             recovery_amp_normalizer=amp_normalizer_recovery,
+            recovery_critic=recovery_critic,
+            recovery_state_machine_enabled=bool(getattr(self.env.cfg.recovery, "enable", False)),
             device=self.device,
             min_std=min_std,
             **self.alg_cfg,
@@ -461,6 +471,9 @@ class RENetAmpOnPolicyRunner:
         for key, value in locs["loss_dict"].items():
             self.writer.add_scalar(f"Loss/{key}", value, locs["it"])
         self.writer.add_scalar("Loss/learning_rate", self.alg.learning_rate, locs["it"])
+        if hasattr(self.alg, "get_recovery_learning_diagnostics"):
+            for key, value in self.alg.get_recovery_learning_diagnostics().items():
+                self.writer.add_scalar(key, value, locs["it"])
 
         # -- Policy
         self.writer.add_scalar("Policy/mean_noise_std", mean_std.item(), locs["it"])
@@ -540,6 +553,7 @@ class RENetAmpOnPolicyRunner:
             "amp_normalizer": self.alg.amp_normalizer_loco,
             "recovery_discriminator_state_dict": self.alg.discriminator_recovery.state_dict(),
             "recovery_amp_normalizer": self.alg.amp_normalizer_recovery,
+            "recovery_critic_state_dict": self.alg.recovery_critic.state_dict(),
             "iter": self.current_learning_iteration,
             "infos": infos,
         }
@@ -580,6 +594,13 @@ class RENetAmpOnPolicyRunner:
                 "Checkpoint has no recovery_amp_normalizer; recovery AMP normalizer remains newly initialized.",
                 stacklevel=2,
             )
+        if "recovery_critic_state_dict" in loaded_dict:
+            self.alg.recovery_critic.load_state_dict(loaded_dict["recovery_critic_state_dict"])
+        else:
+            warnings.warn(
+                "Checkpoint has no recovery_critic_state_dict; all three Recovery critics remain newly initialized.",
+                stacklevel=2,
+            )
         # -- Load RND model if used
         if self.alg.rnd:
             self.alg.rnd.load_state_dict(loaded_dict["rnd_state_dict"])
@@ -597,7 +618,8 @@ class RENetAmpOnPolicyRunner:
                 self.privileged_obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
         # -- load optimizer if used
         checkpoint_has_recovery_amp = "recovery_discriminator_state_dict" in loaded_dict
-        if load_optimizer and resumed_training and checkpoint_has_recovery_amp:
+        checkpoint_has_recovery_critic = "recovery_critic_state_dict" in loaded_dict
+        if load_optimizer and resumed_training and checkpoint_has_recovery_amp and checkpoint_has_recovery_critic:
             # -- algorithm optimizer
             try:
                 self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
@@ -608,7 +630,7 @@ class RENetAmpOnPolicyRunner:
                 )
         elif load_optimizer and resumed_training:
             warnings.warn(
-                "Legacy checkpoint optimizer state does not contain recovery AMP parameter groups; "
+                "Legacy checkpoint optimizer state does not contain all Recovery AMP/critic parameter groups; "
                 "using the newly initialized optimizer.",
                 stacklevel=2,
             )
@@ -638,6 +660,7 @@ class RENetAmpOnPolicyRunner:
         self.alg.policy.train()
         self.alg.discriminator_loco.train()
         self.alg.discriminator_recovery.train()
+        self.alg.recovery_critic.train()
         # -- RND
         if self.alg.rnd:
             self.alg.rnd.train()
@@ -651,6 +674,7 @@ class RENetAmpOnPolicyRunner:
         self.alg.policy.eval()
         self.alg.discriminator_loco.eval()
         self.alg.discriminator_recovery.eval()
+        self.alg.recovery_critic.eval()
         # -- RND
         if self.alg.rnd:
             self.alg.rnd.eval()

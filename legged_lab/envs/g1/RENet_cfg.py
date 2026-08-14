@@ -79,7 +79,7 @@ class RENetTrainCfg:
 
 @configclass
 class RecoveryStateMachineCfg:
-    """V1 shared-Recovery state machine; disabled until a Recovery actor exists."""
+    """V1 shared-Actor Recovery state machine."""
 
     enable: bool = False
     max_duration_s: float = 6.0
@@ -470,6 +470,10 @@ class CnnMlpCfg:
 
 @configclass
 class CustomRslRlPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
+    # Recovery reward composition is intentionally deferred. The networks and
+    # rollout data path are present, but actor/value learning stays disabled.
+    enable_recovery_learning: bool = False
+    recovery_critic_hidden_dims: list[int] = [512, 256]
     vel_estimation_warmup_iters:int=0
     vel_estimation_coef: float = 1.0
     terrain_recon_coef: float = 0.5
@@ -612,6 +616,8 @@ class G1RENETAGENTCFG:
         feet_height_warmup_iters=500,
         feet_height_dim=2,
         feet_height_in_critic_offset=83,
+        enable_recovery_learning=False,
+        recovery_critic_hidden_dims=[512, 256],
         terrain_recon_target_clip=1,
         terrain_recon_warmup_iters=500,
         vel_estimation_warmup_iters=0,

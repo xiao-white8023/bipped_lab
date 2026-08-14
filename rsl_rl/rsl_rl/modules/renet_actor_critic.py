@@ -15,10 +15,11 @@ class RENetActorCritic(nn.Module):
     """Training-side RENet actor-critic.
 
     Actor observations are expected to be:
-        proprio_history | depth_history_flat | estimator_mask
+        proprio_history | depth_history_flat | actor_mode
 
-    estimator_mask follows the paper convention used in the environment:
-        1 -> OP estimator, 0 -> VP estimator
+    The scalar actor mode preserves the original estimator convention and adds
+    Recovery without changing the observation or Actor MLP dimensions:
+        0 -> VP, 1 -> OP, 2 -> Recovery
     """
 
     is_recurrent = False
@@ -256,6 +257,7 @@ class RENetActorCritic(nn.Module):
         self._last_op_latent: Optional[torch.Tensor] = None
         self._last_vp_latent: Optional[torch.Tensor] = None
         self._last_estimator_mask: Optional[torch.Tensor] = None
+        self._last_actor_mode: Optional[torch.Tensor] = None
 
     def _build_mlp(self, input_dim, hidden_dims, activation_fn, output_dim):
         layers = []
@@ -312,12 +314,12 @@ class RENetActorCritic(nn.Module):
         depth_end = depth_start + self.depth_flat_dim
         depth_flat = observations[:, depth_start:depth_end]
         if self.estimator_mask_dim > 0:
-            estimator_mask = observations[:, depth_end : depth_end + self.estimator_mask_dim]
+            actor_mode = observations[:, depth_end : depth_end + self.estimator_mask_dim]
         else:
-            estimator_mask = torch.zeros(observations.shape[0], 1, device=observations.device)
-        estimator_mask = estimator_mask[:, :1].clamp(0.0, 1.0)
+            actor_mode = torch.zeros(observations.shape[0], 1, device=observations.device)
+        actor_mode = actor_mode[:, :1]
         current_proprio = proprio_history[:, -self.single_proprio_dim :]
-        return proprio_history, depth_flat, estimator_mask, current_proprio
+        return proprio_history, depth_flat, actor_mode, current_proprio
 
     def _embed_proprio_history(self, proprio_history: torch.Tensor):
         batch_size = proprio_history.shape[0]
@@ -374,7 +376,7 @@ class RENetActorCritic(nn.Module):
         return vp_features.view(batch_size, self.history_len, self.estimator_latent_dim)
 
     def _process_actor_obs(self, observations: torch.Tensor):
-        proprio_history, depth_flat, estimator_mask, current_proprio = self._split_actor_obs(observations)
+        proprio_history, depth_flat, actor_mode, current_proprio = self._split_actor_obs(observations)
 
         proprio_embed = self._embed_proprio_history(proprio_history)
         depth_embed = self._embed_depth_history(depth_flat)
@@ -387,10 +389,12 @@ class RENetActorCritic(nn.Module):
         op_latent = op_hidden[-1]
         vp_latent = vp_hidden[-1]
 
+        op_mask = (actor_mode == 1.0).to(op_latent.dtype)
+        vp_mask = (actor_mode == 0.0).to(vp_latent.dtype)
         renet_latent = torch.cat(
             [
-                op_latent * estimator_mask,
-                vp_latent * (1.0 - estimator_mask),
+                op_latent * op_mask,
+                vp_latent * vp_mask,
             ],
             dim=-1,
         )
@@ -399,7 +403,8 @@ class RENetActorCritic(nn.Module):
         self._last_current_proprio = current_proprio
         self._last_op_latent = op_latent
         self._last_vp_latent = vp_latent
-        self._last_estimator_mask = estimator_mask
+        self._last_estimator_mask = op_mask
+        self._last_actor_mode = actor_mode
         return actor_input
 
     def reset(self, dones=None):
@@ -457,7 +462,10 @@ class RENetActorCritic(nn.Module):
             return None
         op_vel = self.op_vel_estimator(self._last_op_latent)
         vp_vel = self.vp_vel_estimator(self._last_vp_latent)
-        active_vel = op_vel * self._last_estimator_mask + vp_vel * (1.0 - self._last_estimator_mask)
+        if self._last_actor_mode is None:
+            return None
+        vp_mask = (self._last_actor_mode == 0.0).to(vp_vel.dtype)
+        active_vel = op_vel * self._last_estimator_mask + vp_vel * vp_mask
         return {"op": op_vel, "vp": vp_vel, "active": active_vel}
 
     def predict_terrain(self):

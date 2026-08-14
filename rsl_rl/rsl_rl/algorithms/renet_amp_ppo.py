@@ -19,6 +19,9 @@ class RENetAMPPPO(AMPPPO):
         recovery_discriminator=None,
         recovery_amp_data=None,
         recovery_amp_normalizer=None,
+        recovery_critic=None,
+        recovery_state_machine_enabled: bool = False,
+        enable_recovery_learning: bool = False,
         **kwargs,
     ):
         # RENet grew out of the visual/MoE configs; these keys are irrelevant
@@ -52,8 +55,19 @@ class RENetAMPPPO(AMPPPO):
                 "RENetAMPPPO requires recovery_discriminator, recovery_amp_data, "
                 "and recovery_amp_normalizer."
             )
+        if recovery_critic is None:
+            raise ValueError("RENetAMPPPO requires a RecoveryCritic instance.")
+        if enable_recovery_learning and not recovery_state_machine_enabled:
+            raise ValueError(
+                "enable_recovery_learning=True requires the environment Recovery state machine to be enabled."
+            )
 
         super().__init__(*args, **kwargs)
+
+        self.recovery_state_machine_enabled = bool(recovery_state_machine_enabled)
+        self.enable_recovery_learning = bool(enable_recovery_learning)
+        self.recovery_critic = recovery_critic.to(self.device)
+        self._assert_independent_recovery_critics()
 
         # Explicit locomotion names plus legacy aliases kept by AMPPPO.
         self.discriminator_loco = self.discriminator
@@ -90,11 +104,34 @@ class RENetAMPPPO(AMPPPO):
                 "name": "recovery_amp_trunk",
             }
         )
+        self._last_recovery_learning_diagnostics = {
+            "RecoveryLearning/enabled": float(self.enable_recovery_learning),
+            "Rollout/loco_samples": 0.0,
+            "Rollout/recovery_samples": 0.0,
+            "Rollout/enter_recovery_count": 0.0,
+            "Rollout/exit_recovery_count": 0.0,
+            "Rollout/recovery_failed_count": 0.0,
+            "RecoveryValue/task_loss": 0.0,
+            "RecoveryValue/amp_loss": 0.0,
+            "RecoveryValue/reg_loss": 0.0,
+        }
+
+        # Deliberately deferred mechanisms (no thresholds, ramps, or delayed
+        # enable logic belong in this phase):
+        # TODO: Recovery PPO sample warm-up (on-policy samples only).
+        # TODO: D_REC AMP warm-up (Recovery AMP replay-buffer population).
+        # TODO: V_rec_amp warm-up (after D_REC rewards become trustworthy).
         self.optimizer.add_param_group(
             {
                 "params": self.discriminator_recovery.amp_linear.parameters(),
                 "weight_decay": 10e-2,
                 "name": "recovery_amp_head",
+            }
+        )
+        self.optimizer.add_param_group(
+            {
+                "params": self.recovery_critic.parameters(),
+                "name": "recovery_critic",
             }
         )
 
@@ -109,6 +146,19 @@ class RENetAMPPPO(AMPPPO):
                 (self.critic_history_len - 1) * self.single_critic_dim + self.feet_height_in_critic_offset
             )
 
+    def _assert_independent_recovery_critics(self):
+        parameter_ids = {
+            "task": {id(param) for param in self.recovery_critic.task_critic.parameters()},
+            "amp": {id(param) for param in self.recovery_critic.amp_critic.parameters()},
+            "reg": {id(param) for param in self.recovery_critic.reg_critic.parameters()},
+        }
+        if parameter_ids["task"] & parameter_ids["amp"]:
+            raise RuntimeError("Recovery task_critic and amp_critic share parameters.")
+        if parameter_ids["task"] & parameter_ids["reg"]:
+            raise RuntimeError("Recovery task_critic and reg_critic share parameters.")
+        if parameter_ids["amp"] & parameter_ids["reg"]:
+            raise RuntimeError("Recovery amp_critic and reg_critic share parameters.")
+
     def _validate_recovery_mask(self, recovery_mask_t, batch_size: int) -> torch.Tensor:
         if recovery_mask_t is None:
             return torch.zeros(batch_size, dtype=torch.bool, device=self.device)
@@ -122,6 +172,166 @@ class RENetAMPPPO(AMPPPO):
                 f"recovery_mask_t must have shape ({batch_size},), got {tuple(recovery_mask_t.shape)}."
             )
         return recovery_mask_t
+
+    def act(self, obs, critic_obs, amp_obs):
+        actions = super().act(obs, critic_obs, amp_obs)
+        if self.recovery_state_machine_enabled and self.enable_recovery_learning:
+            recovery_values = self.recovery_critic(critic_obs)
+            self.transition.recovery_task_value = recovery_values["task"].detach()
+            self.transition.recovery_amp_value = recovery_values["amp"].detach()
+            self.transition.recovery_reg_value = recovery_values["reg"].detach()
+        return actions
+
+    def _read_bool_transition_flag(self, infos, key: str, batch_size: int) -> torch.Tensor:
+        value = infos.get(key)
+        if value is None:
+            return torch.zeros(batch_size, dtype=torch.bool, device=self.device)
+        if not isinstance(value, torch.Tensor):
+            raise TypeError(f"infos['{key}'] must be a torch.Tensor.")
+        value = value.to(self.device)
+        if value.shape != (batch_size,):
+            raise ValueError(
+                f"infos['{key}'] must have shape ({batch_size},), got {tuple(value.shape)}."
+            )
+        return value.bool().clone()
+
+    def _read_recovery_reward_interface(self, infos, batch_size: int):
+        keys = (
+            "recovery_task_reward",
+            "recovery_amp_reward",
+            "recovery_reg_reward",
+        )
+        present = [key in infos for key in keys]
+        if any(present) and not all(present):
+            missing = [key for key, is_present in zip(keys, present) if not is_present]
+            raise RuntimeError(
+                "Recovery reward interface is partial; provide all three streams or none. Missing: "
+                + ", ".join(missing)
+            )
+        if not all(present):
+            zeros = torch.zeros(batch_size, dtype=torch.float, device=self.device)
+            return (zeros, zeros.clone(), zeros.clone()), torch.zeros(
+                batch_size, dtype=torch.bool, device=self.device
+            )
+
+        rewards = []
+        for key in keys:
+            reward = infos[key]
+            if not isinstance(reward, torch.Tensor):
+                raise TypeError(f"infos['{key}'] must be a torch.Tensor.")
+            reward = reward.to(self.device)
+            if reward.shape != (batch_size,):
+                raise ValueError(
+                    f"infos['{key}'] must have shape ({batch_size},), got {tuple(reward.shape)}."
+                )
+            rewards.append(reward.clone())
+        return tuple(rewards), torch.ones(batch_size, dtype=torch.bool, device=self.device)
+
+    def process_env_step(self, rewards, dones, infos, amp_obs, recovery_mask_t=None):
+        batch_size = rewards.shape[0]
+        recovery_mask_t = self._validate_recovery_mask(recovery_mask_t, batch_size)
+        recovery_rewards, rewards_valid = self._read_recovery_reward_interface(infos, batch_size)
+
+        self.transition.recovery_mask_t = recovery_mask_t.clone()
+        self.transition.enter_recovery = self._read_bool_transition_flag(
+            infos, "enter_recovery", batch_size
+        )
+        self.transition.exit_recovery = self._read_bool_transition_flag(
+            infos, "exit_recovery", batch_size
+        )
+        self.transition.recovery_failed = self._read_bool_transition_flag(
+            infos, "recovery_failed", batch_size
+        )
+        self.transition.recovery_task_reward = recovery_rewards[0]
+        self.transition.recovery_amp_reward = recovery_rewards[1]
+        self.transition.recovery_reg_reward = recovery_rewards[2]
+        self.transition.recovery_rewards_valid = rewards_valid
+
+        super().process_env_step(rewards, dones, infos, amp_obs, recovery_mask_t)
+
+    def _apply_timeout_bootstrap(self):
+        if not (self.recovery_state_machine_enabled and self.enable_recovery_learning):
+            # Exact legacy path while Recovery learning is disabled.
+            return super()._apply_timeout_bootstrap()
+        # Segmented GAE applies mode-specific timeout correction for V_loco or
+        # the three Recovery values. No reset observation is used here.
+
+    def compute_returns(self, last_critic_obs):
+        if not (self.recovery_state_machine_enabled and self.enable_recovery_learning):
+            return super().compute_returns(last_critic_obs)
+
+        with torch.no_grad():
+            last_loco_values = self.policy.evaluate(last_critic_obs).detach()
+            last_recovery_values = self.recovery_critic(last_critic_obs)
+
+        recovery_mask = self.storage.recovery_masks
+        if torch.any(recovery_mask & ~self.storage.recovery_rewards_valid):
+            raise RuntimeError(
+                "Recovery learning is enabled, but one or more Recovery transitions have no explicit "
+                "task/AMP/regularization reward streams. Reward composition is intentionally not inferred."
+            )
+
+        time_outs = self.storage.time_outs
+        env_terminal = self.storage.dones.bool() & ~time_outs
+        locomotion_mask = ~recovery_mask
+        loco_returns, loco_advantages = self.storage.compute_segmented_gae(
+            rewards=self.storage.rewards,
+            values=self.storage.values,
+            last_values=last_loco_values,
+            sample_mask=locomotion_mask,
+            trace_end=self.storage.enter_recovery,
+            env_terminal=env_terminal,
+            time_outs=time_outs,
+            gamma=self.gamma,
+            lam=self.lam,
+            timeout_bootstrap_values=self.storage.values,
+            normalize_advantage=not self.normalize_advantage_per_mini_batch,
+        )
+        self.storage.returns.copy_(loco_returns)
+        self.storage.advantages.copy_(loco_advantages)
+
+        recovery_trace_end = self.storage.exit_recovery | self.storage.recovery_failed
+        recovery_specs = (
+            (
+                "task",
+                self.storage.recovery_task_rewards,
+                self.storage.recovery_task_values,
+                self.storage.recovery_task_returns,
+                self.storage.recovery_task_advantages,
+            ),
+            (
+                "amp",
+                self.storage.recovery_amp_rewards,
+                self.storage.recovery_amp_values,
+                self.storage.recovery_amp_returns,
+                self.storage.recovery_amp_advantages,
+            ),
+            (
+                "reg",
+                self.storage.recovery_reg_rewards,
+                self.storage.recovery_reg_values,
+                self.storage.recovery_reg_returns,
+                self.storage.recovery_reg_advantages,
+            ),
+        )
+        for name, rewards, values, returns_buffer, advantages_buffer in recovery_specs:
+            returns, advantages = self.storage.compute_segmented_gae(
+                rewards=rewards,
+                values=values,
+                last_values=last_recovery_values[name].detach(),
+                sample_mask=recovery_mask,
+                trace_end=recovery_trace_end,
+                env_terminal=env_terminal,
+                time_outs=time_outs,
+                gamma=self.gamma,
+                lam=self.lam,
+                timeout_bootstrap_values=values,
+                # Recovery advantages are always normalized independently over
+                # Recovery samples from this rollout.
+                normalize_advantage=True,
+            )
+            returns_buffer.copy_(returns)
+            advantages_buffer.copy_(advantages)
 
     def _store_amp_transition(self, amp_obs, next_amp_obs, recovery_mask_t=None):
         if amp_obs.ndim != 2 or next_amp_obs.shape != amp_obs.shape:
@@ -178,6 +388,173 @@ class RENetAMPPPO(AMPPPO):
             routed_reward[recovery_mask_t] = recovery_reward
             routed_logits[recovery_mask_t] = recovery_logits
         return routed_reward, routed_logits
+
+    def _rollout_mini_batch_generator(self):
+        if self.policy.is_recurrent:
+            return self.storage.recurrent_mini_batch_generator(
+                self.num_mini_batches,
+                self.num_learning_epochs,
+                include_recovery_data=True,
+            )
+        return self.storage.mini_batch_generator(
+            self.num_mini_batches,
+            self.num_learning_epochs,
+            include_recovery_data=True,
+        )
+
+    @staticmethod
+    def combine_recovery_advantages(
+        task_advantage,
+        amp_advantage,
+        reg_advantage,
+        weights: tuple[float, float, float] | None = None,
+    ):
+        """Future Recovery Actor interface; this phase defines no weights."""
+        if weights is None:
+            return None
+        if len(weights) != 3:
+            raise ValueError("Recovery advantage weights must contain task, AMP, and regularization weights.")
+        return (
+            weights[0] * task_advantage
+            + weights[1] * amp_advantage
+            + weights[2] * reg_advantage
+        )
+
+    def _compute_surrogate_loss(self, surrogate, surrogate_clipped, rollout_data=None, ratio=None):
+        terms = torch.max(surrogate, surrogate_clipped)
+        if not (self.recovery_state_machine_enabled and self.enable_recovery_learning):
+            # Identical to the existing PPO reduction when Recovery learning is off.
+            return terms.mean()
+        if rollout_data is None:
+            raise RuntimeError("Mode-aware PPO requires Recovery rollout metadata.")
+
+        recovery_mask = rollout_data["recovery_mask_t"].squeeze(-1).bool()
+        locomotion_mask = ~recovery_mask
+        if torch.any(locomotion_mask):
+            locomotion_term = terms[locomotion_mask].mean()
+        else:
+            locomotion_term = terms.sum() * 0.0
+
+        recovery_advantage = self.combine_recovery_advantages(
+            rollout_data["recovery_task_advantages"].squeeze(-1),
+            rollout_data["recovery_amp_advantages"].squeeze(-1),
+            rollout_data["recovery_reg_advantages"].squeeze(-1),
+            # TODO: Supply explicit task/AMP/regularization weights only after
+            # Recovery reward design is approved. Equal weighting is not an
+            # implicit default.
+            weights=None,
+        )
+        if recovery_advantage is None:
+            return locomotion_term
+        if ratio is None:
+            raise RuntimeError("Recovery Actor PPO term requires the current/old policy ratio.")
+
+        recovery_surrogate = -recovery_advantage * ratio
+        recovery_surrogate_clipped = -recovery_advantage * torch.clamp(
+            ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
+        )
+        recovery_terms = torch.max(recovery_surrogate, recovery_surrogate_clipped)
+        recovery_term = (
+            recovery_terms[recovery_mask].mean()
+            if torch.any(recovery_mask)
+            else recovery_terms.sum() * 0.0
+        )
+        return locomotion_term + recovery_term
+
+    def _masked_value_loss(self, prediction, old_prediction, returns, mask):
+        mask = mask.bool().expand_as(prediction)
+        if not torch.any(mask):
+            return prediction.sum() * 0.0
+        if self.use_clipped_value_loss:
+            prediction_clipped = old_prediction + (prediction - old_prediction).clamp(
+                -self.clip_param, self.clip_param
+            )
+            losses = torch.square(prediction - returns)
+            losses_clipped = torch.square(prediction_clipped - returns)
+            return torch.max(losses, losses_clipped)[mask].mean()
+        return torch.square(returns - prediction)[mask].mean()
+
+    def _compute_value_losses(
+        self,
+        value_batch,
+        target_values_batch,
+        returns_batch,
+        critic_obs_batch,
+        rollout_data=None,
+    ):
+        if not (self.recovery_state_machine_enabled and self.enable_recovery_learning):
+            return super()._compute_value_losses(
+                value_batch,
+                target_values_batch,
+                returns_batch,
+                critic_obs_batch,
+                rollout_data,
+            )
+        if rollout_data is None:
+            raise RuntimeError("Recovery value losses require Recovery rollout metadata.")
+
+        recovery_mask = rollout_data["recovery_mask_t"].bool()
+        locomotion_mask = ~recovery_mask
+        locomotion_value_loss = self._masked_value_loss(
+            value_batch,
+            target_values_batch,
+            returns_batch,
+            locomotion_mask,
+        )
+
+        recovery_predictions = self.recovery_critic(critic_obs_batch)
+        recovery_losses = {}
+        for name in ("task", "amp", "reg"):
+            recovery_losses[name] = self._masked_value_loss(
+                recovery_predictions[name],
+                rollout_data[f"recovery_{name}_values"],
+                rollout_data[f"recovery_{name}_returns"],
+                recovery_mask,
+            )
+        auxiliary_value_loss = sum(recovery_losses.values())
+        metrics = {
+            "RecoveryValue/task_loss": recovery_losses["task"],
+            "RecoveryValue/amp_loss": recovery_losses["amp"],
+            "RecoveryValue/reg_loss": recovery_losses["reg"],
+        }
+        return locomotion_value_loss, auxiliary_value_loss, metrics
+
+    def _parameters_for_gradient_clipping(self):
+        return chain(self.policy.parameters(), self.recovery_critic.parameters())
+
+    def _capture_recovery_rollout_diagnostics(self):
+        recovery_mask = self.storage.recovery_masks
+        diagnostics = {
+            "RecoveryLearning/enabled": float(self.enable_recovery_learning),
+            "Rollout/loco_samples": float((~recovery_mask).sum().item()),
+            "Rollout/recovery_samples": float(recovery_mask.sum().item()),
+            "Rollout/enter_recovery_count": float(self.storage.enter_recovery.sum().item()),
+            "Rollout/exit_recovery_count": float(self.storage.exit_recovery.sum().item()),
+            "Rollout/recovery_failed_count": float(self.storage.recovery_failed.sum().item()),
+            "RecoveryValue/task_loss": 0.0,
+            "RecoveryValue/amp_loss": 0.0,
+            "RecoveryValue/reg_loss": 0.0,
+        }
+        if self.enable_recovery_learning and torch.any(recovery_mask):
+            for name in ("task", "amp", "reg"):
+                advantage = getattr(self.storage, f"recovery_{name}_advantages")[recovery_mask]
+                diagnostics[f"RecoveryAdv/{name}_mean"] = float(advantage.mean().item())
+                diagnostics[f"RecoveryAdv/{name}_std"] = float(
+                    advantage.std(unbiased=False).item()
+                )
+        self._last_recovery_learning_diagnostics = diagnostics
+
+    def update(self):
+        self._capture_recovery_rollout_diagnostics()
+        loss_dict = super().update()
+        for name in ("task", "amp", "reg"):
+            key = f"RecoveryValue/{name}_loss"
+            if key in loss_dict:
+                self._last_recovery_learning_diagnostics[key] = float(loss_dict[key])
+        return loss_dict
+
+    def get_recovery_learning_diagnostics(self):
+        return dict(self._last_recovery_learning_diagnostics)
 
     def _amp_mini_batch_generator(self, num_updates: int, mini_batch_size: int):
         loco_policy_generator = self.amp_storage_loco.feed_forward_generator(num_updates, mini_batch_size)
@@ -254,7 +631,12 @@ class RENetAMPPPO(AMPPPO):
         return total_loss, metrics, normalizer_updates
 
     def _modules_for_parameter_sync(self):
-        modules = [self.policy, self.discriminator_loco, self.discriminator_recovery]
+        modules = [
+            self.policy,
+            self.recovery_critic,
+            self.discriminator_loco,
+            self.discriminator_recovery,
+        ]
         if self.rnd:
             modules.append(self.rnd.predictor)
         return modules
@@ -262,6 +644,7 @@ class RENetAMPPPO(AMPPPO):
     def _parameters_for_gradient_reduction(self):
         parameters = chain(
             self.policy.parameters(),
+            self.recovery_critic.parameters(),
             self.discriminator_loco.parameters(),
             self.discriminator_recovery.parameters(),
         )

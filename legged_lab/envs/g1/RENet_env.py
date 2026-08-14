@@ -26,6 +26,9 @@ from rsl_rl.env import VecEnv
 from rsl_rl.utils import AMPLoaderDisplay
 
 class G1RENetEnv(VecEnv):
+    VP_ACTOR_MODE = 0.0
+    OP_ACTOR_MODE = 1.0
+    RECOVERY_ACTOR_MODE = 2.0
     
     def __init__(
         self,
@@ -666,6 +669,27 @@ class G1RENetEnv(VecEnv):
         self.renet_estimator_mask[force_vp_envs] = 0.0 # 强制这些环境使用VP
         return self.renet_estimator_mask
 
+    def get_actor_mode(self, estimator_mask=None, recovery_mask=None):
+        """Return the actor-only scalar mode while preserving binary scheduler state."""
+        if estimator_mask is None:
+            estimator_mask = self.renet_estimator_mask
+        if recovery_mask is None:
+            recovery_mask = self.recovery_mask
+        if estimator_mask.shape != (self.num_envs, 1):
+            raise ValueError(
+                "renet_estimator_mask must have shape "
+                f"({self.num_envs}, 1), got {tuple(estimator_mask.shape)}."
+            )
+        if recovery_mask.shape != (self.num_envs,):
+            raise ValueError(
+                f"recovery_mask must have shape ({self.num_envs},), got {tuple(recovery_mask.shape)}."
+            )
+        return torch.where(
+            recovery_mask.unsqueeze(-1),
+            torch.full_like(estimator_mask, self.RECOVERY_ACTOR_MODE),
+            estimator_mask,
+        )
+
     def append_renet_training_inputs(self, actor_obs):
         if self.camera is not None:
             depth_obs = self.get_deepcamera_history()
@@ -674,8 +698,12 @@ class G1RENetEnv(VecEnv):
             actor_obs = torch.cat([actor_obs, flat_depth], dim=-1)
 
         estimator_mask = self.sample_renet_estimator_mask()
+        actor_mode = self.get_actor_mode(estimator_mask=estimator_mask)
         self.extras["observations"]["renet_mask"] = estimator_mask
-        actor_obs = torch.cat([actor_obs, estimator_mask], dim=-1)
+        self.extras["observations"]["actor_mode"] = actor_mode
+        # Reuse the existing one-scalar slot: actor input dimensionality and
+        # all VP/OP checkpoint parameter shapes remain unchanged.
+        actor_obs = torch.cat([actor_obs, actor_mode], dim=-1)
         return actor_obs
     
     def obs_noisy_vec_and_buffer(self):
@@ -1101,6 +1129,12 @@ class G1RENetEnv(VecEnv):
         self.extras["time_outs"] = (
             self.time_out_buf.clone()
         )
+        # Explicit transition events are captured before reset clears the
+        # Recovery state buffers. These are value boundaries, not inferred
+        # later from adjacent masks.
+        self.extras["enter_recovery"] = self.enter_recovery_buf.clone()
+        self.extras["exit_recovery"] = self.exit_recovery_buf.clone()
+        self.extras["recovery_failed"] = self.recovery_failed_buf.clone()
 
         # ---------------------------------------------------------
         # 6. reset终止环境

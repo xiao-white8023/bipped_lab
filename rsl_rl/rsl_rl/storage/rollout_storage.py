@@ -39,6 +39,21 @@ class RolloutStorage:
             self.hidden_states = None
             self.rnd_state = None
             self.residual_gate = None
+            # RENet Recovery metadata. ``recovery_mask_t`` is the mode that
+            # produced action_t; the event flags describe the resulting
+            # transition and must be captured explicitly before env reset.
+            self.recovery_mask_t = None
+            self.enter_recovery = None
+            self.exit_recovery = None
+            self.recovery_failed = None
+            self.time_outs = None
+            self.recovery_task_reward = None
+            self.recovery_amp_reward = None
+            self.recovery_reg_reward = None
+            self.recovery_rewards_valid = None
+            self.recovery_task_value = None
+            self.recovery_amp_value = None
+            self.recovery_reg_value = None
 
         def clear(self):
             self.__init__()
@@ -91,6 +106,31 @@ class RolloutStorage:
             self.advantages = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
             self.residual_gates = torch.ones(num_transitions_per_env, num_envs, 1, device=self.device)
 
+            # These buffers are inert for algorithms that do not provide the
+            # corresponding Transition fields. Keeping them in the base
+            # storage avoids a second, subtly incompatible rollout format.
+            bool_shape = (num_transitions_per_env, num_envs, 1)
+            self.recovery_masks = torch.zeros(bool_shape, dtype=torch.bool, device=self.device)
+            self.enter_recovery = torch.zeros(bool_shape, dtype=torch.bool, device=self.device)
+            self.exit_recovery = torch.zeros(bool_shape, dtype=torch.bool, device=self.device)
+            self.recovery_failed = torch.zeros(bool_shape, dtype=torch.bool, device=self.device)
+            self.time_outs = torch.zeros(bool_shape, dtype=torch.bool, device=self.device)
+            self.recovery_rewards_valid = torch.zeros(bool_shape, dtype=torch.bool, device=self.device)
+
+            value_shape = (num_transitions_per_env, num_envs, 1)
+            self.recovery_task_rewards = torch.zeros(value_shape, device=self.device)
+            self.recovery_amp_rewards = torch.zeros(value_shape, device=self.device)
+            self.recovery_reg_rewards = torch.zeros(value_shape, device=self.device)
+            self.recovery_task_values = torch.zeros(value_shape, device=self.device)
+            self.recovery_amp_values = torch.zeros(value_shape, device=self.device)
+            self.recovery_reg_values = torch.zeros(value_shape, device=self.device)
+            self.recovery_task_returns = torch.zeros(value_shape, device=self.device)
+            self.recovery_amp_returns = torch.zeros(value_shape, device=self.device)
+            self.recovery_reg_returns = torch.zeros(value_shape, device=self.device)
+            self.recovery_task_advantages = torch.zeros(value_shape, device=self.device)
+            self.recovery_amp_advantages = torch.zeros(value_shape, device=self.device)
+            self.recovery_reg_advantages = torch.zeros(value_shape, device=self.device)
+
         # For RND
         if rnd_state_shape is not None:
             self.rnd_state = torch.zeros(num_transitions_per_env, num_envs, *rnd_state_shape, device=self.device)
@@ -130,6 +170,33 @@ class RolloutStorage:
             else:
                 self.residual_gates[self.step].fill_(1.0)
 
+            self._copy_optional_bool(self.recovery_masks[self.step], transition.recovery_mask_t)
+            self._copy_optional_bool(self.enter_recovery[self.step], transition.enter_recovery)
+            self._copy_optional_bool(self.exit_recovery[self.step], transition.exit_recovery)
+            self._copy_optional_bool(self.recovery_failed[self.step], transition.recovery_failed)
+            self._copy_optional_bool(self.time_outs[self.step], transition.time_outs)
+            self._copy_optional_bool(
+                self.recovery_rewards_valid[self.step], transition.recovery_rewards_valid
+            )
+            self._copy_optional_float(
+                self.recovery_task_rewards[self.step], transition.recovery_task_reward
+            )
+            self._copy_optional_float(
+                self.recovery_amp_rewards[self.step], transition.recovery_amp_reward
+            )
+            self._copy_optional_float(
+                self.recovery_reg_rewards[self.step], transition.recovery_reg_reward
+            )
+            self._copy_optional_float(
+                self.recovery_task_values[self.step], transition.recovery_task_value
+            )
+            self._copy_optional_float(
+                self.recovery_amp_values[self.step], transition.recovery_amp_value
+            )
+            self._copy_optional_float(
+                self.recovery_reg_values[self.step], transition.recovery_reg_value
+            )
+
         # For RND
         if self.rnd_state_shape is not None:
             self.rnd_state[self.step].copy_(transition.rnd_state)
@@ -139,6 +206,20 @@ class RolloutStorage:
 
         # increment the counter
         self.step += 1
+
+    @staticmethod
+    def _copy_optional_bool(destination: torch.Tensor, source):
+        if source is None:
+            destination.zero_()
+        else:
+            destination.copy_(source.view(-1, 1).bool())
+
+    @staticmethod
+    def _copy_optional_float(destination: torch.Tensor, source):
+        if source is None:
+            destination.zero_()
+        else:
+            destination.copy_(source.view(-1, 1))
 
     def _save_hidden_states(self, hidden_states):
         if hidden_states is None or hidden_states == (None, None):
@@ -201,6 +282,110 @@ class RolloutStorage:
         if normalize_advantage:
             self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
 
+    @staticmethod
+    def normalize_masked_advantage(
+        advantages: torch.Tensor,
+        sample_mask: torch.Tensor,
+        eps: float = 1.0e-8,
+    ) -> torch.Tensor:
+        """Normalize only selected samples, safely handling zero or one sample."""
+        mask = sample_mask.bool().expand_as(advantages)
+        normalized = torch.zeros_like(advantages)
+        if not torch.any(mask):
+            return normalized
+
+        selected = advantages[mask]
+        mean = selected.mean()
+        # unbiased=False is finite for a one-sample Recovery segment.
+        variance = torch.mean(torch.square(selected - mean))
+        normalized[mask] = (selected - mean) / torch.sqrt(variance + eps)
+        return normalized
+
+    @staticmethod
+    def compute_segmented_gae(
+        rewards: torch.Tensor,
+        values: torch.Tensor,
+        last_values: torch.Tensor,
+        sample_mask: torch.Tensor,
+        trace_end: torch.Tensor,
+        env_terminal: torch.Tensor,
+        time_outs: torch.Tensor,
+        gamma: float,
+        lam: float,
+        timeout_bootstrap_values: torch.Tensor | None = None,
+        normalize_advantage: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute GAE within explicit value-function segments.
+
+        ``trace_end`` is a value boundary such as enter/exit Recovery and is
+        deliberately independent of ``env_terminal``. Timeouts stop the trace
+        but retain truncation bootstrap through ``timeout_bootstrap_values``.
+        The current RENet timeout convention uses the action-time value V(s_t),
+        never the post-reset observation returned by env.step().
+        """
+        expected_shape = values.shape
+        tensors = {
+            "rewards": rewards,
+            "sample_mask": sample_mask,
+            "trace_end": trace_end,
+            "env_terminal": env_terminal,
+            "time_outs": time_outs,
+        }
+        for name, tensor in tensors.items():
+            if tensor.shape != expected_shape:
+                raise ValueError(
+                    f"{name} must have shape {tuple(expected_shape)}, got {tuple(tensor.shape)}."
+                )
+        if last_values.shape != values.shape[1:]:
+            raise ValueError(
+                "last_values must match one rollout step: "
+                f"expected {tuple(values.shape[1:])}, got {tuple(last_values.shape)}."
+            )
+
+        active = sample_mask.bool()
+        trace_end = trace_end.bool()
+        env_terminal = env_terminal.bool()
+        time_outs = time_outs.bool()
+        if timeout_bootstrap_values is None:
+            timeout_bootstrap_values = values
+        elif timeout_bootstrap_values.shape != values.shape:
+            raise ValueError(
+                "timeout_bootstrap_values must match values: "
+                f"{tuple(timeout_bootstrap_values.shape)} != {tuple(values.shape)}."
+            )
+
+        returns = values.clone()
+        advantages = torch.zeros_like(values)
+        next_advantage = torch.zeros_like(last_values)
+        num_steps = values.shape[0]
+        for step in reversed(range(num_steps)):
+            if step == num_steps - 1:
+                next_values = last_values
+                next_active = active[step]
+            else:
+                next_values = values[step + 1]
+                next_active = active[step + 1]
+
+            boundary = trace_end[step] | env_terminal[step] | time_outs[step]
+            continues = active[step] & ~boundary & next_active
+            timeout_correction = (
+                gamma * timeout_bootstrap_values[step] * (active[step] & time_outs[step]).float()
+            )
+            delta = (
+                rewards[step]
+                + timeout_correction
+                + gamma * next_values * continues.float()
+                - values[step]
+            )
+            step_advantage = delta + gamma * lam * next_advantage * continues.float()
+            next_advantage = torch.where(active[step], step_advantage, torch.zeros_like(step_advantage))
+            advantages[step] = next_advantage
+            returns[step] = torch.where(active[step], next_advantage + values[step], values[step])
+
+        if normalize_advantage:
+            advantages = RolloutStorage.normalize_masked_advantage(advantages, active)
+        return returns, advantages
+
     # for distillation
     def generator(self):
         if self.training_type != "distillation":
@@ -216,7 +401,13 @@ class RolloutStorage:
             ], self.dones[i]
 
     # for reinforcement learning with feedforward networks
-    def mini_batch_generator(self, num_mini_batches, num_epochs=8, include_residual_gate=False):
+    def mini_batch_generator(
+        self,
+        num_mini_batches,
+        num_epochs=8,
+        include_residual_gate=False,
+        include_recovery_data=False,
+    ):
         if self.training_type != "rl":
             raise ValueError("This function is only available for reinforcement learning training.")
         batch_size = self.num_envs * self.num_transitions_per_env   ## 也就是说，我们现在手里有 98304 条 (s_t, a_t, r_t, ...) 数据。
@@ -241,6 +432,24 @@ class RolloutStorage:
         old_mu = self.mu.flatten(0, 1)
         old_sigma = self.sigma.flatten(0, 1)
         residual_gates = self.residual_gates.flatten(0, 1) if include_residual_gate else None
+        if include_recovery_data:
+            recovery_data = {
+                "recovery_mask_t": self.recovery_masks.flatten(0, 1),
+                "enter_recovery_t": self.enter_recovery.flatten(0, 1),
+                "exit_recovery_t": self.exit_recovery.flatten(0, 1),
+                "recovery_failed_t": self.recovery_failed.flatten(0, 1),
+                "time_out_t": self.time_outs.flatten(0, 1),
+                "recovery_rewards_valid": self.recovery_rewards_valid.flatten(0, 1),
+                "recovery_task_values": self.recovery_task_values.flatten(0, 1),
+                "recovery_amp_values": self.recovery_amp_values.flatten(0, 1),
+                "recovery_reg_values": self.recovery_reg_values.flatten(0, 1),
+                "recovery_task_returns": self.recovery_task_returns.flatten(0, 1),
+                "recovery_amp_returns": self.recovery_amp_returns.flatten(0, 1),
+                "recovery_reg_returns": self.recovery_reg_returns.flatten(0, 1),
+                "recovery_task_advantages": self.recovery_task_advantages.flatten(0, 1),
+                "recovery_amp_advantages": self.recovery_amp_advantages.flatten(0, 1),
+                "recovery_reg_advantages": self.recovery_reg_advantages.flatten(0, 1),
+            }
 
         # For RND
         if self.rnd_state_shape is not None:
@@ -294,10 +503,18 @@ class RolloutStorage:
                 )
                 if include_residual_gate:
                     batch = (*batch, residual_gate_batch)
+                if include_recovery_data:
+                    batch = (*batch, {key: value[batch_idx] for key, value in recovery_data.items()})
                 yield batch
 
     # for reinfrocement learning with recurrent networks
-    def recurrent_mini_batch_generator(self, num_mini_batches, num_epochs=8, include_residual_gate=False):
+    def recurrent_mini_batch_generator(
+        self,
+        num_mini_batches,
+        num_epochs=8,
+        include_residual_gate=False,
+        include_recovery_data=False,
+    ):
         if self.training_type != "rl":
             raise ValueError("This function is only available for reinforcement learning training.")
         padded_obs_trajectories, trajectory_masks = split_and_pad_trajectories(self.observations, self.dones)
@@ -382,6 +599,25 @@ class RolloutStorage:
                 )
                 if include_residual_gate:
                     batch = (*batch, residual_gate_batch)
+                if include_recovery_data:
+                    recovery_data_batch = {
+                        "recovery_mask_t": self.recovery_masks[:, start:stop],
+                        "enter_recovery_t": self.enter_recovery[:, start:stop],
+                        "exit_recovery_t": self.exit_recovery[:, start:stop],
+                        "recovery_failed_t": self.recovery_failed[:, start:stop],
+                        "time_out_t": self.time_outs[:, start:stop],
+                        "recovery_rewards_valid": self.recovery_rewards_valid[:, start:stop],
+                        "recovery_task_values": self.recovery_task_values[:, start:stop],
+                        "recovery_amp_values": self.recovery_amp_values[:, start:stop],
+                        "recovery_reg_values": self.recovery_reg_values[:, start:stop],
+                        "recovery_task_returns": self.recovery_task_returns[:, start:stop],
+                        "recovery_amp_returns": self.recovery_amp_returns[:, start:stop],
+                        "recovery_reg_returns": self.recovery_reg_returns[:, start:stop],
+                        "recovery_task_advantages": self.recovery_task_advantages[:, start:stop],
+                        "recovery_amp_advantages": self.recovery_amp_advantages[:, start:stop],
+                        "recovery_reg_advantages": self.recovery_reg_advantages[:, start:stop],
+                    }
+                    batch = (*batch, recovery_data_batch)
                 yield batch
 
                 first_traj = last_traj
