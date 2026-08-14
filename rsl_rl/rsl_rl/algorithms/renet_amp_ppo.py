@@ -474,6 +474,28 @@ class RENetAMPPPO(AMPPPO):
             include_recovery_data=True,
         )
 
+    def _get_auxiliary_sample_mask(self, rollout_data, reference_tensor):
+        """Exclude action-time Recovery samples from OP/VP estimator supervision."""
+        if rollout_data is None or "recovery_mask_t" not in rollout_data:
+            raise RuntimeError("RENet auxiliary supervision requires action-time recovery_mask_t metadata.")
+        recovery_mask = rollout_data["recovery_mask_t"]
+        if not isinstance(recovery_mask, torch.Tensor):
+            raise TypeError("rollout_data['recovery_mask_t'] must be a torch.Tensor.")
+        if recovery_mask.dtype != torch.bool:
+            raise TypeError(
+                "rollout_data['recovery_mask_t'] must have dtype bool, "
+                f"got {recovery_mask.dtype}."
+            )
+        if recovery_mask.shape == (reference_tensor.shape[0], 1):
+            recovery_mask = recovery_mask.squeeze(-1)
+        elif recovery_mask.shape != (reference_tensor.shape[0],):
+            raise ValueError(
+                "rollout_data['recovery_mask_t'] must have shape "
+                f"({reference_tensor.shape[0]}, 1) or ({reference_tensor.shape[0]},), "
+                f"got {tuple(recovery_mask.shape)}."
+            )
+        return (~recovery_mask).to(device=reference_tensor.device)
+
     @staticmethod
     def combine_recovery_advantages(
         task_advantage,

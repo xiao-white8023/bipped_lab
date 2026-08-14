@@ -369,6 +369,65 @@ class AMPPPO:
             )
         return self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
 
+    def _get_auxiliary_sample_mask(self, rollout_data, reference_tensor):
+        """Return an optional batch mask for estimator auxiliary supervision.
+
+        Ordinary AMP tasks retain their historical full-mini-batch behavior.
+        Specialized algorithms may return a boolean ``[batch_size]`` mask.
+        """
+        del rollout_data, reference_tensor
+        return None
+
+    @staticmethod
+    def _select_auxiliary_samples(prediction, target, sample_mask):
+        if prediction.shape[0] != target.shape[0]:
+            raise ValueError(
+                "Auxiliary prediction and target batch sizes must match: "
+                f"{prediction.shape[0]} != {target.shape[0]}."
+            )
+        if sample_mask is None:
+            return prediction, target
+        if not isinstance(sample_mask, torch.Tensor):
+            raise TypeError("Auxiliary sample mask must be a torch.Tensor or None.")
+        if sample_mask.dtype != torch.bool:
+            raise TypeError(f"Auxiliary sample mask must have dtype bool, got {sample_mask.dtype}.")
+        if sample_mask.device != prediction.device:
+            raise ValueError(
+                "Auxiliary sample mask and prediction must be on the same device: "
+                f"{sample_mask.device} != {prediction.device}."
+            )
+        if sample_mask.shape != (prediction.shape[0],):
+            raise ValueError(
+                "Auxiliary sample mask must have shape "
+                f"({prediction.shape[0]},), got {tuple(sample_mask.shape)}."
+            )
+        if not torch.any(sample_mask):
+            return None, None
+        return prediction[sample_mask], target[sample_mask]
+
+    @classmethod
+    def _masked_auxiliary_mse(cls, prediction, target, sample_mask):
+        selected_prediction, selected_target = cls._select_auxiliary_samples(
+            prediction, target, sample_mask
+        )
+        if selected_prediction is None:
+            return prediction.sum() * 0.0
+        return nn.functional.mse_loss(selected_prediction, selected_target)
+
+    @classmethod
+    def _masked_terrain_reconstruction_loss(cls, prediction, target, sample_mask):
+        selected_prediction, selected_target = cls._select_auxiliary_samples(
+            prediction, target, sample_mask
+        )
+        if selected_prediction is None:
+            return prediction.sum() * 0.0
+        # Preserve the existing global target normalization, but compute its
+        # statistics only from samples that actually receive supervision.
+        target_mean = selected_target.mean()
+        target_std = selected_target.std().clamp(min=1e-6)
+        normalized_target = (selected_target - target_mean) / target_std
+        return nn.functional.mse_loss(selected_prediction, normalized_target)
+
     @staticmethod
     def _compute_surrogate_loss(surrogate, surrogate_clipped, rollout_data=None, ratio=None):
         del rollout_data, ratio
@@ -427,6 +486,9 @@ class AMPPPO:
         uses_renet_separate_supervision = False
         mean_terrain_recon_loss = 0
         mean_feet_height_loss = 0
+        auxiliary_mask_seen = False
+        auxiliary_loco_samples = 0.0
+        auxiliary_recovery_samples = 0.0
         vel_weight = self._get_warmup_weight(
             self.current_iteration, self.vel_estimation_warmup_iters, self.vel_estimation_coef
         )
@@ -501,6 +563,16 @@ class AMPPPO:
                         key: value.repeat(num_aug, *([1] * (value.ndim - 1)))
                         for key, value in rollout_data.items()
                     }
+
+            # Resolve this once and reuse it for every estimator auxiliary
+            # loss. RENet supplies the action-time locomotion mask; ordinary
+            # AMP tasks return None and keep full-batch supervision.
+            auxiliary_sample_mask = self._get_auxiliary_sample_mask(rollout_data, obs_batch)
+            if auxiliary_sample_mask is not None:
+                auxiliary_mask_seen = True
+                num_loco_samples = float(auxiliary_sample_mask.sum().item())
+                auxiliary_loco_samples += num_loco_samples
+                auxiliary_recovery_samples += float(auxiliary_sample_mask.numel()) - num_loco_samples
 
             # Recompute actions log prob and entropy for current batch of transitions
             # Note: we need to do this because we updated the policy with the new parameters
@@ -591,12 +663,18 @@ class AMPPPO:
                         use_renet_separate_supervision = True
                         uses_renet_separate_supervision = True
                         if "op" in vel_estimate:
-                            op_vel_loss = nn.functional.mse_loss(vel_estimate["op"], vel_target)
+                            op_vel_loss = self._masked_auxiliary_mse(
+                                vel_estimate["op"], vel_target, auxiliary_sample_mask
+                            )
                         if "vp" in vel_estimate:
-                            vp_vel_loss = nn.functional.mse_loss(vel_estimate["vp"], vel_target)
+                            vp_vel_loss = self._masked_auxiliary_mse(
+                                vel_estimate["vp"], vel_target, auxiliary_sample_mask
+                            )
                         vel_loss = op_vel_loss + vp_vel_loss
                     else:
-                        vel_loss = nn.functional.mse_loss(vel_estimate, vel_target)
+                        vel_loss = self._masked_auxiliary_mse(
+                            vel_estimate, vel_target, auxiliary_sample_mask
+                        )
 
             terrain_recon_loss = torch.tensor(0.0, device=self.device)
             if terrain_weight > 0 and hasattr(self.policy, "use_terrain_recon") and self.policy.use_terrain_recon:
@@ -612,10 +690,11 @@ class AMPPPO:
                             -self.terrain_recon_target_clip,
                             self.terrain_recon_target_clip,
                         )
-                    target_mean = terrain_target.mean()
-                    target_std = terrain_target.std().clamp(min=1e-6)
-                    terrain_target_norm = (terrain_target - target_mean) / target_std
-                    terrain_recon_loss = nn.functional.mse_loss(terrain_pred, terrain_target_norm)
+                    terrain_recon_loss = self._masked_terrain_reconstruction_loss(
+                        terrain_pred,
+                        terrain_target,
+                        auxiliary_sample_mask,
+                    )
 
             feet_height_loss = torch.tensor(0.0, device=self.device)
             if (
@@ -629,7 +708,11 @@ class AMPPPO:
                         :,
                         self.feet_height_obs_start_idx : self.feet_height_obs_start_idx + self.feet_height_dim,
                     ].detach()
-                    feet_height_loss = nn.functional.mse_loss(feet_height_pred, feet_height_target)
+                    feet_height_loss = self._masked_auxiliary_mse(
+                        feet_height_pred,
+                        feet_height_target,
+                        auxiliary_sample_mask,
+                    )
 
             op_supervised_loss = torch.tensor(0.0, device=self.device)
             vp_supervised_loss = torch.tensor(0.0, device=self.device)
@@ -789,6 +872,9 @@ class AMPPPO:
         if self.feet_height_coef > 0:
             loss_dict["feet_height"] = mean_feet_height_loss
             loss_dict["feet_height_coef_current"] = feet_height_weight
+        if auxiliary_mask_seen:
+            loss_dict["Auxiliary/loco_samples"] = auxiliary_loco_samples / num_updates
+            loss_dict["Auxiliary/recovery_samples"] = auxiliary_recovery_samples / num_updates
 
         self.current_iteration += 1
         return loss_dict
