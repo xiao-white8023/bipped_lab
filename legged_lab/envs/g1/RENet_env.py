@@ -1217,7 +1217,10 @@ class G1RENetEnv(VecEnv):
         distance = torch.norm(self.robot.data.root_pos_w[env_ids, :2] - self.scene.env_origins[env_ids, :2], dim=1)
         move_up = distance > self.scene.terrain.cfg.terrain_generator.size[0] / 2
         move_down = (
-            distance < torch.norm(self.command_generator.command[env_ids, :2], dim=1) * self.max_episode_length_s * 0.5
+            distance
+            < torch.norm(self.command_generator.command[env_ids, :2], dim=1)
+            * self.baseline_max_episode_length_s
+            * 0.5
         )
         move_down *= ~move_up
         self.scene.terrain.update_env_origins(env_ids, move_up, move_down)
