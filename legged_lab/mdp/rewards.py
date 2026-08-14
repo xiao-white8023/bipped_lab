@@ -93,6 +93,16 @@ def action_rate_l2(env: BaseEnv  | G1ROUGHEnv |G1Env) -> torch.Tensor:
     )
 
 
+def recovery_action_rate_l2(env: BaseEnv | G1ROUGHEnv | G1Env) -> torch.Tensor:
+    """Read the action-time Recovery-only rate cost prepared by the environment."""
+    return env.recovery_action_rate_value
+
+
+def enter_recovery_event(env: BaseEnv | G1ROUGHEnv | G1Env) -> torch.Tensor:
+    """Indicate a NORMAL -> Recovery transition for locomotion failure penalty."""
+    return env.enter_recovery_buf.float()
+
+
 def undesired_contacts(env: BaseEnv  | G1ROUGHEnv |G1Env, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     net_contact_forces = contact_sensor.data.net_forces_w_history

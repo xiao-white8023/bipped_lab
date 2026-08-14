@@ -76,9 +76,9 @@ class G1RENetEnv(VecEnv):
         而SceneCfg（你导入的legged_lab.utils.env_utils.scene.SceneCfg）是对 Isaac Lab 原生配置的封装适配，
         专门用于整合 “静态场景参数 + 动态步长参数”，输出一个能被InteractiveScene直接使用的完整配置。
         '''
-        # scene_cfg.camera = cfg.scene.camera
-        # scene_cfg.left_feet_ray_caster=cfg.scene.left_feet_ray_caster
-        # scene_cfg.right_feet_ray_caster=cfg.scene.right_feet_ray_caster
+        scene_cfg.camera = cfg.scene.camera
+        scene_cfg.left_feet_ray_caster=cfg.scene.left_feet_ray_caster
+        scene_cfg.right_feet_ray_caster=cfg.scene.right_feet_ray_caster
 
         self.scene = InteractiveScene(scene_cfg)
         self.sim.reset()  # 重置一次
@@ -114,6 +114,7 @@ class G1RENetEnv(VecEnv):
         self.reward_manager = RewardManager(self.cfg.reward, self)
         
         self.init_buffers()
+        self.recovery_reg_reward_manager = RewardManager(self.cfg.recovery_reg_reward, self)
 
         env_ids = torch.arange(self.num_envs, device=self.device)
         
@@ -298,6 +299,10 @@ class G1RENetEnv(VecEnv):
             "max_vertical_vel": self.cfg.recovery.max_vertical_vel,
             "torso_force_threshold": self.cfg.recovery.torso_force_threshold,
             "foot_force_threshold": self.cfg.recovery.foot_force_threshold,
+            "curriculum_success_ratio": self.cfg.recovery.curriculum_success_ratio,
+            "initial_beta": self.cfg.recovery.initial_beta,
+            "beta_step": self.cfg.recovery.beta_step,
+            "min_beta": self.cfg.recovery.min_beta,
         }
         for name, value in recovery_positive_params.items():
             if not math.isfinite(float(value)) or float(value) <= 0.0:
@@ -310,6 +315,20 @@ class G1RENetEnv(VecEnv):
             raise ValueError("recovery.upright_threshold cannot exceed 1.0.")
         if not 0.0 < float(self.cfg.recovery.height_ratio) <= 1.0:
             raise ValueError("recovery.height_ratio must be in (0, 1].")
+        for name in ("task_height_ratio", "curriculum_height_ratio"):
+            value = float(getattr(self.cfg.recovery, name))
+            if not 0.0 < value <= 1.0:
+                raise ValueError(f"recovery.{name} must be in (0, 1], got {value}.")
+        if not 0.0 < float(self.cfg.recovery.curriculum_success_ratio) <= 1.0:
+            raise ValueError("recovery.curriculum_success_ratio must be in (0, 1].")
+        if int(self.cfg.recovery.curriculum_min_attempts) <= 0:
+            raise ValueError("recovery.curriculum_min_attempts must be positive.")
+        if float(self.cfg.recovery.min_assist_force) < 0.0:
+            raise ValueError("recovery.min_assist_force cannot be negative.")
+        if float(self.cfg.recovery.initial_assist_force) < float(self.cfg.recovery.min_assist_force):
+            raise ValueError("recovery.initial_assist_force cannot be below min_assist_force.")
+        if float(self.cfg.recovery.initial_beta) < float(self.cfg.recovery.min_beta):
+            raise ValueError("recovery.initial_beta cannot be below min_beta.")
 
         self.max_episode_length_s = (
             float(self.cfg.recovery.absolute_episode_timeout_s)
@@ -350,6 +369,52 @@ class G1RENetEnv(VecEnv):
         '''
         self.robot_cfg = SceneEntityCfg(name="robot")  # 此时self.robot_cfg 还只是创建一个定位规则 
         self.robot_cfg.resolve(self.scene) # 这一步是从场景中 定位机器人刚体
+        torso_body_ids, torso_body_names = self.robot.find_bodies(
+            name_keys=["torso_link"],
+            preserve_order=True,
+        )
+        if len(torso_body_ids) != 1 or torso_body_names != ["torso_link"]:
+            raise RuntimeError(
+                "Recovery requires exactly the body named torso_link; resolved "
+                f"ids={torso_body_ids}, names={torso_body_names}."
+            )
+        self.torso_body_id = int(torso_body_ids[0])
+        self.torso_body_ids = torch.tensor([self.torso_body_id], dtype=torch.long, device=self.device)
+
+        if not self.cfg.scene.height_scanner.enable_height_scan:
+            raise RuntimeError("Recovery V1 requires the existing torso height scanner.")
+        ray_starts, _ = self.height_scanner.cfg.pattern_cfg.func(
+            self.height_scanner.cfg.pattern_cfg,
+            self.device,
+        )
+        self.recovery_height_crop_indices = self._central_height_crop_indices(ray_starts, half_extent=0.2)
+        if self.recovery_height_crop_indices.numel() == 0:
+            raise RuntimeError("The torso height scanner has no rays in the central 0.4 m x 0.4 m crop.")
+        if ray_starts.shape[0] != self.height_scanner.data.ray_hits_w.shape[1]:
+            raise RuntimeError(
+                "Height-scanner pattern/ray-hit size mismatch: "
+                f"{ray_starts.shape[0]} != {self.height_scanner.data.ray_hits_w.shape[1]}."
+            )
+
+        # Capture the torso-to-root offset while the articulation is still in
+        # its configured default standing pose, then combine it with the
+        # configured default root height. This is independent of terrain/world
+        # origin while remaining in the same vertical frame as h_rel.
+        nominal_torso_height_per_env = self.robot.data.default_root_state[:, 2] + (
+            self.robot.data.body_pos_w[:, self.torso_body_id, 2]
+            - self.robot.data.root_pos_w[:, 2]
+        )
+        if not torch.isfinite(nominal_torso_height_per_env).all():
+            raise RuntimeError("Default standing pose produced a non-finite nominal torso height.")
+        self.nominal_torso_height = float(torch.median(nominal_torso_height_per_env).item())
+        if self.nominal_torso_height <= 0.0:
+            raise RuntimeError(f"Nominal torso height must be positive, got {self.nominal_torso_height}.")
+        self.recovery_task_height_threshold = (
+            float(self.cfg.recovery.task_height_ratio) * self.nominal_torso_height
+        )
+        self.recovery_curriculum_height_threshold = (
+            float(self.cfg.recovery.curriculum_height_ratio) * self.nominal_torso_height
+        )
         self.termination_contact_cfg = SceneEntityCfg(
             name="contact_sensor", body_names=self.cfg.robot.terminate_contacts_body_names
         )
@@ -393,6 +458,42 @@ class G1RENetEnv(VecEnv):
         self.recovery_height_ok_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.recovery_foot_support_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.recovery_torso_clear_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.recovery_mask_t = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.recovery_prev_action = torch.zeros(
+            self.num_envs, self.num_actions, dtype=torch.float, device=self.device
+        )
+        self.recovery_prev_action_valid = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.recovery_action_rate_value = torch.zeros(self.num_envs, device=self.device)
+        self.recovery_action_rate_valid_sample = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.bool
+        )
+        self.recovery_upright_reward_buf = torch.zeros(self.num_envs, device=self.device)
+        self.recovery_height_reward_buf = torch.zeros(self.num_envs, device=self.device)
+        self.recovery_task_reward_buf = torch.zeros(self.num_envs, device=self.device)
+        self.recovery_reg_reward_buf = torch.zeros(self.num_envs, device=self.device)
+        self.recovery_torso_height_buf = torch.zeros(self.num_envs, device=self.device)
+        self.recovery_torso_height_valid_buf = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.bool
+        )
+        self.recovery_attempt_active = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.recovery_curriculum_level = 0
+        self.recovery_curriculum_window_attempts = 0
+        self.recovery_curriculum_window_successes = 0
+        self.current_recovery_assist_force = (
+            float(self.cfg.recovery.initial_assist_force)
+            if self.recovery_state_machine_enabled and self.cfg.recovery.enable_curriculum
+            else 0.0
+        )
+        self.current_recovery_beta = (
+            float(self.cfg.recovery.initial_beta)
+            if self.recovery_state_machine_enabled
+            else float(self.cfg.recovery.min_beta)
+        )
+        self.recovery_assist_force_active_buf = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.bool
+        )
+        self.recovery_assist_force_values = torch.zeros(self.num_envs, 1, 3, device=self.device)
+        self.recovery_assist_torque_values = torch.zeros_like(self.recovery_assist_force_values)
         self._recovery_diagnostics = self._empty_recovery_diagnostics()
 
         self.phase = torch.zeros(self.num_envs, device=self.device)
@@ -699,11 +800,15 @@ class G1RENetEnv(VecEnv):
 
         estimator_mask = self.sample_renet_estimator_mask()
         actor_mode = self.get_actor_mode(estimator_mask=estimator_mask)
+        beta_obs = torch.where(
+            self.recovery_mask.unsqueeze(-1),
+            torch.full_like(actor_mode, self.current_recovery_beta),
+            torch.full_like(actor_mode, 0.25),
+        )
         self.extras["observations"]["renet_mask"] = estimator_mask
         self.extras["observations"]["actor_mode"] = actor_mode
-        # Reuse the existing one-scalar slot: actor input dimensionality and
-        # all VP/OP checkpoint parameter shapes remain unchanged.
-        actor_obs = torch.cat([actor_obs, actor_mode], dim=-1)
+        self.extras["observations"]["recovery_beta"] = beta_obs
+        actor_obs = torch.cat([actor_obs, actor_mode, beta_obs], dim=-1)
         return actor_obs
     
     def obs_noisy_vec_and_buffer(self):
@@ -839,6 +944,172 @@ class G1RENetEnv(VecEnv):
         return median, valid
 
     @staticmethod
+    def _central_height_crop_indices(ray_starts: torch.Tensor, half_extent: float = 0.2):
+        """Select the scanner rays inside the local central square from pattern geometry."""
+        if ray_starts.ndim != 2 or ray_starts.shape[1] < 2:
+            raise ValueError(f"ray_starts must have shape [num_rays, >=2], got {tuple(ray_starts.shape)}.")
+        if half_extent <= 0.0:
+            raise ValueError(f"half_extent must be positive, got {half_extent}.")
+        tolerance = max(1.0e-6, half_extent * 1.0e-5)
+        central = (
+            (torch.abs(ray_starts[:, 0]) <= half_extent + tolerance)
+            & (torch.abs(ray_starts[:, 1]) <= half_extent + tolerance)
+        )
+        return torch.nonzero(central, as_tuple=False).flatten()
+
+    def compute_local_torso_height(self):
+        """Return exact torso_link height above the finite-hit central terrain median."""
+        local_hits_z = self.height_scanner.data.ray_hits_w[..., 2].index_select(
+            1,
+            self.recovery_height_crop_indices,
+        )
+        ground_z, height_valid = self._finite_ray_median(local_hits_z)
+        torso_z = self.robot.data.body_pos_w[:, self.torso_body_id, 2]
+        torso_height = torch.where(height_valid, torso_z - ground_z, torch.zeros_like(torso_z))
+        return torso_height, height_valid, ground_z
+
+    @staticmethod
+    def _gaussian_lower_bound_tolerance(
+        value: torch.Tensor,
+        lower_bound: float,
+        margin: float,
+        value_at_margin: float,
+    ):
+        if margin <= 0.0:
+            raise ValueError(f"margin must be positive, got {margin}.")
+        if not 0.0 < value_at_margin <= 1.0:
+            raise ValueError(f"value_at_margin must be in (0, 1], got {value_at_margin}.")
+        error = torch.clamp(lower_bound - value, min=0.0)
+        return torch.exp(math.log(value_at_margin) * torch.square(error / margin))
+
+    def compute_recovery_task_reward(self, recovery_mask_t: torch.Tensor):
+        """Compute the raw dimensionless V1 TASK product on action-time Recovery rows."""
+        upright_value = -self.robot.data.projected_gravity_b[:, 2]
+        upright_reward = self._gaussian_lower_bound_tolerance(
+            upright_value,
+            lower_bound=0.93,
+            margin=1.0,
+            value_at_margin=0.05,
+        )
+        torso_height, height_valid, _ = self.compute_local_torso_height()
+        height_reward = self._gaussian_lower_bound_tolerance(
+            torso_height,
+            lower_bound=self.recovery_task_height_threshold,
+            margin=self.recovery_task_height_threshold,
+            value_at_margin=0.1,
+        )
+        height_reward = torch.where(height_valid, height_reward, torch.zeros_like(height_reward))
+        task_reward = upright_reward * height_reward * recovery_mask_t.float()
+
+        self.recovery_upright_reward_buf.copy_(upright_reward)
+        self.recovery_height_reward_buf.copy_(height_reward)
+        self.recovery_task_reward_buf.copy_(task_reward)
+        self.recovery_torso_height_buf.copy_(torso_height)
+        self.recovery_torso_height_valid_buf.copy_(height_valid)
+        return task_reward
+
+    @staticmethod
+    def _mode_dependent_joint_targets(
+        default_joint_pos: torch.Tensor,
+        current_joint_pos: torch.Tensor,
+        actions: torch.Tensor,
+        recovery_mask_t: torch.Tensor,
+        recovery_beta: float,
+        normal_action_scale: float = 0.25,
+    ):
+        normal_targets = default_joint_pos + normal_action_scale * actions
+        recovery_targets = current_joint_pos + recovery_beta * actions
+        return torch.where(recovery_mask_t.unsqueeze(-1), recovery_targets, normal_targets)
+
+    def _update_recovery_action_rate(self, recovery_mask_t: torch.Tensor):
+        """Update Recovery-only action history using the delayed/clipped action_t."""
+        valid_sample = recovery_mask_t & self.recovery_prev_action_valid
+        squared_difference = torch.sum(torch.square(self.action - self.recovery_prev_action), dim=1)
+        self.recovery_action_rate_value.copy_(
+            torch.where(valid_sample, squared_difference, torch.zeros_like(squared_difference))
+        )
+        self.recovery_action_rate_valid_sample.copy_(valid_sample)
+        self.recovery_prev_action[recovery_mask_t] = self.action[recovery_mask_t]
+        self.recovery_prev_action[~recovery_mask_t] = 0.0
+        self.recovery_prev_action_valid.copy_(recovery_mask_t)
+
+    @staticmethod
+    def _assist_force_gate(
+        recovery_mask_t: torch.Tensor,
+        upright_value: torch.Tensor,
+        assist_force: float,
+        upright_gate: float,
+    ):
+        active = recovery_mask_t & (upright_value > upright_gate) & (assist_force > 0.0)
+        force_z = torch.where(
+            active,
+            torch.full_like(upright_value, assist_force),
+            torch.zeros_like(upright_value),
+        )
+        return active, force_z
+
+    def _set_recovery_assist_force(self, recovery_mask_t: torch.Tensor):
+        upright_value = -self.robot.data.projected_gravity_b[:, 2]
+        active, force_z = self._assist_force_gate(
+            recovery_mask_t,
+            upright_value,
+            self.current_recovery_assist_force,
+            float(self.cfg.recovery.force_upright_gate),
+        )
+        self.recovery_assist_force_active_buf.copy_(active)
+        self.recovery_assist_force_values.zero_()
+        self.recovery_assist_force_values[:, 0, 2] = force_z
+        self.recovery_assist_torque_values.zero_()
+        self.robot.permanent_wrench_composer.set_forces_and_torques(
+            forces=self.recovery_assist_force_values,
+            torques=self.recovery_assist_torque_values,
+            body_ids=self.torso_body_ids,
+            is_global=True,
+        )
+
+    def _clear_recovery_assist_force(self, env_ids: torch.Tensor):
+        if env_ids.numel() == 0:
+            return
+        zeros = torch.zeros(env_ids.numel(), 1, 3, device=self.device)
+        self.robot.permanent_wrench_composer.set_forces_and_torques(
+            forces=zeros,
+            torques=zeros,
+            body_ids=self.torso_body_ids,
+            env_ids=env_ids,
+            is_global=True,
+        )
+
+    def _record_recovery_curriculum_attempts(
+        self,
+        completed: torch.Tensor,
+        successful: torch.Tensor,
+    ):
+        """Consume exact fixed-size attempt windows and advance one shared mastery level."""
+        if not (self.recovery_state_machine_enabled and self.cfg.recovery.enable_curriculum):
+            return
+        completed_successes = successful[completed].detach().to(device="cpu").tolist()
+        window_size = int(self.cfg.recovery.curriculum_min_attempts)
+        threshold = float(self.cfg.recovery.curriculum_success_ratio)
+        for was_successful in completed_successes:
+            self.recovery_curriculum_window_attempts += 1
+            self.recovery_curriculum_window_successes += int(was_successful)
+            if self.recovery_curriculum_window_attempts != window_size:
+                continue
+            success_ratio = self.recovery_curriculum_window_successes / window_size
+            if success_ratio >= threshold:
+                self.recovery_curriculum_level += 1
+                self.current_recovery_assist_force = max(
+                    self.current_recovery_assist_force - float(self.cfg.recovery.assist_force_step),
+                    float(self.cfg.recovery.min_assist_force),
+                )
+                self.current_recovery_beta = max(
+                    self.current_recovery_beta - float(self.cfg.recovery.beta_step),
+                    float(self.cfg.recovery.min_beta),
+                )
+            self.recovery_curriculum_window_attempts = 0
+            self.recovery_curriculum_window_successes = 0
+
+    @staticmethod
     def _route_support_height(
         left_ground_z: torch.Tensor,
         left_valid: torch.Tensor,
@@ -942,6 +1213,20 @@ class G1RENetEnv(VecEnv):
         )
         return self.recovery_ready_now_buf
 
+    @staticmethod
+    def _advance_recovery_ready_counter(
+        was_recovery: torch.Tensor,
+        ready_now: torch.Tensor,
+        ready_counter: torch.Tensor,
+        hold_steps: int,
+    ):
+        next_counter = torch.where(
+            was_recovery & ready_now,
+            ready_counter + 1,
+            torch.zeros_like(ready_counter),
+        )
+        return next_counter, was_recovery & (next_counter >= hold_steps)
+
     def compute_locomotion_failure(self):
         """The original RENet torso-contact termination condition, unchanged."""
         net_contact_forces = self.contact_sensor.data.net_forces_w_history
@@ -973,6 +1258,22 @@ class G1RENetEnv(VecEnv):
             "Recovery/height_ok_ratio": zero.clone(),
             "Recovery/foot_support_ratio": zero.clone(),
             "Recovery/torso_clear_ratio": zero.clone(),
+            "RecoveryReward/upright": zero.clone(),
+            "RecoveryReward/height": zero.clone(),
+            "RecoveryReward/task_product": zero.clone(),
+            "RecoveryReward/reg_total": zero.clone(),
+            "RecoveryReward/reg_joint_acc": zero.clone(),
+            "RecoveryReward/reg_action_rate": zero.clone(),
+            "RecoveryReward/reg_torque": zero.clone(),
+            "RecoveryReward/reg_joint_pos_limit": zero.clone(),
+            "RecoveryReward/reg_joint_vel_limit": zero.clone(),
+            "RecoveryCurriculum/level": zero.clone(),
+            "RecoveryCurriculum/assist_force": zero.clone(),
+            "RecoveryCurriculum/beta": zero.clone(),
+            "RecoveryCurriculum/window_attempts": zero.clone(),
+            "RecoveryCurriculum/window_success_ratio": zero.clone(),
+            "RecoveryAction/action_rate_valid_ratio": zero.clone(),
+            "Actor/recovery_beta": zero.clone(),
         }
 
     def _update_recovery_diagnostics(self, evaluated_recovery_mask):
@@ -988,6 +1289,66 @@ class G1RENetEnv(VecEnv):
             "Recovery/foot_support_ratio": self.recovery_foot_support_buf.float().sum() / evaluated_count,
             "Recovery/torso_clear_ratio": self.recovery_torso_clear_buf.float().sum() / evaluated_count,
         }
+
+    @staticmethod
+    def _safe_masked_mean(values: torch.Tensor, mask: torch.Tensor):
+        count = mask.float().sum()
+        return torch.where(
+            count > 0,
+            (values * mask.float()).sum() / count.clamp(min=1.0),
+            values.sum() * 0.0,
+        )
+
+    def _update_recovery_reward_diagnostics(self, recovery_mask_t: torch.Tensor):
+        diagnostics = self._recovery_diagnostics
+        diagnostics["RecoveryReward/upright"] = self._safe_masked_mean(
+            self.recovery_upright_reward_buf,
+            recovery_mask_t,
+        )
+        diagnostics["RecoveryReward/height"] = self._safe_masked_mean(
+            self.recovery_height_reward_buf,
+            recovery_mask_t,
+        )
+        diagnostics["RecoveryReward/task_product"] = self._safe_masked_mean(
+            self.recovery_task_reward_buf,
+            recovery_mask_t,
+        )
+        diagnostics["RecoveryReward/reg_total"] = self._safe_masked_mean(
+            self.recovery_reg_reward_buf,
+            recovery_mask_t,
+        )
+
+        diagnostic_names = {
+            "joint_acc": "RecoveryReward/reg_joint_acc",
+            "action_rate": "RecoveryReward/reg_action_rate",
+            "torque": "RecoveryReward/reg_torque",
+            "joint_pos_limit": "RecoveryReward/reg_joint_pos_limit",
+            "joint_vel_limit": "RecoveryReward/reg_joint_vel_limit",
+        }
+        for term_name, diagnostic_name in diagnostic_names.items():
+            term_index = self.recovery_reg_reward_manager.active_terms.index(term_name)
+            # RewardManager stores weighted term values without dt in
+            # _step_reward; restore the actual per-step contribution here.
+            term_reward = self.recovery_reg_reward_manager._step_reward[:, term_index] * self.step_dt
+            diagnostics[diagnostic_name] = self._safe_masked_mean(term_reward, recovery_mask_t)
+
+        attempts = self.recovery_curriculum_window_attempts
+        success_ratio = (
+            self.recovery_curriculum_window_successes / attempts
+            if attempts > 0
+            else 0.0
+        )
+        scalar = lambda value: torch.tensor(float(value), dtype=torch.float, device=self.device)
+        diagnostics["RecoveryCurriculum/level"] = scalar(self.recovery_curriculum_level)
+        diagnostics["RecoveryCurriculum/assist_force"] = scalar(self.current_recovery_assist_force)
+        diagnostics["RecoveryCurriculum/beta"] = scalar(self.current_recovery_beta)
+        diagnostics["RecoveryCurriculum/window_attempts"] = scalar(attempts)
+        diagnostics["RecoveryCurriculum/window_success_ratio"] = scalar(success_ratio)
+        diagnostics["RecoveryAction/action_rate_valid_ratio"] = self._safe_masked_mean(
+            self.recovery_action_rate_valid_sample.float(),
+            recovery_mask_t,
+        )
+        diagnostics["Actor/recovery_beta"] = scalar(self.current_recovery_beta)
 
     def get_recovery_diagnostics(self):
         """Expose the most recent pre-reset Recovery diagnostics."""
@@ -1006,6 +1367,19 @@ class G1RENetEnv(VecEnv):
         self.recovery_height_ok_buf[env_ids] = False
         self.recovery_foot_support_buf[env_ids] = False
         self.recovery_torso_clear_buf[env_ids] = False
+        self.recovery_mask_t[env_ids] = False
+        self.recovery_prev_action[env_ids] = 0.0
+        self.recovery_prev_action_valid[env_ids] = False
+        self.recovery_action_rate_value[env_ids] = 0.0
+        self.recovery_action_rate_valid_sample[env_ids] = False
+        self.recovery_upright_reward_buf[env_ids] = 0.0
+        self.recovery_height_reward_buf[env_ids] = 0.0
+        self.recovery_task_reward_buf[env_ids] = 0.0
+        self.recovery_reg_reward_buf[env_ids] = 0.0
+        self.recovery_torso_height_buf[env_ids] = 0.0
+        self.recovery_torso_height_valid_buf[env_ids] = False
+        self.recovery_attempt_active[env_ids] = False
+        self.recovery_assist_force_active_buf[env_ids] = False
 
     def reset(self, env_ids):
         if len(env_ids) == 0:
@@ -1032,6 +1406,9 @@ class G1RENetEnv(VecEnv):
 
         reward_extras = self.reward_manager.reset(env_ids)
         self.extras["log"].update(reward_extras)
+        # Keep the manager's internal episodic buffers correct, but do not mix
+        # its per-term episode summaries into locomotion RewardManager logs.
+        self.recovery_reg_reward_manager.reset(env_ids)
         self.extras["time_outs"] = self.time_out_buf
 
         self.command_generator.reset(env_ids)
@@ -1043,6 +1420,7 @@ class G1RENetEnv(VecEnv):
         # A Recovery failure uses this exact existing reset path. Only the
         # state-machine bookkeeping is additionally cleared.
         self._reset_recovery_buffers(env_ids)
+        self._clear_recovery_assist_force(env_ids)
 
         #
         if self.camera is not None:
@@ -1055,6 +1433,11 @@ class G1RENetEnv(VecEnv):
         # ---------------------------------------------------------
         # 1. 处理动作
         # ---------------------------------------------------------
+        # This is the mode that produced action_t. It must not be inferred
+        # after check_reset() mutates the state machine.
+        recovery_mask_t = self.recovery_mask.clone()
+        self.recovery_mask_t.copy_(recovery_mask_t)
+        current_joint_pos = self.robot.data.joint_pos.clone()
         delayed_actions = self.action_buffer.compute(actions)
 
         self.action = torch.clip(
@@ -1063,10 +1446,16 @@ class G1RENetEnv(VecEnv):
             self.clip_actions,
         ).to(self.device)
 
-        processed_actions = (
-            self.action * self.action_scale
-            + self.robot.data.default_joint_pos
+        self._update_recovery_action_rate(recovery_mask_t)
+        processed_actions = self._mode_dependent_joint_targets(
+            self.robot.data.default_joint_pos,
+            current_joint_pos,
+            self.action,
+            recovery_mask_t,
+            self.current_recovery_beta,
+            normal_action_scale=self.action_scale,
         )
+        self._set_recovery_assist_force(recovery_mask_t)
 
         # ---------------------------------------------------------
         # 2. 物理仿真
@@ -1135,13 +1524,30 @@ class G1RENetEnv(VecEnv):
         # ---------------------------------------------------------
         # 4. 判断终止和计算任务奖励
         # ---------------------------------------------------------
+        if self.recovery_state_machine_enabled:
+            recovery_task_reward = self.compute_recovery_task_reward(recovery_mask_t)
+        else:
+            recovery_task_reward = torch.zeros(self.num_envs, device=self.device)
+            self.recovery_upright_reward_buf.zero_()
+            self.recovery_height_reward_buf.zero_()
+            self.recovery_task_reward_buf.zero_()
+            self.recovery_torso_height_buf.zero_()
+            self.recovery_torso_height_valid_buf.zero_()
+
         self.reset_buf, self.time_out_buf = self.check_reset()
-        # Snapshot before true reset clears per-environment Recovery buffers.
-        recovery_diagnostics = self.get_recovery_diagnostics()
 
         reward_buf = self.reward_manager.compute(
             self.step_dt
         )
+        if self.recovery_state_machine_enabled:
+            raw_recovery_reg_reward = self.recovery_reg_reward_manager.compute(self.step_dt)
+            recovery_reg_reward = raw_recovery_reg_reward * recovery_mask_t.float()
+        else:
+            recovery_reg_reward = torch.zeros_like(reward_buf)
+        self.recovery_reg_reward_buf.copy_(recovery_reg_reward)
+        self._update_recovery_reward_diagnostics(recovery_mask_t)
+        # Snapshot before true reset clears per-environment Recovery buffers.
+        recovery_diagnostics = self.get_recovery_diagnostics()
 
         self.reset_env_ids = self.reset_buf.nonzero(
             as_tuple=False
@@ -1185,6 +1591,8 @@ class G1RENetEnv(VecEnv):
         self.extras["enter_recovery"] = self.enter_recovery_buf.clone()
         self.extras["exit_recovery"] = self.exit_recovery_buf.clone()
         self.extras["recovery_failed"] = self.recovery_failed_buf.clone()
+        self.extras["recovery_task_reward"] = recovery_task_reward.clone()
+        self.extras["recovery_reg_reward"] = recovery_reg_reward.clone()
 
         # ---------------------------------------------------------
         # 6. reset终止环境
@@ -1233,6 +1641,7 @@ class G1RENetEnv(VecEnv):
             self.recovery_timer.zero_()
             self.recovery_ready_counter.zero_()
             self.recovery_trigger_armed.fill_(True)
+            self.recovery_attempt_active.zero_()
             time_out_buf = self.episode_length_buf >= self.max_episode_length
             reset_buf = locomotion_failure | time_out_buf
             self._update_recovery_diagnostics(torch.zeros_like(self.recovery_mask))
@@ -1252,13 +1661,11 @@ class G1RENetEnv(VecEnv):
             torch.zeros_like(self.recovery_timer),
         )
         ready_now = self.compute_recovery_ready_now()
-        self.recovery_ready_counter = torch.where(
-            was_recovery & ready_now,
-            self.recovery_ready_counter + 1,
-            torch.zeros_like(self.recovery_ready_counter),
-        )
-        exit_recovery = was_recovery & (
-            self.recovery_ready_counter >= self.recovery_ready_hold_steps
+        self.recovery_ready_counter, exit_recovery = self._advance_recovery_ready_counter(
+            was_recovery,
+            ready_now,
+            self.recovery_ready_counter,
+            self.recovery_ready_hold_steps,
         )
         recovery_failed = (
             was_recovery
@@ -1279,10 +1686,21 @@ class G1RENetEnv(VecEnv):
         self.exit_recovery_buf.copy_(exit_recovery)
         self.recovery_failed_buf.copy_(recovery_failed)
 
+        completed_attempt = self.recovery_attempt_active & was_recovery & (
+            exit_recovery | recovery_failed | absolute_timeout
+        )
+        curriculum_success = (
+            self.recovery_torso_height_valid_buf
+            & (self.recovery_torso_height_buf >= self.recovery_curriculum_height_threshold)
+        )
+        self._record_recovery_curriculum_attempts(completed_attempt, curriculum_success)
+        self.recovery_attempt_active[completed_attempt] = False
+
         self.recovery_mask[enter_recovery] = True
         self.recovery_timer[enter_recovery] = 0
         self.recovery_ready_counter[enter_recovery] = 0
         self.recovery_trigger_armed[enter_recovery] = False
+        self.recovery_attempt_active[enter_recovery] = True
 
         self.recovery_mask[exit_recovery] = False
         self.recovery_timer[exit_recovery] = 0

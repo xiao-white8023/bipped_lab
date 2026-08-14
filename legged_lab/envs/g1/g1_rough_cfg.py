@@ -205,7 +205,7 @@ class Reward:
 
 @configclass
 class G129WALK_ROUGHENVCFG:
-    amp_motion_files_display=[f'{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_visualization/fallAndGetUp2_subject2.txt']
+    amp_motion_files_display=[f'{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_visualization/fallAndGetUp1_subject1.txt']
     device: str = "cuda:0"
     scene: BaseSceneCfg = BaseSceneCfg(  
         max_episode_length_s=20.0,

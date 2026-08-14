@@ -157,6 +157,11 @@ class RENetAmpOnPolicyRunner:
         alg_class = eval(self.alg_cfg.pop("class_name"))
         self.alg_cfg.pop("optimizer", None)
         self.alg_cfg.pop("share_cnn_encoders", None)
+        recovery_state_machine_enabled = bool(getattr(self.env.cfg.recovery, "enable", False))
+        if not recovery_state_machine_enabled:
+            # One environment switch is sufficient to recover the exact
+            # locomotion-only baseline path.
+            self.alg_cfg["enable_recovery_learning"] = False
         self.alg: AMPPPO | RENetAMPPPO = alg_class(
             policy,
             discriminator_loco,
@@ -166,7 +171,7 @@ class RENetAmpOnPolicyRunner:
             recovery_amp_data=amp_data_recovery,
             recovery_amp_normalizer=amp_normalizer_recovery,
             recovery_critic=recovery_critic,
-            recovery_state_machine_enabled=bool(getattr(self.env.cfg.recovery, "enable", False)),
+            recovery_state_machine_enabled=recovery_state_machine_enabled,
             device=self.device,
             min_std=min_std,
             **self.alg_cfg,
@@ -352,6 +357,18 @@ class RENetAmpOnPolicyRunner:
                         rewards,
                         recovery_mask_t,
                     )[0]
+                    infos["recovery_amp_reward"] = torch.where(
+                        recovery_mask_t,
+                        rewards,
+                        torch.zeros_like(rewards),
+                    )
+                    recovery_count = recovery_mask_t.float().sum().clamp(min=1.0)
+                    recovery_amp_mean = (
+                        infos["recovery_amp_reward"].sum() / recovery_count
+                        if torch.any(recovery_mask_t)
+                        else rewards.sum() * 0.0
+                    )
+                    infos.setdefault("log", {})["RecoveryAMP/reward_mean"] = recovery_amp_mean
 
                     # Start the next rollout transition from the post-reset states.
                     amp_obs = next_amp_obs.clone()
@@ -585,7 +602,17 @@ class RENetAmpOnPolicyRunner:
     def load(self, path: str, load_optimizer: bool = True):
         loaded_dict = torch.load(path, weights_only=False)
         # -- Load model
-        resumed_training = self.alg.policy.load_state_dict(loaded_dict["model_state_dict"])
+        model_state_dict, actor_input_migrated = self._migrate_legacy_actor_input(
+            loaded_dict["model_state_dict"],
+            self.alg.policy.state_dict(),
+        )
+        if actor_input_migrated:
+            warnings.warn(
+                "Migrated legacy RENet Actor input 206 -> 209: copied the original 206 columns and "
+                "zero-initialized is_op, is_recovery, and beta columns. Optimizer state will be reinitialized.",
+                stacklevel=2,
+            )
+        resumed_training = self.alg.policy.load_state_dict(model_state_dict)
         self.alg.discriminator_loco.load_state_dict(loaded_dict["discriminator_state_dict"])
         self.alg.amp_normalizer_loco = loaded_dict["amp_normalizer"]
         self.alg.amp_normalizer = self.alg.amp_normalizer_loco
@@ -628,7 +655,13 @@ class RENetAmpOnPolicyRunner:
         # -- load optimizer if used
         checkpoint_has_recovery_amp = "recovery_discriminator_state_dict" in loaded_dict
         checkpoint_has_recovery_critic = "recovery_critic_state_dict" in loaded_dict
-        if load_optimizer and resumed_training and checkpoint_has_recovery_amp and checkpoint_has_recovery_critic:
+        if (
+            load_optimizer
+            and resumed_training
+            and not actor_input_migrated
+            and checkpoint_has_recovery_amp
+            and checkpoint_has_recovery_critic
+        ):
             # -- algorithm optimizer
             try:
                 self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
@@ -637,7 +670,7 @@ class RENetAmpOnPolicyRunner:
                     f"Could not restore optimizer state ({error}); using the newly initialized optimizer.",
                     stacklevel=2,
                 )
-        elif load_optimizer and resumed_training:
+        elif load_optimizer and resumed_training and not actor_input_migrated:
             warnings.warn(
                 "Legacy checkpoint optimizer state does not contain all Recovery AMP/critic parameter groups; "
                 "using the newly initialized optimizer.",
@@ -652,6 +685,32 @@ class RENetAmpOnPolicyRunner:
             if hasattr(self.alg, "current_iteration"):
                 self.alg.current_iteration = self.current_learning_iteration
         return loaded_dict["infos"]
+
+    @staticmethod
+    def _migrate_legacy_actor_input(model_state_dict, target_state_dict):
+        """Expand only the legacy 206-column RENet Actor first layer to 209."""
+        actor_weight_key = "actor.0.weight"
+        if actor_weight_key not in model_state_dict or actor_weight_key not in target_state_dict:
+            return model_state_dict, False
+
+        old_weight = model_state_dict[actor_weight_key]
+        target_weight = target_state_dict[actor_weight_key]
+        if old_weight.shape == target_weight.shape:
+            return model_state_dict, False
+        if (
+            old_weight.ndim != 2
+            or target_weight.ndim != 2
+            or old_weight.shape[0] != target_weight.shape[0]
+            or old_weight.shape[1] != 206
+            or target_weight.shape[1] != 209
+        ):
+            return model_state_dict, False
+
+        migrated_state_dict = model_state_dict.copy()
+        migrated_weight = torch.zeros_like(target_weight)
+        migrated_weight[:, :206].copy_(old_weight.to(device=target_weight.device, dtype=target_weight.dtype))
+        migrated_state_dict[actor_weight_key] = migrated_weight
+        return migrated_state_dict, True
 
     def get_inference_policy(self, device=None):
         self.eval_mode()  # switch to evaluation mode (dropout for example)

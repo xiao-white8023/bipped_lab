@@ -22,6 +22,9 @@ class RENetAMPPPO(AMPPPO):
         recovery_critic=None,
         recovery_state_machine_enabled: bool = False,
         enable_recovery_learning: bool = False,
+        recovery_task_adv_weight: float = 2.5,
+        recovery_amp_adv_weight: float = 1.0,
+        recovery_reg_adv_weight: float = 0.1,
         **kwargs,
     ):
         # RENet grew out of the visual/MoE configs; these keys are irrelevant
@@ -66,6 +69,11 @@ class RENetAMPPPO(AMPPPO):
 
         self.recovery_state_machine_enabled = bool(recovery_state_machine_enabled)
         self.enable_recovery_learning = bool(enable_recovery_learning)
+        self.recovery_advantage_weights = (
+            float(recovery_task_adv_weight),
+            float(recovery_amp_adv_weight),
+            float(recovery_reg_adv_weight),
+        )
         self.recovery_critic = recovery_critic.to(self.device)
         self._assert_independent_recovery_critics()
 
@@ -503,7 +511,7 @@ class RENetAMPPPO(AMPPPO):
         reg_advantage,
         weights: tuple[float, float, float] | None = None,
     ):
-        """Future Recovery Actor interface; this phase defines no weights."""
+        """Combine already independently normalized Recovery group advantages once."""
         if weights is None:
             return None
         if len(weights) != 3:
@@ -533,10 +541,7 @@ class RENetAMPPPO(AMPPPO):
             rollout_data["recovery_task_advantages"].squeeze(-1),
             rollout_data["recovery_amp_advantages"].squeeze(-1),
             rollout_data["recovery_reg_advantages"].squeeze(-1),
-            # TODO: Supply explicit task/AMP/regularization weights only after
-            # Recovery reward design is approved. Equal weighting is not an
-            # implicit default.
-            weights=None,
+            weights=self.recovery_advantage_weights,
         )
         if recovery_advantage is None:
             return locomotion_term

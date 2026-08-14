@@ -15,10 +15,10 @@ class RENetActorCritic(nn.Module):
     """Training-side RENet actor-critic.
 
     Actor observations are expected to be:
-        proprio_history | depth_history_flat | actor_mode
+        proprio_history | depth_history_flat | actor_mode | beta_obs
 
     The scalar actor mode preserves the original estimator convention and adds
-    Recovery without changing the observation or Actor MLP dimensions:
+    Recovery. The final Actor receives explicit OP/Recovery bits and beta:
         0 -> VP, 1 -> OP, 2 -> Recovery
     """
 
@@ -47,7 +47,13 @@ class RENetActorCritic(nn.Module):
         self.num_actions = num_actions
 
         self.single_proprio_dim = kwargs.pop("single_proprio_dim", 78) # 单个actor的维度78维
-        self.estimator_mask_dim = kwargs.pop("estimator_mask_dim", 1) # 
+        legacy_control_dim = kwargs.pop("estimator_mask_dim", 1)
+        self.actor_control_dim = kwargs.pop("actor_control_dim", legacy_control_dim)
+        if self.actor_control_dim not in (1, 2):
+            raise ValueError(f"actor_control_dim must be 1 or 2, got {self.actor_control_dim}.")
+        # Kept as an alias for exporters/configs that still inspect the legacy
+        # name. It now describes the complete raw control suffix.
+        self.estimator_mask_dim = self.actor_control_dim
         self.estimator_latent_dim = kwargs.pop("estimator_latent_dim", 64)
         self.proprio_embed_dim = kwargs.pop("proprio_embed_dim", 64)
         proprio_embed_dims = kwargs.pop("proprio_embed_dims", [256, 128])
@@ -103,12 +109,12 @@ class RENetActorCritic(nn.Module):
         self.cnn_h = CnnMlp["input_dim"][0]
         self.cnn_w = CnnMlp["input_dim"][1]
         self.depth_flat_dim = self.depth_history_frames * self.cnn_h * self.cnn_w
-        self.proprio_actor_dim = num_actor_obs - self.depth_flat_dim - self.estimator_mask_dim # 本体感知观测
+        self.proprio_actor_dim = num_actor_obs - self.depth_flat_dim - self.actor_control_dim # 本体感知观测
         if self.proprio_actor_dim <= 0:
             raise ValueError(
                 "Invalid RENet actor observation layout: "
                 f"num_actor_obs={num_actor_obs}, depth_flat_dim={self.depth_flat_dim}, "
-                f"estimator_mask_dim={self.estimator_mask_dim}."
+                f"actor_control_dim={self.actor_control_dim}."
             )
         if self.proprio_actor_dim % self.single_proprio_dim != 0:
             raise ValueError(
@@ -231,7 +237,7 @@ class RENetActorCritic(nn.Module):
                 self.feet_height_dim,
             )
 
-        actor_input_dim = self.single_proprio_dim + 2 * self.estimator_latent_dim
+        actor_input_dim = self.single_proprio_dim + 2 * self.estimator_latent_dim + 3
         self.actor = self._build_actor(actor_input_dim, actor_hidden_dims, activation_fn, num_actions)
         self.critic = self._build_critic(num_critic_obs, critic_hidden_dims, activation_fn)
 
@@ -313,13 +319,16 @@ class RENetActorCritic(nn.Module):
         depth_start = self.proprio_actor_dim
         depth_end = depth_start + self.depth_flat_dim
         depth_flat = observations[:, depth_start:depth_end]
-        if self.estimator_mask_dim > 0:
-            actor_mode = observations[:, depth_end : depth_end + self.estimator_mask_dim]
+        control = observations[:, depth_end : depth_end + self.actor_control_dim]
+        actor_mode = control[:, :1]
+        if self.actor_control_dim >= 2:
+            beta_obs = control[:, 1:2]
         else:
-            actor_mode = torch.zeros(observations.shape[0], 1, device=observations.device)
-        actor_mode = actor_mode[:, :1]
+            # Legacy raw observations have no beta slot. Their OP/VP behavior
+            # uses the unchanged normal action scale.
+            beta_obs = torch.full_like(actor_mode, 0.25)
         current_proprio = proprio_history[:, -self.single_proprio_dim :]
-        return proprio_history, depth_flat, actor_mode, current_proprio
+        return proprio_history, depth_flat, actor_mode, beta_obs, current_proprio
 
     def _embed_proprio_history(self, proprio_history: torch.Tensor):
         batch_size = proprio_history.shape[0]
@@ -376,7 +385,7 @@ class RENetActorCritic(nn.Module):
         return vp_features.view(batch_size, self.history_len, self.estimator_latent_dim)
 
     def _process_actor_obs(self, observations: torch.Tensor):
-        proprio_history, depth_flat, actor_mode, current_proprio = self._split_actor_obs(observations)
+        proprio_history, depth_flat, actor_mode, beta_obs, current_proprio = self._split_actor_obs(observations)
 
         proprio_embed = self._embed_proprio_history(proprio_history)
         depth_embed = self._embed_depth_history(depth_flat)
@@ -389,21 +398,26 @@ class RENetActorCritic(nn.Module):
         op_latent = op_hidden[-1]
         vp_latent = vp_hidden[-1]
 
-        op_mask = (actor_mode == 1.0).to(op_latent.dtype)
+        is_op = (actor_mode == 1.0).to(op_latent.dtype)
+        is_recovery = (actor_mode == 2.0).to(op_latent.dtype)
+        op_slot_mask = torch.clamp(is_op + is_recovery, max=1.0)
         vp_mask = (actor_mode == 0.0).to(vp_latent.dtype)
         renet_latent = torch.cat(
             [
-                op_latent * op_mask,
-                vp_latent * vp_mask,
+                torch.where(op_slot_mask.bool(), op_latent, torch.zeros_like(op_latent)),
+                torch.where(vp_mask.bool(), vp_latent, torch.zeros_like(vp_latent)),
             ],
             dim=-1,
         )
-        actor_input = torch.cat([current_proprio, renet_latent], dim=-1)
+        actor_input = torch.cat(
+            [current_proprio, renet_latent, is_op, is_recovery, beta_obs],
+            dim=-1,
+        )
 
         self._last_current_proprio = current_proprio
         self._last_op_latent = op_latent
         self._last_vp_latent = vp_latent
-        self._last_estimator_mask = op_mask
+        self._last_estimator_mask = is_op
         self._last_actor_mode = actor_mode
         return actor_input
 

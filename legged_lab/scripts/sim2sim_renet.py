@@ -138,6 +138,8 @@ class G1RENetSim2SimCfg:
     class renet:
         # Paper/env convention: 1.0 = OP, 0.0 = VP.
         estimator_mask_dim = 1
+        actor_control_dim = 2
+        normal_beta = 0.25
         default_estimator = "vp"
 
 
@@ -341,10 +343,10 @@ class G1RENetMujocoRunner:
         control_hz = 1.0 / (self.cfg.sim.dt * self.cfg.sim.decimation)
         proprio_dim = self.cfg.sim.num_obs_per_step * self.cfg.sim.actor_obs_history_length
         depth_dim = self.cfg.robot.depth_history_frames * self.depth_height * self.depth_width
-        total_actor_dim = proprio_dim + depth_dim + self.cfg.renet.estimator_mask_dim
+        total_actor_dim = proprio_dim + depth_dim + self.cfg.renet.actor_control_dim
         print(f"[INFO] Control frequency: {control_hz:.1f} Hz")
         print(f"[INFO] RENet estimator: {self.estimator.upper()} (mask={self.estimator_mask_value:.1f})")
-        print(f"[INFO] Actor obs: proprio={proprio_dim}, depth={depth_dim}, mask=1, total={total_actor_dim}")
+        print(f"[INFO] Actor obs: proprio={proprio_dim}, depth={depth_dim}, control=2, total={total_actor_dim}")
 
     @staticmethod
     def estimator_to_mask(estimator: str) -> float:
@@ -687,12 +689,13 @@ class G1RENetMujocoRunner:
         proprio_tensor = torch.from_numpy(proprio_history).float()
         depth_flat = torch.stack(list(self.depth_buffer)).reshape(-1).float()
         estimator_mask = torch.tensor([self.estimator_mask_value], dtype=torch.float32)
-        policy_obs = torch.cat([proprio_tensor, depth_flat, estimator_mask], dim=-1).unsqueeze(0)
+        beta_obs = torch.tensor([self.cfg.renet.normal_beta], dtype=torch.float32)
+        policy_obs = torch.cat([proprio_tensor, depth_flat, estimator_mask, beta_obs], dim=-1).unsqueeze(0)
 
         expected_dim = (
             self.cfg.sim.num_obs_per_step * self.cfg.sim.actor_obs_history_length
             + self.cfg.robot.depth_history_frames * self.depth_height * self.depth_width
-            + self.cfg.renet.estimator_mask_dim
+            + self.cfg.renet.actor_control_dim
         )
         if policy_obs.shape[-1] != expected_dim:
             raise RuntimeError(f"Expected RENet actor obs dim {expected_dim}, got {policy_obs.shape[-1]}.")

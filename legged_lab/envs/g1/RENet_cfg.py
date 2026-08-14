@@ -81,16 +81,28 @@ class RENetTrainCfg:
 class RecoveryStateMachineCfg:
     """V1 shared-Actor Recovery state machine."""
 
-    enable: bool = False
+    enable: bool = True
     max_duration_s: float = 6.0
-    absolute_episode_timeout_s: float = 28.0
-    ready_hold_s: float = 0.4
+    absolute_episode_timeout_s: float = 27.0
+    ready_hold_s: float = 1.0
     upright_threshold: float = 0.93
     max_ang_vel: float = 0.8
     max_vertical_vel: float = 0.25
     torso_force_threshold: float = 1.0
     foot_force_threshold: float = 5.0
     height_ratio: float = 0.80
+    enable_curriculum: bool = True
+    task_height_ratio: float = 0.80
+    curriculum_height_ratio: float = 0.70
+    curriculum_success_ratio: float = 0.60
+    curriculum_min_attempts: int = 256
+    initial_assist_force: float = 200.0
+    assist_force_step: float = 20.0
+    min_assist_force: float = 0.0
+    initial_beta: float = 1.0
+    beta_step: float = 0.02
+    min_beta: float = 0.25
+    force_upright_gate: float = 0.8
 
 
 @configclass
@@ -193,12 +205,32 @@ class Reward:
 
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
 
+    # Entering Recovery is a locomotion failure/value boundary, but not an
+    # environment reset. Keep its penalty in the same RewardManager pipeline
+    # (including the manager's dt scaling) as the original termination term.
+    enter_recovery_penalty = RewTerm(func=mdp.enter_recovery_event, weight=-200.0)
+
     alive = RewTerm(func=mdp.alive, weight=0.15)
 
     feet_air_time = RewTerm(
         func=mdp.feet_air_time_positive_biped,
         weight=0.15,
         params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=".*ankle_roll.*"), "threshold": 0.4},
+    )
+
+
+@configclass
+class RecoveryRegReward:
+    """The five fixed V1 Recovery regularizers, evaluated by a separate manager."""
+
+    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
+    action_rate = RewTerm(func=mdp.recovery_action_rate_l2, weight=-0.01)
+    torque = RewTerm(func=mdp.joint_torques_l2, weight=-2.5e-6)
+    joint_pos_limit = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
+    joint_vel_limit = RewTerm(
+        func=mdp.joint_vel_limits_penalty,
+        weight=-1.0,
+        params={"soft_ratio": 0.9},
     )
 
     # gait_phase_contact = RewTerm(
@@ -324,6 +356,8 @@ class G1RENETENVCFG:
     )
 
     reward=Reward()
+
+    recovery_reg_reward=RecoveryRegReward()
 
     gait=GaitCfg()
 
@@ -470,10 +504,11 @@ class CnnMlpCfg:
 
 @configclass
 class CustomRslRlPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
-    # Recovery reward composition is intentionally deferred. The networks and
-    # rollout data path are present, but actor/value learning stays disabled.
-    enable_recovery_learning: bool = False
+    enable_recovery_learning: bool = True
     recovery_critic_hidden_dims: list[int] = [512, 256]
+    recovery_task_adv_weight: float = 2.5
+    recovery_amp_adv_weight: float = 1.0
+    recovery_reg_adv_weight: float = 0.1
     vel_estimation_warmup_iters:int=0
     vel_estimation_coef: float = 1.0
     terrain_recon_coef: float = 0.5
@@ -504,6 +539,7 @@ class CustomRslRlPpoActorCriticCfg(RslRlPpoActorCriticCfg):
     CnnMlp: CnnMlpCfg = None  # 告诉配置系统，我们多加了一个 CnnMlp 的参数
     single_proprio_dim: int = 78
     estimator_mask_dim: int = 1
+    actor_control_dim: int = 2
     estimator_latent_dim: int = 64
     proprio_embed_dim: int = 64
     proprio_embed_dims: list[int] = [256, 128]
@@ -544,6 +580,7 @@ class G1RENETAGENTCFG:
         activation="elu",
         single_proprio_dim=78,
         estimator_mask_dim=1,
+        actor_control_dim=2,
         estimator_latent_dim=64,
         proprio_embed_dim=64,
         proprio_embed_dims=[256, 128],
@@ -616,8 +653,11 @@ class G1RENETAGENTCFG:
         feet_height_warmup_iters=500,
         feet_height_dim=2,
         feet_height_in_critic_offset=83,
-        enable_recovery_learning=False,
+        enable_recovery_learning=True,
         recovery_critic_hidden_dims=[512, 256],
+        recovery_task_adv_weight=2.5,
+        recovery_amp_adv_weight=1.0,
+        recovery_reg_adv_weight=0.1,
         terrain_recon_target_clip=1,
         terrain_recon_warmup_iters=500,
         vel_estimation_warmup_iters=0,
@@ -669,7 +709,7 @@ class G1RENETAGENTCFG:
         "fallAndGetUp2_subject2_crop_05.txt",
     ]
     recovery_amp_num_preload_transitions = 200000
-    recovery_amp_reward_coef = 0.3
-    recovery_amp_task_reward_lerp = 0.7
+    recovery_amp_reward_coef = 1.0
+    recovery_amp_task_reward_lerp = 0.0
     recovery_amp_discr_hidden_dims = [1024, 512, 256]
     min_normalized_std = [0.05] * 23
