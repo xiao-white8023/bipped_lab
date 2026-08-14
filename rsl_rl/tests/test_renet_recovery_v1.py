@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from rsl_rl.algorithms.renet_amp_ppo import RENetAMPPPO
@@ -39,7 +40,7 @@ def _load_methods(path: Path, class_name: str | None, *method_names):
     return tuple(namespace[name] for name in method_names)
 
 
-def _make_policy():
+def _make_policy(fusion_type="attention"):
     return RENetActorCritic(
         num_actor_obs=2 * 78 + 2 * 4 * 4 + 2,
         num_critic_obs=5,
@@ -55,7 +56,7 @@ def _make_policy():
         proprio_embed_dims=[32],
         op_encoder_dims=[32],
         vp_encoder_dims=[32],
-        fusion_type="attention",
+        fusion_type=fusion_type,
         attention_num_heads=1,
         use_vel_estimation=False,
         use_terrain_recon=False,
@@ -104,8 +105,11 @@ def test_actor_routes_vp_op_recovery_to_exact_209d_layout():
     torch.testing.assert_close(actor_input[:, 206:208], torch.tensor([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]))
     torch.testing.assert_close(actor_input[:, 208], beta[:, 0])
     torch.testing.assert_close(actor_input[1, 78:142], policy._last_op_latent[1])
-    torch.testing.assert_close(actor_input[2, 78:142], policy._last_op_latent[2])
+    torch.testing.assert_close(actor_input[2, 78:142], policy._last_recovery_latent[2])
     torch.testing.assert_close(actor_input[0, 142:206], policy._last_vp_latent[0])
+    torch.testing.assert_close(policy._last_op_latent[2], torch.zeros(64))
+    torch.testing.assert_close(policy._last_vp_latent[2], torch.zeros(64))
+    torch.testing.assert_close(policy._last_recovery_latent[:2], torch.zeros(2, 64))
 
 
 def test_recovery_uses_proprio_history_but_is_depth_independent():
@@ -122,10 +126,13 @@ def test_recovery_uses_proprio_history_but_is_depth_independent():
     input_a = policy._process_actor_obs(_actor_obs(history_a, depth_a, mode, beta)).detach()
     input_history_changed = policy._process_actor_obs(_actor_obs(history_b, depth_a, mode, beta)).detach()
     input_depth_changed = policy._process_actor_obs(_actor_obs(history_a, depth_b, mode, beta)).detach()
+    mean_a = policy.actor(input_a)
+    mean_depth_changed = policy.actor(input_depth_changed)
 
     torch.testing.assert_close(input_a[:, :78], input_history_changed[:, :78])
     assert not torch.allclose(input_a[:, 78:142], input_history_changed[:, 78:142])
     torch.testing.assert_close(input_a, input_depth_changed)
+    torch.testing.assert_close(mean_a, mean_depth_changed)
     input_nonfinite_depth = policy._process_actor_obs(
         _actor_obs(history_a, torch.full_like(depth_a, torch.nan), mode, beta)
     ).detach()
@@ -157,6 +164,259 @@ def test_legacy_actor_weight_migration_preserves_old_outputs():
         new_actor[0].bias.copy_(bias)
         new_actor[2].load_state_dict(old_actor[2].state_dict())
     torch.testing.assert_close(old_actor(old_input), new_actor(new_input))
+
+
+def _assert_module_has_nonzero_grad(module):
+    parameters = list(module.parameters())
+    assert parameters
+    assert all(parameter.grad is not None for parameter in parameters)
+    assert all(torch.count_nonzero(parameter.grad).item() > 0 for parameter in parameters)
+
+
+def _assert_module_has_no_grad(module):
+    assert all(
+        parameter.grad is None or torch.count_nonzero(parameter.grad).item() == 0
+        for parameter in module.parameters()
+    )
+
+
+def _make_random_actor_obs(modes):
+    batch_size = len(modes)
+    return _actor_obs(
+        torch.randn(batch_size, 2, 78),
+        torch.randn(batch_size, 2, 4, 4),
+        torch.tensor(modes, dtype=torch.float).view(-1, 1),
+        torch.full((batch_size, 1), 0.25),
+    )
+
+
+def test_recovery_history_modules_are_independent_and_op_initialized():
+    torch.manual_seed(17)
+    policy = _make_policy()
+    module_pairs = (
+        (policy.proprio_embedding, policy.recovery_proprio_embedding),
+        (policy.op_attention, policy.recovery_attention),
+        (policy.op_encoder, policy.recovery_encoder),
+        (policy.op_gru, policy.recovery_gru),
+    )
+    for op_module, recovery_module in module_pairs:
+        op_parameters = list(op_module.parameters())
+        recovery_parameters = list(recovery_module.parameters())
+        assert len(op_parameters) == len(recovery_parameters)
+        assert {id(parameter) for parameter in op_parameters}.isdisjoint(
+            {id(parameter) for parameter in recovery_parameters}
+        )
+        for op_parameter, recovery_parameter in zip(op_parameters, recovery_parameters):
+            torch.testing.assert_close(op_parameter, recovery_parameter)
+            assert op_parameter.data_ptr() != recovery_parameter.data_ptr()
+
+
+@pytest.mark.parametrize("fusion_type", ["attention", "mlp"])
+def test_recovery_history_encoder_supports_both_fusion_types(fusion_type):
+    policy = _make_policy(fusion_type=fusion_type)
+    actor_input = policy._process_actor_obs(_make_random_actor_obs([2.0, 2.0]))
+    assert actor_input.shape == (2, 209)
+    assert policy._last_recovery_latent.shape == (2, 64)
+    assert torch.isfinite(actor_input).all()
+    assert policy.is_recurrent is False
+
+
+def test_mode_sparse_execution_uses_only_active_row_subsets():
+    policy = _make_policy()
+    calls = {"op": [], "vp": [], "recovery": [], "cnn": []}
+
+    def record_rows(name):
+        def hook(_module, args, _output):
+            calls[name].append(args[0].shape[0])
+
+        return hook
+
+    handles = [
+        policy.op_gru.register_forward_hook(record_rows("op")),
+        policy.vp_gru.register_forward_hook(record_rows("vp")),
+        policy.recovery_gru.register_forward_hook(record_rows("recovery")),
+        policy.cnn.register_forward_hook(record_rows("cnn")),
+    ]
+    try:
+        policy._process_actor_obs(_make_random_actor_obs([0.0, 1.0, 0.0]))
+        assert calls == {"op": [3], "vp": [3], "recovery": [], "cnn": [6]}
+
+        for values in calls.values():
+            values.clear()
+        policy._process_actor_obs(_make_random_actor_obs([2.0, 2.0, 2.0]))
+        assert calls == {"op": [], "vp": [], "recovery": [3], "cnn": []}
+
+        for values in calls.values():
+            values.clear()
+        policy._process_actor_obs(_make_random_actor_obs([2.0, 0.0, 1.0, 2.0]))
+        assert calls == {"op": [2], "vp": [2], "recovery": [2], "cnn": [4]}
+    finally:
+        for handle in handles:
+            handle.remove()
+
+
+def test_recovery_only_actor_backward_is_isolated_from_op_and_vp():
+    torch.manual_seed(23)
+    policy = _make_policy()
+    loss = policy.act_inference(_make_random_actor_obs([2.0, 2.0])).square().sum()
+    loss.backward()
+
+    for module in (
+        policy.recovery_proprio_embedding,
+        policy.recovery_attention,
+        policy.recovery_encoder,
+        policy.recovery_gru,
+        policy.actor,
+    ):
+        _assert_module_has_nonzero_grad(module)
+    for module in (
+        policy.proprio_embedding,
+        policy.op_attention,
+        policy.op_encoder,
+        policy.op_gru,
+        policy.cnn,
+        policy.vp_attention,
+        policy.vp_encoder,
+        policy.vp_gru,
+    ):
+        _assert_module_has_no_grad(module)
+
+
+def test_op_and_vp_actor_backward_preserve_normal_paths_without_recovery_gradients():
+    op_policy = _make_policy()
+    op_policy.act_inference(_make_random_actor_obs([1.0, 1.0])).square().sum().backward()
+    for module in (
+        op_policy.proprio_embedding,
+        op_policy.op_attention,
+        op_policy.op_encoder,
+        op_policy.op_gru,
+        op_policy.actor,
+    ):
+        _assert_module_has_nonzero_grad(module)
+    for module in (
+        op_policy.recovery_proprio_embedding,
+        op_policy.recovery_attention,
+        op_policy.recovery_encoder,
+        op_policy.recovery_gru,
+    ):
+        _assert_module_has_no_grad(module)
+
+    vp_policy = _make_policy()
+    vp_policy.act_inference(_make_random_actor_obs([0.0, 0.0])).square().sum().backward()
+    for module in (
+        vp_policy.proprio_embedding,
+        vp_policy.cnn,
+        vp_policy.vp_attention,
+        vp_policy.vp_encoder,
+        vp_policy.vp_gru,
+        vp_policy.actor,
+    ):
+        _assert_module_has_nonzero_grad(module)
+    for module in (
+        vp_policy.recovery_proprio_embedding,
+        vp_policy.recovery_attention,
+        vp_policy.recovery_encoder,
+        vp_policy.recovery_gru,
+    ):
+        _assert_module_has_no_grad(module)
+
+
+def test_normal_only_sparse_path_matches_original_full_batch_computation():
+    policy = _make_policy()
+    observations = _make_random_actor_obs([0.0, 1.0, 1.0, 0.0])
+    proprio_history, depth_flat, actor_mode, beta_obs, current_proprio = policy._split_actor_obs(observations)
+    proprio_embed = policy._embed_proprio_history(proprio_history)
+    depth_embed = policy._embed_depth_history(depth_flat)
+    depth_context = policy._align_depth_to_proprio_history(depth_embed)
+    op_features = policy._fuse_op_features(proprio_embed)
+    vp_features = policy._fuse_vp_features(proprio_embed, depth_embed, depth_context)
+    _, op_hidden = policy.op_gru(op_features)
+    _, vp_hidden = policy.vp_gru(vp_features)
+    is_op = (actor_mode == 1.0).to(current_proprio.dtype)
+    is_recovery = torch.zeros_like(is_op)
+    is_vp = actor_mode == 0.0
+    expected_input = torch.cat(
+        [
+            current_proprio,
+            torch.where(is_op.bool(), op_hidden[-1], torch.zeros_like(op_hidden[-1])),
+            torch.where(is_vp, vp_hidden[-1], torch.zeros_like(vp_hidden[-1])),
+            is_op,
+            is_recovery,
+            beta_obs,
+        ],
+        dim=-1,
+    )
+    actual_input = policy._process_actor_obs(observations)
+    torch.testing.assert_close(actual_input, expected_input)
+    torch.testing.assert_close(policy.actor(actual_input), policy.actor(expected_input))
+
+
+def _recovery_prefix_map():
+    return {
+        "recovery_proprio_embedding.": "proprio_embedding.",
+        "recovery_attention.": "op_attention.",
+        "recovery_encoder.": "op_encoder.",
+        "recovery_gru.": "op_gru.",
+    }
+
+
+def _without_recovery_history(state_dict):
+    prefixes = tuple(_recovery_prefix_map())
+    return {
+        key: value.clone()
+        for key, value in state_dict.items()
+        if not key.startswith(prefixes)
+    }
+
+
+def test_missing_recovery_checkpoint_branch_is_copied_from_checkpoint_op():
+    policy = _make_policy()
+    target = policy.state_dict()
+    checkpoint = _without_recovery_history(target)
+    migrated, changed = RENetAmpOnPolicyRunner._migrate_missing_recovery_history_branch(checkpoint, target)
+    assert changed
+
+    for recovery_prefix, op_prefix in _recovery_prefix_map().items():
+        for recovery_key in (key for key in target if key.startswith(recovery_prefix)):
+            op_key = op_prefix + recovery_key.removeprefix(recovery_prefix)
+            torch.testing.assert_close(migrated[recovery_key], checkpoint[op_key])
+            assert migrated[recovery_key].data_ptr() != checkpoint[op_key].data_ptr()
+    policy.load_state_dict(migrated)
+
+
+def test_complete_recovery_checkpoint_is_preserved_and_partial_is_rejected():
+    policy = _make_policy()
+    complete = {key: value.clone() for key, value in policy.state_dict().items()}
+    unchanged, changed = RENetAmpOnPolicyRunner._migrate_missing_recovery_history_branch(
+        complete,
+        policy.state_dict(),
+    )
+    assert not changed
+    assert unchanged is complete
+
+    partial = complete.copy()
+    recovery_key = next(key for key in partial if key.startswith("recovery_gru."))
+    partial.pop(recovery_key)
+    with pytest.raises(RuntimeError, match="partial Recovery history encoder"):
+        RENetAmpOnPolicyRunner._migrate_missing_recovery_history_branch(partial, policy.state_dict())
+
+
+def test_legacy_206_actor_and_missing_recovery_branch_migrate_together():
+    policy = _make_policy()
+    target = policy.state_dict()
+    checkpoint = _without_recovery_history(target)
+    old_actor_weight = checkpoint["actor.0.weight"][:, :206].clone()
+    checkpoint["actor.0.weight"] = old_actor_weight
+
+    migrated, actor_changed = RENetAmpOnPolicyRunner._migrate_legacy_actor_input(checkpoint, target)
+    migrated, recovery_changed = RENetAmpOnPolicyRunner._migrate_missing_recovery_history_branch(
+        migrated,
+        target,
+    )
+    assert actor_changed and recovery_changed
+    torch.testing.assert_close(migrated["actor.0.weight"][:, :206], old_actor_weight)
+    torch.testing.assert_close(migrated["actor.0.weight"][:, 206:], torch.zeros_like(target["actor.0.weight"][:, 206:]))
+    policy.load_state_dict(migrated)
 
 
 def test_mode_dependent_action_mapping_uses_current_pose_and_does_not_clamp_actions():

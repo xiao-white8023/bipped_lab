@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Optional
 
 import torch
@@ -241,10 +242,22 @@ class RENetActorCritic(nn.Module):
         self.actor = self._build_actor(actor_input_dim, actor_hidden_dims, activation_fn, num_actions)
         self.critic = self._build_critic(num_critic_obs, critic_hidden_dims, activation_fn)
 
+        # Recovery reads the same raw proprio history as OP, but owns a fully
+        # independent history encoder. Deep-copying gives fresh Parameter
+        # objects while preserving the requested OP-based initialization and
+        # leaves the initialization of every pre-existing module unchanged.
+        self.recovery_proprio_embedding = copy.deepcopy(self.proprio_embedding)
+        if self.fusion_type == "attention":
+            self.recovery_attention = copy.deepcopy(self.op_attention)
+        self.recovery_encoder = copy.deepcopy(self.op_encoder)
+        self.recovery_gru = copy.deepcopy(self.op_gru)
+        self.initialize_recovery_history_from_op()
+
         print(f"RENet proprio embedding: {self.proprio_embedding}")
         print(f"RENet fusion type: {self.fusion_type}")
         print(f"RENet OP encoder: {self.op_encoder}")
         print(f"RENet VP encoder: {self.vp_encoder}")
+        print(f"RENet Recovery encoder: {self.recovery_encoder}")
         print(f"RENet Actor MLP: {self.actor}")
         print(f"RENet Critic MLP: {self.critic}")
 
@@ -262,6 +275,7 @@ class RENetActorCritic(nn.Module):
         self._last_current_proprio: Optional[torch.Tensor] = None
         self._last_op_latent: Optional[torch.Tensor] = None
         self._last_vp_latent: Optional[torch.Tensor] = None
+        self._last_recovery_latent: Optional[torch.Tensor] = None
         self._last_estimator_mask: Optional[torch.Tensor] = None
         self._last_actor_mode: Optional[torch.Tensor] = None
 
@@ -294,6 +308,14 @@ class RENetActorCritic(nn.Module):
             current_dim = hidden_dim
         layers.append(nn.Linear(current_dim, 1))
         return nn.Sequential(*layers)
+
+    def initialize_recovery_history_from_op(self):
+        """Initialize Recovery history weights from OP without sharing parameters."""
+        self.recovery_proprio_embedding.load_state_dict(self.proprio_embedding.state_dict())
+        if self.fusion_type == "attention":
+            self.recovery_attention.load_state_dict(self.op_attention.state_dict())
+        self.recovery_encoder.load_state_dict(self.op_encoder.state_dict())
+        self.recovery_gru.load_state_dict(self.op_gru.state_dict())
 
     @staticmethod
     def _resolve_terrain_output(
@@ -336,6 +358,14 @@ class RENetActorCritic(nn.Module):
         proprio_embed = self.proprio_embedding(proprio_seq.reshape(batch_size * self.history_len, -1))
         return proprio_embed.view(batch_size, self.history_len, self.proprio_embed_dim)
 
+    def _embed_recovery_proprio_history(self, proprio_history: torch.Tensor):
+        batch_size = proprio_history.shape[0]
+        proprio_seq = proprio_history.reshape(batch_size, self.history_len, self.single_proprio_dim)
+        proprio_embed = self.recovery_proprio_embedding(
+            proprio_seq.reshape(batch_size * self.history_len, self.single_proprio_dim)
+        )
+        return proprio_embed.reshape(batch_size, self.history_len, self.proprio_embed_dim)
+
     def _embed_depth_history(self, depth_flat: torch.Tensor):
         batch_size = depth_flat.shape[0]
         depth_seq = depth_flat.view(batch_size, self.depth_history_frames, self.cnn_h, self.cnn_w)
@@ -366,6 +396,27 @@ class RENetActorCritic(nn.Module):
         op_features = self.op_encoder(fused)
         return op_features.view(batch_size, self.history_len, self.estimator_latent_dim)
 
+    def _fuse_recovery_features(self, proprio_embed: torch.Tensor):
+        batch_size = proprio_embed.shape[0]
+        if self.fusion_type == "attention":
+            fused_tokens, _ = self.recovery_attention(
+                proprio_embed,
+                proprio_embed,
+                proprio_embed,
+                need_weights=False,
+            )
+            fused = fused_tokens.reshape(batch_size * self.history_len, self.proprio_embed_dim)
+        else:
+            fused = proprio_embed.reshape(batch_size * self.history_len, self.proprio_embed_dim)
+        recovery_features = self.recovery_encoder(fused)
+        return recovery_features.reshape(batch_size, self.history_len, self.estimator_latent_dim)
+
+    def _encode_recovery_history(self, proprio_history: torch.Tensor):
+        proprio_embed = self._embed_recovery_proprio_history(proprio_history)
+        recovery_features = self._fuse_recovery_features(proprio_embed)
+        _, recovery_hidden = self.recovery_gru(recovery_features)
+        return recovery_hidden[-1]
+
     def _fuse_vp_features(
         self,
         proprio_embed: torch.Tensor,
@@ -387,25 +438,60 @@ class RENetActorCritic(nn.Module):
     def _process_actor_obs(self, observations: torch.Tensor):
         proprio_history, depth_flat, actor_mode, beta_obs, current_proprio = self._split_actor_obs(observations)
 
-        proprio_embed = self._embed_proprio_history(proprio_history)
-        depth_embed = self._embed_depth_history(depth_flat)
-        depth_context = self._align_depth_to_proprio_history(depth_embed)
+        batch_size = observations.shape[0]
+        recovery_mask = actor_mode.squeeze(-1) == 2.0
+        locomotion_mask = ~recovery_mask
+        recovery_indices = recovery_mask.nonzero(as_tuple=True)[0]
+        locomotion_indices = locomotion_mask.nonzero(as_tuple=True)[0]
 
-        op_features = self._fuse_op_features(proprio_embed)
-        vp_features = self._fuse_vp_features(proprio_embed, depth_embed, depth_context)
-        _, op_hidden = self.op_gru(op_features)
-        _, vp_hidden = self.vp_gru(vp_features)
-        op_latent = op_hidden[-1]
-        vp_latent = vp_hidden[-1]
+        empty_latent = current_proprio.new_zeros((batch_size, self.estimator_latent_dim))
+        op_latent = empty_latent
+        vp_latent = empty_latent.clone()
+        recovery_latent = empty_latent.clone()
 
-        is_op = (actor_mode == 1.0).to(op_latent.dtype)
-        is_recovery = (actor_mode == 2.0).to(op_latent.dtype)
-        op_slot_mask = torch.clamp(is_op + is_recovery, max=1.0)
-        vp_mask = (actor_mode == 0.0).to(vp_latent.dtype)
+        # NORMAL rows preserve the original behavior: both OP and VP branches
+        # run, but only for the locomotion subset of a mixed batch.
+        if locomotion_indices.numel() > 0:
+            proprio_history_loco = proprio_history.index_select(0, locomotion_indices)
+            depth_flat_loco = depth_flat.index_select(0, locomotion_indices)
+            proprio_embed_loco = self._embed_proprio_history(proprio_history_loco)
+            depth_embed_loco = self._embed_depth_history(depth_flat_loco)
+            depth_context_loco = self._align_depth_to_proprio_history(depth_embed_loco)
+
+            op_features_loco = self._fuse_op_features(proprio_embed_loco)
+            vp_features_loco = self._fuse_vp_features(
+                proprio_embed_loco,
+                depth_embed_loco,
+                depth_context_loco,
+            )
+            _, op_hidden_loco = self.op_gru(op_features_loco)
+            _, vp_hidden_loco = self.vp_gru(vp_features_loco)
+            op_latent = op_latent.index_copy(0, locomotion_indices, op_hidden_loco[-1])
+            vp_latent = vp_latent.index_copy(0, locomotion_indices, vp_hidden_loco[-1])
+
+        # Recovery never reads or executes the depth/VP/OP path.
+        if recovery_indices.numel() > 0:
+            proprio_history_recovery = proprio_history.index_select(0, recovery_indices)
+            recovery_latent_active = self._encode_recovery_history(proprio_history_recovery)
+            recovery_latent = recovery_latent.index_copy(
+                0,
+                recovery_indices,
+                recovery_latent_active,
+            )
+
+        is_op = (actor_mode == 1.0).to(current_proprio.dtype)
+        is_recovery = (actor_mode == 2.0).to(current_proprio.dtype)
+        vp_mask = actor_mode == 0.0
+        first_latent_slot = torch.where(
+            is_recovery.bool(),
+            recovery_latent,
+            torch.where(is_op.bool(), op_latent, torch.zeros_like(op_latent)),
+        )
+        second_latent_slot = torch.where(vp_mask, vp_latent, torch.zeros_like(vp_latent))
         renet_latent = torch.cat(
             [
-                torch.where(op_slot_mask.bool(), op_latent, torch.zeros_like(op_latent)),
-                torch.where(vp_mask.bool(), vp_latent, torch.zeros_like(vp_latent)),
+                first_latent_slot,
+                second_latent_slot,
             ],
             dim=-1,
         )
@@ -417,6 +503,7 @@ class RENetActorCritic(nn.Module):
         self._last_current_proprio = current_proprio
         self._last_op_latent = op_latent
         self._last_vp_latent = vp_latent
+        self._last_recovery_latent = recovery_latent
         self._last_estimator_mask = is_op
         self._last_actor_mode = actor_mode
         return actor_input

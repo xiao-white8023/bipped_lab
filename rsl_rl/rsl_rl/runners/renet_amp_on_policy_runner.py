@@ -606,10 +606,21 @@ class RENetAmpOnPolicyRunner:
             loaded_dict["model_state_dict"],
             self.alg.policy.state_dict(),
         )
+        model_state_dict, recovery_history_branch_migrated = self._migrate_missing_recovery_history_branch(
+            model_state_dict,
+            self.alg.policy.state_dict(),
+        )
+        model_structure_migrated = actor_input_migrated or recovery_history_branch_migrated
         if actor_input_migrated:
             warnings.warn(
                 "Migrated legacy RENet Actor input 206 -> 209: copied the original 206 columns and "
                 "zero-initialized is_op, is_recovery, and beta columns. Optimizer state will be reinitialized.",
+                stacklevel=2,
+            )
+        if recovery_history_branch_migrated:
+            warnings.warn(
+                "Initialized missing Recovery history encoder from OP history encoder; "
+                "optimizer state was not restored because parameter groups/shapes changed.",
                 stacklevel=2,
             )
         resumed_training = self.alg.policy.load_state_dict(model_state_dict)
@@ -658,7 +669,7 @@ class RENetAmpOnPolicyRunner:
         if (
             load_optimizer
             and resumed_training
-            and not actor_input_migrated
+            and not model_structure_migrated
             and checkpoint_has_recovery_amp
             and checkpoint_has_recovery_critic
         ):
@@ -670,7 +681,7 @@ class RENetAmpOnPolicyRunner:
                     f"Could not restore optimizer state ({error}); using the newly initialized optimizer.",
                     stacklevel=2,
                 )
-        elif load_optimizer and resumed_training and not actor_input_migrated:
+        elif load_optimizer and resumed_training and not model_structure_migrated:
             warnings.warn(
                 "Legacy checkpoint optimizer state does not contain all Recovery AMP/critic parameter groups; "
                 "using the newly initialized optimizer.",
@@ -710,6 +721,56 @@ class RENetAmpOnPolicyRunner:
         migrated_weight = torch.zeros_like(target_weight)
         migrated_weight[:, :206].copy_(old_weight.to(device=target_weight.device, dtype=target_weight.dtype))
         migrated_state_dict[actor_weight_key] = migrated_weight
+        return migrated_state_dict, True
+
+    @staticmethod
+    def _migrate_missing_recovery_history_branch(model_state_dict, target_state_dict):
+        """Initialize an entirely missing Recovery history branch from checkpoint OP weights."""
+        prefix_map = {
+            "recovery_proprio_embedding.": "proprio_embedding.",
+            "recovery_attention.": "op_attention.",
+            "recovery_encoder.": "op_encoder.",
+            "recovery_gru.": "op_gru.",
+        }
+        recovery_keys = {
+            key
+            for key in target_state_dict
+            if any(key.startswith(prefix) for prefix in prefix_map)
+        }
+        if not recovery_keys:
+            return model_state_dict, False
+
+        present_recovery_keys = recovery_keys.intersection(model_state_dict)
+        if present_recovery_keys == recovery_keys:
+            return model_state_dict, False
+        if present_recovery_keys:
+            missing_keys = sorted(recovery_keys - present_recovery_keys)
+            raise RuntimeError(
+                "Checkpoint contains a partial Recovery history encoder. "
+                "Provide either all Recovery history parameters or none. Missing keys: "
+                + ", ".join(missing_keys)
+            )
+
+        migrated_state_dict = model_state_dict.copy()
+        for recovery_key in sorted(recovery_keys):
+            recovery_prefix = next(prefix for prefix in prefix_map if recovery_key.startswith(prefix))
+            op_key = prefix_map[recovery_prefix] + recovery_key.removeprefix(recovery_prefix)
+            if op_key not in model_state_dict:
+                raise RuntimeError(
+                    f"Cannot initialize missing Recovery history parameter '{recovery_key}': "
+                    f"checkpoint OP source '{op_key}' is missing."
+                )
+            source = model_state_dict[op_key]
+            target = target_state_dict[recovery_key]
+            if source.shape != target.shape:
+                raise RuntimeError(
+                    f"Cannot initialize missing Recovery history parameter '{recovery_key}' from '{op_key}': "
+                    f"checkpoint shape {tuple(source.shape)} does not match target shape {tuple(target.shape)}."
+                )
+            migrated_state_dict[recovery_key] = source.to(
+                device=target.device,
+                dtype=target.dtype,
+            ).clone()
         return migrated_state_dict, True
 
     def get_inference_policy(self, device=None):
