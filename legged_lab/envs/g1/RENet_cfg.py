@@ -76,6 +76,23 @@ class RENetTrainCfg:
     force_vp_terrain_names: list[str] = ["gap", "high_platform", "hf_stepping_stones", "star_terrain"]
     force_vp_terrain_level: int = -1
 
+
+@configclass
+class RecoveryStateMachineCfg:
+    """V1 shared-Recovery state machine; disabled until a Recovery actor exists."""
+
+    enable: bool = False
+    max_duration_s: float = 6.0
+    absolute_episode_timeout_s: float = 28.0
+    ready_hold_s: float = 0.4
+    upright_threshold: float = 0.93
+    max_ang_vel: float = 0.8
+    max_vertical_vel: float = 0.25
+    torso_force_threshold: float = 1.0
+    foot_force_threshold: float = 5.0
+    height_ratio: float = 0.80
+
+
 @configclass
 class Reward:
     # 跟踪速度奖励
@@ -311,6 +328,8 @@ class G1RENETENVCFG:
     gait=GaitCfg()
 
     renet=RENetTrainCfg()
+
+    recovery=RecoveryStateMachineCfg()
 
     robot: RobotCfg = RobotCfg(
         actor_obs_history_length=10,
@@ -612,18 +631,14 @@ class G1RENETAGENTCFG:
 
     # amp parameter
     amp_reward_coef = 0.3
-
-
-      # 风格奖励系数 动作像专家数据。
-    amp_motion_files = [    f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
+    # 风格奖励系数 动作像专家数据。
+    amp_motion_files = [
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/stand_to_walk.txt",
-
         f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/walk_turn_around.txt",
-
         f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/walk_turn_left.txt",
-
         f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/walk_turn_right.txt",]
     amp_num_preload_transitions = 200000 

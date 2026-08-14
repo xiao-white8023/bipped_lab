@@ -1,3 +1,5 @@
+import math
+
 import isaaclab.sim as sim_utils
 import isaacsim.core.utils.torch as torch_utils  # type: ignore
 import numpy as np
@@ -281,9 +283,50 @@ class G1RENetEnv(VecEnv):
 
     def init_buffers(self):
         self.extras = {}
-        
-        self.max_episode_length_s = self.cfg.scene.max_episode_length_s  # 定义的智能体最多可以存活的时间 20s
-        self.max_episode_length = np.ceil(self.max_episode_length_s / self.step_dt) # 将智能体最大存活时间 转化为最大的步数 为1000步 用于后续判断是否大于最大步数了 大于就重置环境
+
+        self.recovery_state_machine_enabled = bool(self.cfg.recovery.enable)
+        self.baseline_max_episode_length_s = float(self.cfg.scene.max_episode_length_s)
+        recovery_positive_params = {
+            "max_duration_s": self.cfg.recovery.max_duration_s,
+            "absolute_episode_timeout_s": self.cfg.recovery.absolute_episode_timeout_s,
+            "ready_hold_s": self.cfg.recovery.ready_hold_s,
+            "upright_threshold": self.cfg.recovery.upright_threshold,
+            "max_ang_vel": self.cfg.recovery.max_ang_vel,
+            "max_vertical_vel": self.cfg.recovery.max_vertical_vel,
+            "torso_force_threshold": self.cfg.recovery.torso_force_threshold,
+            "foot_force_threshold": self.cfg.recovery.foot_force_threshold,
+        }
+        for name, value in recovery_positive_params.items():
+            if not math.isfinite(float(value)) or float(value) <= 0.0:
+                raise ValueError(f"recovery.{name} must be positive and finite, got {value}.")
+        if not math.isfinite(self.baseline_max_episode_length_s) or self.baseline_max_episode_length_s <= 0.0:
+            raise ValueError("scene.max_episode_length_s must be positive and finite.")
+        if not math.isfinite(float(self.step_dt)) or float(self.step_dt) <= 0.0:
+            raise ValueError("The control step_dt must be positive and finite.")
+        if float(self.cfg.recovery.upright_threshold) > 1.0:
+            raise ValueError("recovery.upright_threshold cannot exceed 1.0.")
+        if not 0.0 < float(self.cfg.recovery.height_ratio) <= 1.0:
+            raise ValueError("recovery.height_ratio must be in (0, 1].")
+
+        self.max_episode_length_s = (
+            float(self.cfg.recovery.absolute_episode_timeout_s)
+            if self.recovery_state_machine_enabled
+            else self.baseline_max_episode_length_s
+        )
+        self.max_episode_length = math.ceil(self.max_episode_length_s / self.step_dt)
+        self.recovery_max_steps = math.ceil(float(self.cfg.recovery.max_duration_s) / self.step_dt)
+        self.recovery_ready_hold_steps = math.ceil(float(self.cfg.recovery.ready_hold_s) / self.step_dt)
+
+        # G1_23CFG's default root z is the nominal base height relative to the
+        # terrain origin. Unlike a guessed constant, it follows robot config changes.
+        nominal_root_pos = getattr(self.cfg.scene.robot.init_state, "pos", None)
+        if nominal_root_pos is None or len(nominal_root_pos) < 3 or not math.isfinite(float(nominal_root_pos[2])):
+            raise ValueError("Recovery state machine requires a finite default robot root height.")
+        self.nominal_base_height = float(nominal_root_pos[2])
+        if self.nominal_base_height <= 0.0:
+            raise ValueError(f"Nominal robot root height must be positive, got {self.nominal_base_height}.")
+        self.recovery_ready_height_threshold = float(self.cfg.recovery.height_ratio) * self.nominal_base_height
+
         self.num_actions = self.robot.data.default_joint_pos.shape[1]  # 获取机器人的动作维度（关节数量），这是策略网络输出层的维度。
         self.clip_actions = self.cfg.normalization.clip_actions   # 读取 “动作裁剪阈值”，限制策略网络输出的动作范围，避免动作过大导致机器人关节损坏 / 物理仿真崩溃。
         self.clip_obs = self.cfg.normalization.clip_observations  # 读取 “观测裁剪阈值”，限制机器人观测数据的范围，避免异常值（如传感器故障、物理抖动）导致网络训练不稳定
@@ -310,6 +353,18 @@ class G1RENetEnv(VecEnv):
         self.termination_contact_cfg.resolve(self.scene)  # 从场景中定位到 在walk_CFG.py的配置的接触终止的关节
         self.feet_cfg = SceneEntityCfg(name="contact_sensor", body_names=self.cfg.robot.feet_body_names)
         self.feet_cfg.resolve(self.scene) # 从场景中定位到创建「脚部接触传感器的定位配置」，指定 “哪些刚体是机器人的脚部”，用于检测脚部是否落地  # 用于判断脚是否接触地面了
+        if len(self.feet_cfg.body_ids) != 2:
+            raise RuntimeError(
+                "Recovery support-height routing requires exactly two feet, got "
+                f"{self.feet_cfg.body_names}."
+            )
+        resolved_foot_names = [self.contact_sensor.body_names[index] for index in self.feet_cfg.body_ids]
+        left_matches = [index for index, name in enumerate(resolved_foot_names) if "left" in name]
+        right_matches = [index for index, name in enumerate(resolved_foot_names) if "right" in name]
+        if len(left_matches) != 1 or len(right_matches) != 1:
+            raise RuntimeError(f"Could not identify left/right foot contact bodies: {resolved_foot_names}.")
+        self.left_foot_contact_index = left_matches[0]
+        self.right_foot_contact_index = right_matches[0]
         
         self.obs_scales = self.cfg.normalization.obs_scales
         self.add_noise = self.cfg.noise.add_noise
@@ -320,6 +375,22 @@ class G1RENetEnv(VecEnv):
         self.sim_step_counter = 0 # 创建「全局仿真步数计数器」，记录整个仿真运行的总步数（所有环境共享），而非单个环境的 episode 步数
         # 创建「超时标记缓冲区」，标记哪些环境因达到最大 episode 长度需要重置
         self.time_out_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+
+        # Recovery state is per environment. Mode switches do not set PPO done;
+        # only recovery/absolute timeouts do so in the enabled state machine.
+        self.recovery_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.recovery_timer = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.recovery_ready_counter = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
+        self.recovery_trigger_armed = torch.ones(self.num_envs, device=self.device, dtype=torch.bool)
+        self.enter_recovery_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.exit_recovery_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.recovery_failed_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.recovery_ready_now_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.recovery_upright_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.recovery_height_ok_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.recovery_foot_support_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.recovery_torso_clear_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self._recovery_diagnostics = self._empty_recovery_diagnostics()
 
         self.phase = torch.zeros(self.num_envs, device=self.device)
         self.phase_left = torch.zeros(self.num_envs, device=self.device)
@@ -671,7 +742,198 @@ class G1RENetEnv(VecEnv):
         self.critic_obs = torch.clip(self.critic_obs, -self.clip_obs, self.clip_obs)
 
         return self.actor_obs, self.critic_obs
-    
+
+    @staticmethod
+    def _finite_ray_median(hit_z: torch.Tensor):
+        """Return per-environment medians over finite ray hits without CPU copies."""
+        if hit_z.ndim < 2:
+            raise ValueError(f"Ray hit z must have shape [num_envs, ...], got {tuple(hit_z.shape)}.")
+        flat_hit_z = hit_z.flatten(start_dim=1)
+        if flat_hit_z.shape[1] == 0:
+            raise ValueError("Ray hit z must contain at least one ray per environment.")
+        finite = torch.isfinite(flat_hit_z)
+        valid_count = finite.sum(dim=1)
+        sorted_hit_z = torch.sort(
+            torch.where(finite, flat_hit_z, torch.full_like(flat_hit_z, torch.inf)),
+            dim=1,
+        ).values
+        lower_idx = torch.clamp((valid_count - 1) // 2, min=0)
+        upper_idx = torch.clamp(valid_count // 2, max=flat_hit_z.shape[1] - 1)
+        lower = sorted_hit_z.gather(1, lower_idx.unsqueeze(1)).squeeze(1)
+        upper = sorted_hit_z.gather(1, upper_idx.unsqueeze(1)).squeeze(1)
+        valid = valid_count > 0
+        median = torch.where(valid, 0.5 * (lower + upper), torch.zeros_like(lower))
+        return median, valid
+
+    @staticmethod
+    def _route_support_height(
+        left_ground_z: torch.Tensor,
+        left_valid: torch.Tensor,
+        right_ground_z: torch.Tensor,
+        right_valid: torch.Tensor,
+        left_support: torch.Tensor,
+        right_support: torch.Tensor,
+    ):
+        """Select terrain height only from feet with contact and valid ray hits."""
+        left_source = left_support & left_valid
+        right_source = right_support & right_valid
+        both = left_source & right_source
+        left_only = left_source & ~right_source
+        right_only = right_source & ~left_source
+        support_height_valid = left_source | right_source
+        support_height = torch.zeros_like(left_ground_z)
+        support_height = torch.where(both, 0.5 * (left_ground_z + right_ground_z), support_height)
+        support_height = torch.where(left_only, left_ground_z, support_height)
+        support_height = torch.where(right_only, right_ground_z, support_height)
+        return support_height, support_height_valid
+
+    def _get_current_foot_support(self):
+        foot_forces = torch.norm(
+            self.contact_sensor.data.net_forces_w[:, self.feet_cfg.body_ids, :3],
+            dim=-1,
+        )
+        threshold = float(self.cfg.recovery.foot_force_threshold)
+        return (
+            foot_forces[:, self.left_foot_contact_index] > threshold,
+            foot_forces[:, self.right_foot_contact_index] > threshold,
+        )
+
+    def compute_local_support_height(self, left_support=None, right_support=None):
+        """Compute contact-selected terrain height from each foot's finite ray median."""
+        if left_support is None or right_support is None:
+            left_support, right_support = self._get_current_foot_support()
+
+        if self.left_feet_ray_caster is None or self.right_feet_ray_caster is None:
+            zeros = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+            invalid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+            return zeros, invalid, zeros.clone(), zeros.clone()
+
+        left_ground_z, left_ray_valid = self._finite_ray_median(
+            self.left_feet_ray_caster.data.ray_hits_w[..., 2]
+        )
+        right_ground_z, right_ray_valid = self._finite_ray_median(
+            self.right_feet_ray_caster.data.ray_hits_w[..., 2]
+        )
+        support_height, support_height_valid = self._route_support_height(
+            left_ground_z,
+            left_ray_valid,
+            right_ground_z,
+            right_ray_valid,
+            left_support,
+            right_support,
+        )
+        return support_height, support_height_valid, left_ground_z, right_ground_z
+
+    def _compute_current_torso_clear(self):
+        torso_forces = torch.norm(
+            self.contact_sensor.data.net_forces_w[:, self.termination_contact_cfg.body_ids, :3],
+            dim=-1,
+        )
+        return torch.all(torso_forces < float(self.cfg.recovery.torso_force_threshold), dim=1)
+
+    def compute_recovery_ready_now(self):
+        """Evaluate the instantaneous V1 Recovery Ready conditions."""
+        left_support, right_support = self._get_current_foot_support()
+        support_height, support_height_valid, _, _ = self.compute_local_support_height(
+            left_support,
+            right_support,
+        )
+        terrain_relative_base_height = self.robot.data.root_pos_w[:, 2] - support_height
+
+        upright = -self.robot.data.projected_gravity_b[:, 2] > float(self.cfg.recovery.upright_threshold)
+        height_ok = support_height_valid & (
+            terrain_relative_base_height > self.recovery_ready_height_threshold
+        )
+        low_ang_vel = torch.linalg.vector_norm(self.robot.data.root_ang_vel_b, dim=1) < float(
+            self.cfg.recovery.max_ang_vel
+        )
+        low_vertical_vel = torch.abs(self.robot.data.root_lin_vel_b[:, 2]) < float(
+            self.cfg.recovery.max_vertical_vel
+        )
+        foot_support = left_support | right_support
+        torso_clear = self._compute_current_torso_clear()
+
+        active = self.recovery_mask
+        self.recovery_upright_buf = active & upright
+        self.recovery_height_ok_buf = active & height_ok
+        self.recovery_foot_support_buf = active & foot_support
+        self.recovery_torso_clear_buf = active & torso_clear
+        self.recovery_ready_now_buf = (
+            active
+            & upright
+            & height_ok
+            & low_ang_vel
+            & low_vertical_vel
+            & foot_support
+            & torso_clear
+        )
+        return self.recovery_ready_now_buf
+
+    def compute_locomotion_failure(self):
+        """The original RENet torso-contact termination condition, unchanged."""
+        net_contact_forces = self.contact_sensor.data.net_forces_w_history
+        return torch.any(
+            torch.max(
+                torch.norm(
+                    net_contact_forces[:, :, self.termination_contact_cfg.body_ids],
+                    dim=-1,
+                ),
+                dim=1,
+            )[0]
+            > 1.0,
+            dim=1,
+        )
+
+    def get_recovery_mask(self):
+        """Return action-time mode routing state for the AMP runner."""
+        return self.recovery_mask
+
+    def _empty_recovery_diagnostics(self):
+        zero = torch.zeros((), dtype=torch.float, device=self.device)
+        return {
+            "Recovery/active_ratio": zero,
+            "Recovery/enter_count": zero.clone(),
+            "Recovery/success_count": zero.clone(),
+            "Recovery/failure_count": zero.clone(),
+            "Recovery/ready_now_ratio": zero.clone(),
+            "Recovery/upright_ratio": zero.clone(),
+            "Recovery/height_ok_ratio": zero.clone(),
+            "Recovery/foot_support_ratio": zero.clone(),
+            "Recovery/torso_clear_ratio": zero.clone(),
+        }
+
+    def _update_recovery_diagnostics(self, evaluated_recovery_mask):
+        evaluated_count = evaluated_recovery_mask.float().sum().clamp(min=1.0)
+        self._recovery_diagnostics = {
+            "Recovery/active_ratio": self.recovery_mask.float().mean(),
+            "Recovery/enter_count": self.enter_recovery_buf.float().sum(),
+            "Recovery/success_count": self.exit_recovery_buf.float().sum(),
+            "Recovery/failure_count": self.recovery_failed_buf.float().sum(),
+            "Recovery/ready_now_ratio": self.recovery_ready_now_buf.float().sum() / evaluated_count,
+            "Recovery/upright_ratio": self.recovery_upright_buf.float().sum() / evaluated_count,
+            "Recovery/height_ok_ratio": self.recovery_height_ok_buf.float().sum() / evaluated_count,
+            "Recovery/foot_support_ratio": self.recovery_foot_support_buf.float().sum() / evaluated_count,
+            "Recovery/torso_clear_ratio": self.recovery_torso_clear_buf.float().sum() / evaluated_count,
+        }
+
+    def get_recovery_diagnostics(self):
+        """Expose the most recent pre-reset Recovery diagnostics."""
+        return dict(self._recovery_diagnostics)
+
+    def _reset_recovery_buffers(self, env_ids):
+        self.recovery_mask[env_ids] = False
+        self.recovery_timer[env_ids] = 0
+        self.recovery_ready_counter[env_ids] = 0
+        self.recovery_trigger_armed[env_ids] = True
+        self.enter_recovery_buf[env_ids] = False
+        self.exit_recovery_buf[env_ids] = False
+        self.recovery_failed_buf[env_ids] = False
+        self.recovery_ready_now_buf[env_ids] = False
+        self.recovery_upright_buf[env_ids] = False
+        self.recovery_height_ok_buf[env_ids] = False
+        self.recovery_foot_support_buf[env_ids] = False
+        self.recovery_torso_clear_buf[env_ids] = False
+
     def reset(self, env_ids):
         if len(env_ids) == 0:
             return
@@ -704,6 +966,10 @@ class G1RENetEnv(VecEnv):
         self.critic_obs_buffer.reset(env_ids)
         self.action_buffer.reset(env_ids)
         self.episode_length_buf[env_ids] = 0
+
+        # A Recovery failure uses this exact existing reset path. Only the
+        # state-machine bookkeeping is additionally cleared.
+        self._reset_recovery_buffers(env_ids)
 
         #
         if self.camera is not None:
@@ -797,6 +1063,8 @@ class G1RENetEnv(VecEnv):
         # 4. 判断终止和计算任务奖励
         # ---------------------------------------------------------
         self.reset_buf, self.time_out_buf = self.check_reset()
+        # Snapshot before true reset clears per-environment Recovery buffers.
+        recovery_diagnostics = self.get_recovery_diagnostics()
 
         reward_buf = self.reward_manager.compute(
             self.step_dt
@@ -838,6 +1106,11 @@ class G1RENetEnv(VecEnv):
         # 6. reset终止环境
         # ---------------------------------------------------------
         self.reset(self.reset_env_ids)
+        # Use a fresh dictionary every step so the runner does not retain
+        # multiple references to one subsequently mutated diagnostics object.
+        step_log = dict(self.extras.get("log", {})) if self.reset_env_ids.numel() > 0 else {}
+        step_log.update(recovery_diagnostics)
+        self.extras["log"] = step_log
 
         # ---------------------------------------------------------
         # 7. reset后计算下一时刻观测
@@ -858,21 +1131,86 @@ class G1RENetEnv(VecEnv):
         )
 
     def check_reset(self):
-        net_contact_forces = self.contact_sensor.data.net_forces_w_history
+        locomotion_failure = self.compute_locomotion_failure()
 
-        reset_buf = torch.any(
-            torch.max(
-                torch.norm(
-                    net_contact_forces[:, :, self.termination_contact_cfg.body_ids],
-                    dim=-1,
-                ),
-                dim=1,
-            )[0]
-            > 1.0,
-            dim=1,
+        self.enter_recovery_buf.zero_()
+        self.exit_recovery_buf.zero_()
+        self.recovery_failed_buf.zero_()
+        self.recovery_ready_now_buf.zero_()
+        self.recovery_upright_buf.zero_()
+        self.recovery_height_ok_buf.zero_()
+        self.recovery_foot_support_buf.zero_()
+        self.recovery_torso_clear_buf.zero_()
+
+        if not self.recovery_state_machine_enabled:
+            # Strict baseline compatibility: original torso failure and the
+            # configured 20-second scene horizon both remain true resets.
+            self.recovery_mask.zero_()
+            self.recovery_timer.zero_()
+            self.recovery_ready_counter.zero_()
+            self.recovery_trigger_armed.fill_(True)
+            time_out_buf = self.episode_length_buf >= self.max_episode_length
+            reset_buf = locomotion_failure | time_out_buf
+            self._update_recovery_diagnostics(torch.zeros_like(self.recovery_mask))
+            return reset_buf, time_out_buf
+
+        absolute_timeout = self.episode_length_buf >= self.max_episode_length
+        was_recovery = self.recovery_mask.clone()
+
+        # A trigger disarmed by entry/success may only re-arm on a later step
+        # that started in NORMAL and has a genuinely clear history signal.
+        rearm = ~was_recovery & ~locomotion_failure
+        self.recovery_trigger_armed[rearm] = True
+
+        self.recovery_timer = torch.where(
+            was_recovery,
+            self.recovery_timer + 1,
+            torch.zeros_like(self.recovery_timer),
         )
-        time_out_buf = self.episode_length_buf >= self.max_episode_length
-        reset_buf |= time_out_buf
+        ready_now = self.compute_recovery_ready_now()
+        self.recovery_ready_counter = torch.where(
+            was_recovery & ready_now,
+            self.recovery_ready_counter + 1,
+            torch.zeros_like(self.recovery_ready_counter),
+        )
+        exit_recovery = was_recovery & (
+            self.recovery_ready_counter >= self.recovery_ready_hold_steps
+        )
+        recovery_failed = (
+            was_recovery
+            & (self.recovery_timer >= self.recovery_max_steps)
+            & ~exit_recovery
+        )
+
+        # Absolute timeout wins over a simultaneous NORMAL locomotion failure:
+        # that environment resets directly and never enters Recovery.
+        enter_recovery = (
+            ~was_recovery
+            & self.recovery_trigger_armed
+            & locomotion_failure
+            & ~absolute_timeout
+        )
+
+        self.enter_recovery_buf.copy_(enter_recovery)
+        self.exit_recovery_buf.copy_(exit_recovery)
+        self.recovery_failed_buf.copy_(recovery_failed)
+
+        self.recovery_mask[enter_recovery] = True
+        self.recovery_timer[enter_recovery] = 0
+        self.recovery_ready_counter[enter_recovery] = 0
+        self.recovery_trigger_armed[enter_recovery] = False
+
+        self.recovery_mask[exit_recovery] = False
+        self.recovery_timer[exit_recovery] = 0
+        self.recovery_ready_counter[exit_recovery] = 0
+        # Deliberately keep recovery_trigger_armed=False on success. A later
+        # NORMAL step with locomotion_failure=False performs the re-arm.
+
+        # Recovery torso contact is ignored. Only its own timeout and the
+        # whole-episode absolute horizon are true terminations.
+        reset_buf = recovery_failed | absolute_timeout
+        time_out_buf = absolute_timeout
+        self._update_recovery_diagnostics(was_recovery)
         return reset_buf, time_out_buf
     
     def update_terrain_levels(self, env_ids):
