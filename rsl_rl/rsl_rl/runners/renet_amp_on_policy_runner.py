@@ -56,6 +56,7 @@ class RENetAmpOnPolicyRunner:
             num_privileged_obs = extras["observations"][self.privileged_obs_type].shape[1] # critic的观测维度
         else:
             num_privileged_obs = num_obs
+        self.num_privileged_obs = num_privileged_obs
 
         '''
         policy中有actor critic网络
@@ -338,6 +339,13 @@ class RENetAmpOnPolicyRunner:
                             terminal_amp_states,
                         )
 
+                    timeout_bootstrap_values = self._compute_timeout_bootstrap_values(
+                        infos,
+                        reset_env_ids,
+                        recovery_mask_t,
+                        privileged_obs,
+                    )
+
                     rewards = self.alg.predict_routed_amp_reward(
                         amp_obs,
                         next_amp_obs_with_term,
@@ -355,6 +363,7 @@ class RENetAmpOnPolicyRunner:
                         infos,
                         next_amp_obs_with_term,
                         recovery_mask_t,
+                        timeout_bootstrap_values=timeout_bootstrap_values,
                     )
 
                     # Extract intrinsic rewards (only for logging)
@@ -714,6 +723,150 @@ class RENetAmpOnPolicyRunner:
                 f"Environment recovery mask must have shape ({self.env.num_envs},), got {tuple(mask.shape)}."
             )
         return mask.clone()
+
+    def _normalize_terminal_critic_obs(self, terminal_critic_obs):
+        """Apply the critic transform without updating empirical statistics a second time."""
+        if not self.empirical_normalization:
+            return self.privileged_obs_normalizer(terminal_critic_obs)
+
+        was_training = self.privileged_obs_normalizer.training
+        self.privileged_obs_normalizer.eval()
+        try:
+            return self.privileged_obs_normalizer(terminal_critic_obs)
+        finally:
+            self.privileged_obs_normalizer.train(was_training)
+
+    def _compute_timeout_bootstrap_values(
+        self,
+        infos,
+        reset_env_ids,
+        recovery_mask_t,
+        critic_obs_reference,
+    ):
+        """Evaluate mode-routed critics on true pre-reset timeout observations."""
+        value_shape = (self.env.num_envs, 1)
+        values = {
+            "timeout_loco_values": torch.zeros(
+                value_shape, dtype=critic_obs_reference.dtype, device=self.device
+            ),
+            "timeout_rec_task_values": torch.zeros(
+                value_shape, dtype=critic_obs_reference.dtype, device=self.device
+            ),
+            "timeout_rec_amp_values": torch.zeros(
+                value_shape, dtype=critic_obs_reference.dtype, device=self.device
+            ),
+            "timeout_rec_reg_values": torch.zeros(
+                value_shape, dtype=critic_obs_reference.dtype, device=self.device
+            ),
+        }
+        if reset_env_ids.numel() == 0:
+            return values
+        if reset_env_ids.ndim != 1 or reset_env_ids.dtype != torch.long:
+            raise RuntimeError(
+                "reset_env_ids must be a one-dimensional torch.long tensor, got "
+                f"shape={tuple(reset_env_ids.shape)}, dtype={reset_env_ids.dtype}."
+            )
+        if torch.any((reset_env_ids < 0) | (reset_env_ids >= self.env.num_envs)):
+            raise RuntimeError("reset_env_ids contains an out-of-range environment index.")
+
+        if "terminal_critic_obs" not in infos:
+            raise RuntimeError(
+                "The environment reset one or more environments, but infos does not contain "
+                "'terminal_critic_obs'. Build the critic snapshot before env.reset()."
+            )
+        terminal_critic_obs = infos["terminal_critic_obs"]
+        if not isinstance(terminal_critic_obs, torch.Tensor):
+            raise TypeError("infos['terminal_critic_obs'] must be a torch.Tensor.")
+
+        raw_critic_obs = infos["observations"].get(self.privileged_obs_type)
+        if not isinstance(raw_critic_obs, torch.Tensor):
+            raise RuntimeError("The environment did not provide the normal critic observation tensor.")
+        if terminal_critic_obs.device != raw_critic_obs.device:
+            raise RuntimeError(
+                "terminal_critic_obs device must match the environment critic observation device: "
+                f"{terminal_critic_obs.device} != {raw_critic_obs.device}."
+            )
+        if terminal_critic_obs.dtype != raw_critic_obs.dtype:
+            raise TypeError(
+                "terminal_critic_obs dtype must match the environment critic observation dtype: "
+                f"{terminal_critic_obs.dtype} != {raw_critic_obs.dtype}."
+            )
+        if not terminal_critic_obs.is_floating_point():
+            raise TypeError(f"terminal_critic_obs must be floating point, got {terminal_critic_obs.dtype}.")
+        if terminal_critic_obs.ndim != 2:
+            raise RuntimeError(
+                "terminal_critic_obs must be a 2-D tensor, got "
+                f"shape={tuple(terminal_critic_obs.shape)}."
+            )
+        if terminal_critic_obs.shape[0] != reset_env_ids.numel():
+            raise RuntimeError(
+                "The number of terminal critic observations does not match reset_env_ids: "
+                f"{terminal_critic_obs.shape[0]} != {reset_env_ids.numel()}."
+            )
+        if terminal_critic_obs.shape[1] != self.num_privileged_obs:
+            raise RuntimeError(
+                "Terminal critic observation dimension does not match the critic input dimension: "
+                f"{terminal_critic_obs.shape[1]} != {self.num_privileged_obs}."
+            )
+        if not torch.isfinite(terminal_critic_obs).all():
+            raise RuntimeError("terminal_critic_obs contains NaN or infinity.")
+
+        terminal_critic_obs = terminal_critic_obs.to(self.device)
+        if terminal_critic_obs.device != critic_obs_reference.device:
+            raise RuntimeError(
+                "terminal_critic_obs could not be moved to the critic device: "
+                f"{terminal_critic_obs.device} != {critic_obs_reference.device}."
+            )
+        terminal_critic_obs = self._normalize_terminal_critic_obs(terminal_critic_obs)
+
+        time_outs = infos.get("time_outs")
+        if not isinstance(time_outs, torch.Tensor):
+            raise TypeError("infos['time_outs'] must be a torch.Tensor.")
+        if time_outs.shape != (self.env.num_envs,):
+            raise RuntimeError(
+                f"infos['time_outs'] must have shape ({self.env.num_envs},), got {tuple(time_outs.shape)}."
+            )
+        if time_outs.dtype != torch.bool:
+            raise TypeError(f"infos['time_outs'] must have dtype bool, got {time_outs.dtype}.")
+        time_outs = time_outs.to(self.device)
+
+        recovery_failed = infos.get("recovery_failed")
+        if not isinstance(recovery_failed, torch.Tensor):
+            raise TypeError("infos['recovery_failed'] must be a torch.Tensor.")
+        if recovery_failed.shape != (self.env.num_envs,):
+            raise RuntimeError(
+                "infos['recovery_failed'] must have shape "
+                f"({self.env.num_envs},), got {tuple(recovery_failed.shape)}."
+            )
+        recovery_failed = recovery_failed.to(device=self.device, dtype=torch.bool)
+
+        reset_time_outs = time_outs.index_select(0, reset_env_ids)
+        reset_recovery_failed = recovery_failed.index_select(0, reset_env_ids)
+        reset_recovery_mask = recovery_mask_t.index_select(0, reset_env_ids)
+        effective_time_outs = reset_time_outs & ~reset_recovery_failed
+        loco_rows = effective_time_outs & ~reset_recovery_mask
+        recovery_rows = effective_time_outs & reset_recovery_mask
+
+        if torch.any(loco_rows):
+            loco_values = self.alg.policy.evaluate(terminal_critic_obs[loco_rows]).detach()
+            values["timeout_loco_values"].index_copy_(
+                0,
+                reset_env_ids[loco_rows],
+                loco_values,
+            )
+        if torch.any(recovery_rows):
+            recovery_values = self.alg.recovery_critic(terminal_critic_obs[recovery_rows])
+            recovery_env_ids = reset_env_ids[recovery_rows]
+            values["timeout_rec_task_values"].index_copy_(
+                0, recovery_env_ids, recovery_values["task"].detach()
+            )
+            values["timeout_rec_amp_values"].index_copy_(
+                0, recovery_env_ids, recovery_values["amp"].detach()
+            )
+            values["timeout_rec_reg_values"].index_copy_(
+                0, recovery_env_ids, recovery_values["reg"].detach()
+            )
+        return values
 
     def _configure_multi_gpu(self):
         """Configure multi-gpu training."""

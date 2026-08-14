@@ -227,7 +227,54 @@ class RENetAMPPPO(AMPPPO):
             rewards.append(reward.clone())
         return tuple(rewards), torch.ones(batch_size, dtype=torch.bool, device=self.device)
 
-    def process_env_step(self, rewards, dones, infos, amp_obs, recovery_mask_t=None):
+    def _read_timeout_bootstrap_values(self, timeout_bootstrap_values, batch_size: int):
+        field_map = {
+            "timeout_loco_values": "timeout_loco_value",
+            "timeout_rec_task_values": "timeout_rec_task_value",
+            "timeout_rec_amp_values": "timeout_rec_amp_value",
+            "timeout_rec_reg_values": "timeout_rec_reg_value",
+        }
+        if timeout_bootstrap_values is None:
+            timeout_bootstrap_values = {}
+        if not isinstance(timeout_bootstrap_values, dict):
+            raise TypeError("timeout_bootstrap_values must be a dict or None.")
+        unexpected = set(timeout_bootstrap_values) - set(field_map)
+        if unexpected:
+            raise KeyError(f"Unexpected timeout bootstrap fields: {sorted(unexpected)}.")
+
+        reference = self.transition.values
+        expected_shape = (batch_size, 1)
+        for key, transition_field in field_map.items():
+            value = timeout_bootstrap_values.get(key)
+            if value is None:
+                value = torch.zeros(expected_shape, dtype=reference.dtype, device=self.device)
+            else:
+                if not isinstance(value, torch.Tensor):
+                    raise TypeError(f"{key} must be a torch.Tensor.")
+                if value.device != reference.device:
+                    raise ValueError(
+                        f"{key} must be on {reference.device}, got {value.device}."
+                    )
+                if value.dtype != reference.dtype:
+                    raise TypeError(
+                        f"{key} must have dtype {reference.dtype}, got {value.dtype}."
+                    )
+                if value.shape != expected_shape:
+                    raise ValueError(
+                        f"{key} must have shape {expected_shape}, got {tuple(value.shape)}."
+                    )
+                value = value.clone()
+            setattr(self.transition, transition_field, value)
+
+    def process_env_step(
+        self,
+        rewards,
+        dones,
+        infos,
+        amp_obs,
+        recovery_mask_t=None,
+        timeout_bootstrap_values=None,
+    ):
         batch_size = rewards.shape[0]
         recovery_mask_t = self._validate_recovery_mask(recovery_mask_t, batch_size)
         recovery_rewards, rewards_valid = self._read_recovery_reward_interface(infos, batch_size)
@@ -246,15 +293,34 @@ class RENetAMPPPO(AMPPPO):
         self.transition.recovery_amp_reward = recovery_rewards[1]
         self.transition.recovery_reg_reward = recovery_rewards[2]
         self.transition.recovery_rewards_valid = rewards_valid
+        self._read_timeout_bootstrap_values(timeout_bootstrap_values, batch_size)
 
         super().process_env_step(rewards, dones, infos, amp_obs, recovery_mask_t)
 
     def _apply_timeout_bootstrap(self):
-        if not (self.recovery_state_machine_enabled and self.enable_recovery_learning):
-            # Exact legacy path while Recovery learning is disabled.
+        if not self.recovery_state_machine_enabled:
+            # Preserve the recovery-disabled baseline path, including its
+            # historical action-time V(s_t) timeout correction.
             return super()._apply_timeout_bootstrap()
-        # Segmented GAE applies mode-specific timeout correction for V_loco or
-        # the three Recovery values. No reset observation is used here.
+        if self.enable_recovery_learning:
+            # Segmented GAE below is solely responsible for mode-specific
+            # terminal bootstrap. Applying a reward correction here as well
+            # would double-bootstrap timeout transitions.
+            return
+
+        # While Recovery learning is disabled, the legacy non-segmented GAE is
+        # still used. Correct only locomotion-owned timeout transitions once,
+        # using V_loco(s_terminal); Recovery terminal values remain safely
+        # stored for the future segmented path.
+        locomotion_timeout = (
+            self.transition.time_outs
+            & ~self.transition.recovery_mask_t
+            & ~self.transition.recovery_failed
+        )
+        self.transition.rewards += self.gamma * torch.squeeze(
+            self.transition.timeout_loco_value * locomotion_timeout.unsqueeze(1),
+            1,
+        )
 
     def compute_returns(self, last_critic_obs):
         if not (self.recovery_state_machine_enabled and self.enable_recovery_learning):
@@ -272,7 +338,10 @@ class RENetAMPPPO(AMPPPO):
             )
 
         time_outs = self.storage.time_outs
-        env_terminal = self.storage.dones.bool() & ~time_outs
+        env_terminal = (
+            (self.storage.dones.bool() & ~time_outs)
+            | self.storage.recovery_failed
+        )
         locomotion_mask = ~recovery_mask
         loco_returns, loco_advantages = self.storage.compute_segmented_gae(
             rewards=self.storage.rewards,
@@ -284,7 +353,7 @@ class RENetAMPPPO(AMPPPO):
             time_outs=time_outs,
             gamma=self.gamma,
             lam=self.lam,
-            timeout_bootstrap_values=self.storage.values,
+            timeout_bootstrap_values=self.storage.timeout_loco_values,
             normalize_advantage=not self.normalize_advantage_per_mini_batch,
         )
         self.storage.returns.copy_(loco_returns)
@@ -298,6 +367,7 @@ class RENetAMPPPO(AMPPPO):
                 self.storage.recovery_task_values,
                 self.storage.recovery_task_returns,
                 self.storage.recovery_task_advantages,
+                self.storage.timeout_rec_task_values,
             ),
             (
                 "amp",
@@ -305,6 +375,7 @@ class RENetAMPPPO(AMPPPO):
                 self.storage.recovery_amp_values,
                 self.storage.recovery_amp_returns,
                 self.storage.recovery_amp_advantages,
+                self.storage.timeout_rec_amp_values,
             ),
             (
                 "reg",
@@ -312,9 +383,10 @@ class RENetAMPPPO(AMPPPO):
                 self.storage.recovery_reg_values,
                 self.storage.recovery_reg_returns,
                 self.storage.recovery_reg_advantages,
+                self.storage.timeout_rec_reg_values,
             ),
         )
-        for name, rewards, values, returns_buffer, advantages_buffer in recovery_specs:
+        for name, rewards, values, returns_buffer, advantages_buffer, timeout_values in recovery_specs:
             returns, advantages = self.storage.compute_segmented_gae(
                 rewards=rewards,
                 values=values,
@@ -325,7 +397,7 @@ class RENetAMPPPO(AMPPPO):
                 time_outs=time_outs,
                 gamma=self.gamma,
                 lam=self.lam,
-                timeout_bootstrap_values=values,
+                timeout_bootstrap_values=timeout_values,
                 # Recovery advantages are always normalized independently over
                 # Recovery samples from this rollout.
                 normalize_advantage=True,

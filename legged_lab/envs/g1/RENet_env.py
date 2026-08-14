@@ -757,11 +757,7 @@ class G1RENetEnv(VecEnv):
         self.critic_obs = self.critic_obs_buffer.buffer.reshape(self.num_envs, -1)
 
         if self.cfg.scene.height_scanner.enable_height_scan:
-            height_scan = (
-                self.height_scanner.data.pos_w[:, 2].unsqueeze(1)
-                - self.height_scanner.data.ray_hits_w[..., 2]
-                - self.cfg.normalization.height_scan_offset
-            ) * self.obs_scales.height_scan
+            height_scan = self._build_current_critic_height_scan()
             self.critic_obs = torch.cat([self.critic_obs, height_scan], dim=-1)
             if self.add_noise:
                 height_scan += (2 * torch.rand_like(height_scan) - 1) * self.height_scan_noise_vec
@@ -770,6 +766,55 @@ class G1RENetEnv(VecEnv):
         self.critic_obs = torch.clip(self.critic_obs, -self.clip_obs, self.clip_obs)
 
         return self.actor_obs, self.critic_obs
+
+    def _build_current_critic_height_scan(self):
+        """Build the current height-scan features without sampling noise or changing sensor state."""
+        return (
+            self.height_scanner.data.pos_w[:, 2].unsqueeze(1)
+            - self.height_scanner.data.ray_hits_w[..., 2]
+            - self.cfg.normalization.height_scan_offset
+        ) * self.obs_scales.height_scan
+
+    @staticmethod
+    def _virtual_append_critic_history(critic_history, current_critic_frame):
+        """Return ``history[1:] + current_frame`` without mutating the source history."""
+        if critic_history.ndim != 3:
+            raise ValueError(
+                "critic_history must have shape [num_envs, history_length, frame_dim], "
+                f"got {tuple(critic_history.shape)}."
+            )
+        expected_frame_shape = (critic_history.shape[0], critic_history.shape[2])
+        if current_critic_frame.shape != expected_frame_shape:
+            raise ValueError(
+                "current_critic_frame shape must match critic history frames: "
+                f"expected {expected_frame_shape}, got {tuple(current_critic_frame.shape)}."
+            )
+        return torch.cat(
+            [critic_history[:, 1:], current_critic_frame.unsqueeze(1)],
+            dim=1,
+        )
+
+    def build_terminal_critic_obs(self, env_ids):
+        """Build post-physics, pre-reset critic observations without modifying observation history."""
+        if env_ids.ndim != 1:
+            raise ValueError(f"env_ids must be one-dimensional, got shape={tuple(env_ids.shape)}.")
+
+        # CircularBuffer.buffer returns a chronological clone. Constructing a
+        # virtual append gives [x_{t-k+2}, ..., x_t, x_terminal] without a real
+        # append to critic/actor/depth history and without random-noise draws.
+        _, current_critic_frame = self.compute_current_observations()
+        virtual_history = self._virtual_append_critic_history(
+            self.critic_obs_buffer.buffer,
+            current_critic_frame,
+        )
+        terminal_critic_obs = virtual_history.reshape(self.num_envs, -1)
+        if self.cfg.scene.height_scanner.enable_height_scan:
+            terminal_critic_obs = torch.cat(
+                [terminal_critic_obs, self._build_current_critic_height_scan()],
+                dim=-1,
+            )
+        terminal_critic_obs = torch.clip(terminal_critic_obs, -self.clip_obs, self.clip_obs)
+        return terminal_critic_obs[env_ids].clone()
 
     @staticmethod
     def _finite_ray_median(hit_z: torch.Tensor):
@@ -1115,6 +1160,7 @@ class G1RENetEnv(VecEnv):
             pre_reset_amp_obs[self.reset_env_ids]
             .clone()
         )
+        terminal_critic_obs = self.build_terminal_critic_obs(self.reset_env_ids).detach()
 
         # 确保extras结构存在
         if "observations" not in self.extras:
@@ -1124,6 +1170,10 @@ class G1RENetEnv(VecEnv):
         self.extras["terminal_amp_states"] = (
             terminal_amp_states
         )
+        # terminal_critic_obs[i] is the complete pre-reset critic observation
+        # for reset_env_ids[i]. The post-reset critic observation belongs to a
+        # new episode and must never be used for truncation bootstrap.
+        self.extras["terminal_critic_obs"] = terminal_critic_obs
 
         # 不要只在reset()内部设置，否则没有reset时可能残留旧值
         self.extras["time_outs"] = (

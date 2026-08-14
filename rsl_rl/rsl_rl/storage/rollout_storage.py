@@ -54,6 +54,10 @@ class RolloutStorage:
             self.recovery_task_value = None
             self.recovery_amp_value = None
             self.recovery_reg_value = None
+            self.timeout_loco_value = None
+            self.timeout_rec_task_value = None
+            self.timeout_rec_amp_value = None
+            self.timeout_rec_reg_value = None
 
         def clear(self):
             self.__init__()
@@ -130,6 +134,12 @@ class RolloutStorage:
             self.recovery_task_advantages = torch.zeros(value_shape, device=self.device)
             self.recovery_amp_advantages = torch.zeros(value_shape, device=self.device)
             self.recovery_reg_advantages = torch.zeros(value_shape, device=self.device)
+            # True pre-reset V(s_terminal) values. They remain zero for normal
+            # transitions and true terminations, including Recovery failure.
+            self.timeout_loco_values = torch.zeros(value_shape, device=self.device)
+            self.timeout_rec_task_values = torch.zeros(value_shape, device=self.device)
+            self.timeout_rec_amp_values = torch.zeros(value_shape, device=self.device)
+            self.timeout_rec_reg_values = torch.zeros(value_shape, device=self.device)
 
         # For RND
         if rnd_state_shape is not None:
@@ -195,6 +205,18 @@ class RolloutStorage:
             )
             self._copy_optional_float(
                 self.recovery_reg_values[self.step], transition.recovery_reg_value
+            )
+            self._copy_optional_float(
+                self.timeout_loco_values[self.step], transition.timeout_loco_value
+            )
+            self._copy_optional_float(
+                self.timeout_rec_task_values[self.step], transition.timeout_rec_task_value
+            )
+            self._copy_optional_float(
+                self.timeout_rec_amp_values[self.step], transition.timeout_rec_amp_value
+            )
+            self._copy_optional_float(
+                self.timeout_rec_reg_values[self.step], transition.timeout_rec_reg_value
             )
 
         # For RND
@@ -320,8 +342,9 @@ class RolloutStorage:
         ``trace_end`` is a value boundary such as enter/exit Recovery and is
         deliberately independent of ``env_terminal``. Timeouts stop the trace
         but retain truncation bootstrap through ``timeout_bootstrap_values``.
-        The current RENet timeout convention uses the action-time value V(s_t),
-        never the post-reset observation returned by env.step().
+        ``timeout_bootstrap_values`` contains V(s_terminal), evaluated on the
+        true post-physics/pre-reset terminal observation. The post-reset state
+        belongs to a new episode and is never used here.
         """
         expected_shape = values.shape
         tensors = {
@@ -347,7 +370,8 @@ class RolloutStorage:
         env_terminal = env_terminal.bool()
         time_outs = time_outs.bool()
         if timeout_bootstrap_values is None:
-            timeout_bootstrap_values = values
+            # Never silently substitute V(s_t) for a missing terminal value.
+            timeout_bootstrap_values = torch.zeros_like(values)
         elif timeout_bootstrap_values.shape != values.shape:
             raise ValueError(
                 "timeout_bootstrap_values must match values: "
@@ -368,9 +392,11 @@ class RolloutStorage:
 
             boundary = trace_end[step] | env_terminal[step] | time_outs[step]
             continues = active[step] & ~boundary & next_active
-            timeout_correction = (
-                gamma * timeout_bootstrap_values[step] * (active[step] & time_outs[step]).float()
-            )
+            # A truncation bootstraps its terminal value for the TD residual,
+            # but the reset remains a hard GAE boundary. True terminations
+            # (including Recovery failure) always override timeout bootstrap.
+            timeout_bootstrap = active[step] & time_outs[step] & ~env_terminal[step]
+            timeout_correction = gamma * timeout_bootstrap_values[step] * timeout_bootstrap.float()
             delta = (
                 rewards[step]
                 + timeout_correction
