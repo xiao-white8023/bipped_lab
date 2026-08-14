@@ -73,7 +73,7 @@ class RENetTrainCfg:
     mask_mode: str = "alternate"
     op_probability: float = 0.5
     alternate_interval_iters: int = 20
-    force_vp_terrain_names: list[str] = ["gap", "high_platform", "hf_stepping_stones", "star_terrain"]
+    force_vp_terrain_names: list[str] = ["hf_stepping_stones", "star_terrain"]
     force_vp_terrain_level: int = -1
 
 
