@@ -25,6 +25,8 @@ class RENetAMPPPO(AMPPPO):
         recovery_task_adv_weight: float = 2.5,
         recovery_amp_adv_weight: float = 1.0,
         recovery_reg_adv_weight: float = 0.1,
+        recovery_ppo_min_rollout_samples: int = 2048,
+        recovery_drec_min_replay_samples: int = 2048,
         **kwargs,
     ):
         # RENet grew out of the visual/MoE configs; these keys are irrelevant
@@ -64,6 +66,12 @@ class RENetAMPPPO(AMPPPO):
             raise ValueError(
                 "enable_recovery_learning=True requires the environment Recovery state machine to be enabled."
             )
+        for name, value in (
+            ("recovery_ppo_min_rollout_samples", recovery_ppo_min_rollout_samples),
+            ("recovery_drec_min_replay_samples", recovery_drec_min_replay_samples),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer, got {value}.")
 
         super().__init__(*args, **kwargs)
 
@@ -74,6 +82,14 @@ class RENetAMPPPO(AMPPPO):
             float(recovery_amp_adv_weight),
             float(recovery_reg_adv_weight),
         )
+        self.recovery_ppo_min_rollout_samples = recovery_ppo_min_rollout_samples
+        self.recovery_drec_min_replay_samples = recovery_drec_min_replay_samples
+        self._current_recovery_rollout_samples = 0
+        self._recovery_ppo_ready = False
+        self._drec_update_ready = False
+        self.drec_reward_ready = False
+        self.recovery_discriminator_updated_this_update = False
+        self._recovery_discriminator_loss_computed_this_update = False
         self.recovery_critic = recovery_critic.to(self.device)
         self._assert_independent_recovery_critics()
 
@@ -122,13 +138,19 @@ class RENetAMPPPO(AMPPPO):
             "RecoveryValue/task_loss": 0.0,
             "RecoveryValue/amp_loss": 0.0,
             "RecoveryValue/reg_loss": 0.0,
+            "RecoveryWarmup/ppo_min_samples": float(self.recovery_ppo_min_rollout_samples),
+            "RecoveryWarmup/ppo_rollout_samples": 0.0,
+            "RecoveryWarmup/ppo_ready": 0.0,
+            "RecoveryWarmup/drec_min_replay_samples": float(self.recovery_drec_min_replay_samples),
+            "RecoveryWarmup/drec_replay_samples": 0.0,
+            "RecoveryWarmup/drec_update_ready": 0.0,
+            "RecoveryWarmup/drec_reward_ready": 0.0,
+            "RecoveryWarmup/drec_updated_this_update": 0.0,
+            "RecoveryWarmup/recovery_update_skipped": 1.0,
         }
 
-        # Deliberately deferred mechanisms (no thresholds, ramps, or delayed
-        # enable logic belong in this phase):
-        # TODO: Recovery PPO sample warm-up (on-policy samples only).
-        # TODO: D_REC AMP warm-up (Recovery AMP replay-buffer population).
-        # TODO: V_rec_amp warm-up (after D_REC rewards become trustworthy).
+        # V_rec_amp has no separate delay or ramp. It follows the same on-policy
+        # Recovery PPO gate as the other two Recovery value heads.
         self.optimizer.add_param_group(
             {
                 "params": self.discriminator_recovery.amp_linear.parameters(),
@@ -446,8 +468,8 @@ class RENetAMPPPO(AMPPPO):
 
         recovery_mask_t = self._validate_recovery_mask(recovery_mask_t, amp_obs.shape[0])
         locomotion_mask_t = ~recovery_mask_t
-        routed_reward = torch.empty_like(task_reward)
-        routed_logits = torch.empty((amp_obs.shape[0], 1), dtype=amp_obs.dtype, device=self.device)
+        routed_reward = torch.zeros_like(task_reward)
+        routed_logits = torch.zeros((amp_obs.shape[0], 1), dtype=amp_obs.dtype, device=self.device)
 
         if locomotion_mask_t.any():
             loco_reward, loco_logits = self.discriminator_loco.predict_amp_reward(
@@ -458,7 +480,7 @@ class RENetAMPPPO(AMPPPO):
             )
             routed_reward[locomotion_mask_t] = loco_reward
             routed_logits[locomotion_mask_t] = loco_logits
-        if recovery_mask_t.any():
+        if recovery_mask_t.any() and self.drec_reward_ready:
             recovery_reward, recovery_logits = self.discriminator_recovery.predict_amp_reward(
                 amp_obs[recovery_mask_t],
                 next_amp_obs[recovery_mask_t],
@@ -537,6 +559,9 @@ class RENetAMPPPO(AMPPPO):
         else:
             locomotion_term = terms.sum() * 0.0
 
+        if not self._recovery_ppo_ready:
+            return locomotion_term
+
         recovery_advantage = self.combine_recovery_advantages(
             rollout_data["recovery_task_advantages"].squeeze(-1),
             rollout_data["recovery_amp_advantages"].squeeze(-1),
@@ -601,6 +626,15 @@ class RENetAMPPPO(AMPPPO):
             locomotion_mask,
         )
 
+        if not self._recovery_ppo_ready:
+            differentiable_zero = value_batch.sum() * 0.0
+            metrics = {
+                "RecoveryValue/task_loss": differentiable_zero,
+                "RecoveryValue/amp_loss": differentiable_zero,
+                "RecoveryValue/reg_loss": differentiable_zero,
+            }
+            return locomotion_value_loss, differentiable_zero, metrics
+
         recovery_predictions = self.recovery_critic(critic_obs_batch)
         recovery_losses = {}
         for name in ("task", "amp", "reg"):
@@ -621,18 +655,41 @@ class RENetAMPPPO(AMPPPO):
     def _parameters_for_gradient_clipping(self):
         return chain(self.policy.parameters(), self.recovery_critic.parameters())
 
+    def _prepare_recovery_warmup_for_update(self):
+        """Snapshot the two independent Recovery sample gates for this update."""
+        self._current_recovery_rollout_samples = int(self.storage.recovery_masks.sum().item())
+        self._recovery_ppo_ready = (
+            self._current_recovery_rollout_samples >= self.recovery_ppo_min_rollout_samples
+        )
+        self._drec_update_ready = (
+            int(self.amp_storage_recovery.num_samples) >= self.recovery_drec_min_replay_samples
+        )
+        self.recovery_discriminator_updated_this_update = False
+        self._recovery_discriminator_loss_computed_this_update = False
+
     def _capture_recovery_rollout_diagnostics(self):
         recovery_mask = self.storage.recovery_masks
+        recovery_samples = self._current_recovery_rollout_samples
+        drec_replay_samples = int(self.amp_storage_recovery.num_samples)
         diagnostics = {
             "RecoveryLearning/enabled": float(self.enable_recovery_learning),
-            "Rollout/loco_samples": float((~recovery_mask).sum().item()),
-            "Rollout/recovery_samples": float(recovery_mask.sum().item()),
+            "Rollout/loco_samples": float(recovery_mask.numel() - recovery_samples),
+            "Rollout/recovery_samples": float(recovery_samples),
             "Rollout/enter_recovery_count": float(self.storage.enter_recovery.sum().item()),
             "Rollout/exit_recovery_count": float(self.storage.exit_recovery.sum().item()),
             "Rollout/recovery_failed_count": float(self.storage.recovery_failed.sum().item()),
             "RecoveryValue/task_loss": 0.0,
             "RecoveryValue/amp_loss": 0.0,
             "RecoveryValue/reg_loss": 0.0,
+            "RecoveryWarmup/ppo_min_samples": float(self.recovery_ppo_min_rollout_samples),
+            "RecoveryWarmup/ppo_rollout_samples": float(recovery_samples),
+            "RecoveryWarmup/ppo_ready": float(self._recovery_ppo_ready),
+            "RecoveryWarmup/drec_min_replay_samples": float(self.recovery_drec_min_replay_samples),
+            "RecoveryWarmup/drec_replay_samples": float(drec_replay_samples),
+            "RecoveryWarmup/drec_update_ready": float(self._drec_update_ready),
+            "RecoveryWarmup/drec_reward_ready": float(self.drec_reward_ready),
+            "RecoveryWarmup/drec_updated_this_update": 0.0,
+            "RecoveryWarmup/recovery_update_skipped": float(not self._recovery_ppo_ready),
         }
         if self.enable_recovery_learning and torch.any(recovery_mask):
             for name in ("task", "amp", "reg"):
@@ -644,23 +701,54 @@ class RENetAMPPPO(AMPPPO):
         self._last_recovery_learning_diagnostics = diagnostics
 
     def update(self):
+        self._prepare_recovery_warmup_for_update()
         self._capture_recovery_rollout_diagnostics()
         loss_dict = super().update()
+        self.recovery_discriminator_updated_this_update = (
+            self._recovery_discriminator_loss_computed_this_update
+        )
+        if self.recovery_discriminator_updated_this_update:
+            self.drec_reward_ready = True
         for name in ("task", "amp", "reg"):
             key = f"RecoveryValue/{name}_loss"
             if key in loss_dict:
                 self._last_recovery_learning_diagnostics[key] = float(loss_dict[key])
+        self._last_recovery_learning_diagnostics.update(
+            {
+                "RecoveryWarmup/drec_reward_ready": float(self.drec_reward_ready),
+                "RecoveryWarmup/drec_updated_this_update": float(
+                    self.recovery_discriminator_updated_this_update
+                ),
+            }
+        )
         return loss_dict
 
     def get_recovery_learning_diagnostics(self):
         return dict(self._last_recovery_learning_diagnostics)
+
+    def get_recovery_warmup_state(self):
+        """Return only the persistent D_REC reward trust state."""
+        return {"drec_reward_ready": bool(self.drec_reward_ready)}
+
+    def load_recovery_warmup_state(self, state):
+        """Strictly restore the persistent D_REC reward trust state."""
+        if not isinstance(state, dict):
+            raise TypeError("Recovery warm-up state must be a dict.")
+        if set(state) != {"drec_reward_ready"}:
+            raise ValueError(
+                "Recovery warm-up state must contain exactly the field 'drec_reward_ready'."
+            )
+        if not isinstance(state["drec_reward_ready"], bool):
+            raise TypeError("Recovery warm-up state 'drec_reward_ready' must be a bool.")
+        self.drec_reward_ready = state["drec_reward_ready"]
 
     def _amp_mini_batch_generator(self, num_updates: int, mini_batch_size: int):
         loco_policy_generator = self.amp_storage_loco.feed_forward_generator(num_updates, mini_batch_size)
         loco_expert_generator = self.amp_data_loco.feed_forward_generator(num_updates, mini_batch_size)
 
         recovery_num_samples = self.amp_storage_recovery.num_samples
-        use_recovery = recovery_num_samples > 0
+        use_recovery = recovery_num_samples >= self.recovery_drec_min_replay_samples
+        self._drec_update_ready = use_recovery
         if use_recovery:
             recovery_policy_generator = self.amp_storage_recovery.feed_forward_generator(
                 num_updates, mini_batch_size
@@ -715,6 +803,7 @@ class RENetAMPPPO(AMPPPO):
                     sample_amp["recovery_expert"],
                 )
             )
+            self._recovery_discriminator_loss_computed_this_update = True
             total_loss = total_loss + recovery_loss
             metrics.update(
                 {

@@ -12,6 +12,7 @@ from .camera_noise import (
     crop_and_resize,
     blind_spot_noise,
     range_based_gaussian_noise,
+    distance_dependent_gaussian_noise,
     depth_artifact_noise,
     LatencyNoiseModel,
     SensorDeadNoiseModel
@@ -81,6 +82,18 @@ class RangeBasedGaussianNoiseCfg(ImageNoiseCfg):
     # 高斯噪声的标准差（控制噪声强度）
 
     func = range_based_gaussian_noise
+
+
+@configclass
+class DistanceDependentGaussianNoiseCfg(ImageNoiseCfg):
+    """Gaussian depth noise with standard deviation determined by metric distance."""
+
+    near_std: float = 0.0
+    far_std: float = 0.10
+    distance_exponent: float = 2.0
+
+    func = distance_dependent_gaussian_noise
+
 
 @configclass
 class DepthArtifactNoiseCfg(ImageNoiseCfg):

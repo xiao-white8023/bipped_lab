@@ -524,7 +524,7 @@ def test_central_height_crop_ignores_periphery_and_nonfinite_hits():
     assert torch.isfinite(height).all()
 
 
-def test_curriculum_uses_exact_256_attempt_windows_and_shared_level():
+def test_curriculum_uses_exact_1024_attempt_windows_and_persists_window_stats():
     (record_attempts,) = _load_methods(ENV_PATH, "G1RENetEnv", "_record_recovery_curriculum_attempts")
 
     def make_env():
@@ -533,7 +533,7 @@ def test_curriculum_uses_exact_256_attempt_windows_and_shared_level():
             cfg=SimpleNamespace(
                 recovery=SimpleNamespace(
                     enable_curriculum=True,
-                    curriculum_min_attempts=256,
+                    curriculum_min_attempts=1024,
                     curriculum_success_ratio=0.60,
                     assist_force_step=20.0,
                     min_assist_force=0.0,
@@ -543,26 +543,47 @@ def test_curriculum_uses_exact_256_attempt_windows_and_shared_level():
             ),
             recovery_curriculum_window_attempts=0,
             recovery_curriculum_window_successes=0,
+            recovery_curriculum_last_window_success_ratio=0.0,
+            recovery_curriculum_last_window_attempts=0,
+            recovery_curriculum_last_window_successes=0,
+            recovery_curriculum_last_window_advanced=False,
+            recovery_curriculum_total_completed_attempts=0,
+            recovery_curriculum_total_level_advances=0,
+            recovery_curriculum_total_windows=0,
             recovery_curriculum_level=0,
             current_recovery_assist_force=200.0,
             current_recovery_beta=1.0,
         )
 
     env = make_env()
-    record_attempts(env, torch.ones(256, dtype=torch.bool), torch.tensor([True] * 153 + [False] * 103))
+    record_attempts(env, torch.ones(1023, dtype=torch.bool), torch.tensor([True] * 614 + [False] * 409))
     assert env.recovery_curriculum_level == 0
+    assert env.recovery_curriculum_window_attempts == 1023
+    assert env.recovery_curriculum_total_completed_attempts == 1023
+    assert env.recovery_curriculum_total_windows == 0
+    record_attempts(env, torch.ones(1, dtype=torch.bool), torch.tensor([False]))
     assert env.recovery_curriculum_window_attempts == 0
+    assert env.recovery_curriculum_last_window_attempts == 1024
+    assert env.recovery_curriculum_last_window_successes == 614
+    assert env.recovery_curriculum_last_window_success_ratio == 614 / 1024
+    assert env.recovery_curriculum_last_window_advanced is False
+    assert env.recovery_curriculum_total_completed_attempts == 1024
+    assert env.recovery_curriculum_total_windows == 1
+    assert env.recovery_curriculum_total_level_advances == 0
 
     env = make_env()
-    record_attempts(env, torch.ones(256, dtype=torch.bool), torch.tensor([True] * 154 + [False] * 102))
+    record_attempts(env, torch.ones(1024, dtype=torch.bool), torch.tensor([True] * 615 + [False] * 409))
     assert env.recovery_curriculum_level == 1
     assert env.current_recovery_assist_force == 180.0
     assert env.current_recovery_beta == 0.98
     assert env.recovery_curriculum_window_attempts == 0
+    assert env.recovery_curriculum_last_window_successes == 615
+    assert env.recovery_curriculum_last_window_advanced is True
+    assert env.recovery_curriculum_total_level_advances == 1
 
     env.current_recovery_assist_force = 0.0
     env.current_recovery_beta = 0.25
-    record_attempts(env, torch.ones(256, dtype=torch.bool), torch.ones(256, dtype=torch.bool))
+    record_attempts(env, torch.ones(1024, dtype=torch.bool), torch.ones(1024, dtype=torch.bool))
     assert env.current_recovery_assist_force == 0.0
     assert env.current_recovery_beta == 0.25
 
@@ -676,10 +697,17 @@ def test_fixed_cfg_contracts_and_exact_five_reg_terms():
     assert recovery_values["ready_hold_s"] == 1.0
     assert recovery_values["absolute_episode_timeout_s"] == 27.0
     assert recovery_values["max_duration_s"] == 6.0
-    assert recovery_values["curriculum_min_attempts"] == 256
+    assert recovery_values["curriculum_min_attempts"] == 1024
     assert recovery_values["initial_assist_force"] == 200.0
     assert recovery_values["initial_beta"] == 1.0
     assert recovery_values["min_beta"] == 0.25
+
+    algorithm_values = {}
+    for node in classes["CustomRslRlPpoAlgorithmCfg"].body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            algorithm_values[node.target.id] = ast.literal_eval(node.value)
+    assert algorithm_values["recovery_ppo_min_rollout_samples"] == 2048
+    assert algorithm_values["recovery_drec_min_replay_samples"] == 2048
 
     reg_assignments = [
         node for node in classes["RecoveryRegReward"].body if isinstance(node, (ast.Assign, ast.AnnAssign))

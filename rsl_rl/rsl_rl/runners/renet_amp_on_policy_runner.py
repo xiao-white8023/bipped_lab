@@ -591,6 +591,12 @@ class RENetAmpOnPolicyRunner:
         if self.empirical_normalization:
             saved_dict["obs_norm_state_dict"] = self.obs_normalizer.state_dict()
             saved_dict["privileged_obs_norm_state_dict"] = self.privileged_obs_normalizer.state_dict()
+        get_curriculum_state = getattr(self.env, "get_recovery_curriculum_state", None)
+        if callable(get_curriculum_state):
+            saved_dict["recovery_curriculum_state"] = get_curriculum_state()
+        get_warmup_state = getattr(self.alg, "get_recovery_warmup_state", None)
+        if callable(get_warmup_state):
+            saved_dict["recovery_warmup_state"] = get_warmup_state()
 
         # save model
         torch.save(saved_dict, path)
@@ -648,6 +654,46 @@ class RENetAmpOnPolicyRunner:
                 "Checkpoint has no recovery_critic_state_dict; all three Recovery critics remain newly initialized.",
                 stacklevel=2,
             )
+
+        recovery_cfg = getattr(getattr(self.env, "cfg", None), "recovery", None)
+        recovery_state_machine_enabled = bool(
+            getattr(
+                self.env,
+                "recovery_state_machine_enabled",
+                getattr(recovery_cfg, "enable", False),
+            )
+        )
+        load_curriculum_state = getattr(self.env, "load_recovery_curriculum_state", None)
+        if "recovery_curriculum_state" in loaded_dict and callable(load_curriculum_state):
+            curriculum_state = loaded_dict["recovery_curriculum_state"]
+            load_curriculum_state(curriculum_state)
+            window_target = getattr(recovery_cfg, "curriculum_min_attempts", "?")
+            warnings.warn(
+                "Restored Recovery curriculum state: "
+                f"level={curriculum_state['level']}, "
+                f"assist_force={curriculum_state['current_assist_force']}, "
+                f"beta={curriculum_state['current_beta']}, "
+                f"window={curriculum_state['window_attempts']}/{window_target}.",
+                stacklevel=2,
+            )
+        elif "recovery_curriculum_state" not in loaded_dict and recovery_state_machine_enabled:
+            warnings.warn(
+                "checkpoint has no Recovery curriculum state; using fresh curriculum state.",
+                stacklevel=2,
+            )
+
+        load_warmup_state = getattr(self.alg, "load_recovery_warmup_state", None)
+        if callable(load_warmup_state):
+            if "recovery_warmup_state" in loaded_dict:
+                load_warmup_state(loaded_dict["recovery_warmup_state"])
+            else:
+                load_warmup_state({"drec_reward_ready": False})
+                if recovery_state_machine_enabled:
+                    warnings.warn(
+                        "legacy checkpoint has no D_REC reward-ready state; D_REC reward will remain gated until "
+                        "replay warm-up and a real Recovery discriminator update occur.",
+                        stacklevel=2,
+                    )
         # -- Load RND model if used
         if self.alg.rnd:
             self.alg.rnd.load_state_dict(loaded_dict["rnd_state_dict"])

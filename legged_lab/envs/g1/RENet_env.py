@@ -20,6 +20,7 @@ from scipy.spatial.transform import Rotation
 
 from legged_lab.envs.g1.RENet_cfg import G1RENETENVCFG
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
+from legged_lab.utils.camera_noise.camera_noise import distance_dependent_gaussian_noise
 from legged_lab.utils.env_utils.scene import SceneCfg
 
 from rsl_rl.env import VecEnv
@@ -479,6 +480,13 @@ class G1RENetEnv(VecEnv):
         self.recovery_curriculum_level = 0
         self.recovery_curriculum_window_attempts = 0
         self.recovery_curriculum_window_successes = 0
+        self.recovery_curriculum_last_window_success_ratio = 0.0
+        self.recovery_curriculum_last_window_attempts = 0
+        self.recovery_curriculum_last_window_successes = 0
+        self.recovery_curriculum_last_window_advanced = False
+        self.recovery_curriculum_total_completed_attempts = 0
+        self.recovery_curriculum_total_level_advances = 0
+        self.recovery_curriculum_total_windows = 0
         self.current_recovery_assist_force = (
             float(self.cfg.recovery.initial_assist_force)
             if self.recovery_state_machine_enabled and self.cfg.recovery.enable_curriculum
@@ -509,7 +517,51 @@ class G1RENetEnv(VecEnv):
         self.renet_training_iteration = 0
         self.renet_hard_terrain_type_ids = self.resolve_renet_hard_terrain_type_ids()
     
-        #
+        depth_noise_cfg = getattr(self.cfg, "depth_gaussian_noise", None)
+        depth_noise_requested = bool(self.cfg.scene.camera.add_camera_noise)
+        depth_min_distance = float(self.cfg.scene.camera.camera.min_distance)
+        depth_max_distance = float(self.cfg.robot.depth_max)
+        if depth_noise_requested:
+            if depth_noise_cfg is None:
+                raise ValueError("add_camera_noise=True requires depth_gaussian_noise configuration.")
+            near_std = float(depth_noise_cfg.near_std)
+            far_std = float(depth_noise_cfg.far_std)
+            distance_exponent = float(depth_noise_cfg.distance_exponent)
+            for name, value in (
+                ("near_std", near_std),
+                ("far_std", far_std),
+                ("distance_exponent", distance_exponent),
+                ("min_distance", depth_min_distance),
+                ("depth_max", depth_max_distance),
+            ):
+                if not math.isfinite(value):
+                    raise ValueError(f"Depth Gaussian noise {name} must be finite, got {value}.")
+            if near_std < 0.0:
+                raise ValueError("Depth Gaussian noise near_std cannot be negative.")
+            if far_std < near_std:
+                raise ValueError("Depth Gaussian noise far_std cannot be smaller than near_std.")
+            if distance_exponent <= 0.0:
+                raise ValueError("Depth Gaussian noise distance_exponent must be positive.")
+            if depth_max_distance <= depth_min_distance:
+                raise ValueError("robot.depth_max must be greater than camera min_distance.")
+
+        self.depth_gaussian_noise_cfg = depth_noise_cfg
+        self.depth_min_distance = depth_min_distance
+        self.depth_max_distance = depth_max_distance
+        self.use_depth_gaussian_noise = bool(
+            self.camera is not None and depth_noise_requested and depth_noise_cfg is not None
+        )
+        diagnostic_near_std = float(depth_noise_cfg.near_std) if depth_noise_cfg is not None else 0.0
+        diagnostic_far_std = float(depth_noise_cfg.far_std) if depth_noise_cfg is not None else 0.0
+        diagnostic_exponent = float(depth_noise_cfg.distance_exponent) if depth_noise_cfg is not None else 0.0
+        scalar = lambda value: torch.tensor(float(value), dtype=torch.float, device=self.device)
+        self._depth_noise_diagnostics = {
+            "DepthNoise/enabled": scalar(self.use_depth_gaussian_noise),
+            "DepthNoise/near_std": scalar(diagnostic_near_std),
+            "DepthNoise/far_std": scalar(diagnostic_far_std),
+            "DepthNoise/distance_exponent": scalar(diagnostic_exponent),
+        }
+
         if self.camera is not None:
             self.depth_history_frames = self.cfg.robot.depth_history_frames
             self.camera_height = self.cfg.scene.camera.camera.pattern_cfg.height-self.cfg.robot.depth_crop[0]-self.cfg.robot.depth_crop[1]
@@ -1093,11 +1145,19 @@ class G1RENetEnv(VecEnv):
         for was_successful in completed_successes:
             self.recovery_curriculum_window_attempts += 1
             self.recovery_curriculum_window_successes += int(was_successful)
+            self.recovery_curriculum_total_completed_attempts += 1
             if self.recovery_curriculum_window_attempts != window_size:
                 continue
             success_ratio = self.recovery_curriculum_window_successes / window_size
-            if success_ratio >= threshold:
+            advanced = success_ratio >= threshold
+            self.recovery_curriculum_last_window_success_ratio = success_ratio
+            self.recovery_curriculum_last_window_attempts = self.recovery_curriculum_window_attempts
+            self.recovery_curriculum_last_window_successes = self.recovery_curriculum_window_successes
+            self.recovery_curriculum_last_window_advanced = advanced
+            self.recovery_curriculum_total_windows += 1
+            if advanced:
                 self.recovery_curriculum_level += 1
+                self.recovery_curriculum_total_level_advances += 1
                 self.current_recovery_assist_force = max(
                     self.current_recovery_assist_force - float(self.cfg.recovery.assist_force_step),
                     float(self.cfg.recovery.min_assist_force),
@@ -1108,6 +1168,118 @@ class G1RENetEnv(VecEnv):
                 )
             self.recovery_curriculum_window_attempts = 0
             self.recovery_curriculum_window_successes = 0
+
+    def get_recovery_curriculum_state(self):
+        """Return the scalar Recovery curriculum state persisted in checkpoints."""
+        return {
+            "level": int(self.recovery_curriculum_level),
+            "window_attempts": int(self.recovery_curriculum_window_attempts),
+            "window_successes": int(self.recovery_curriculum_window_successes),
+            "current_assist_force": float(self.current_recovery_assist_force),
+            "current_beta": float(self.current_recovery_beta),
+            "last_window_success_ratio": float(self.recovery_curriculum_last_window_success_ratio),
+            "last_window_attempts": int(self.recovery_curriculum_last_window_attempts),
+            "last_window_successes": int(self.recovery_curriculum_last_window_successes),
+            "last_window_advanced": bool(self.recovery_curriculum_last_window_advanced),
+            "total_completed_attempts": int(self.recovery_curriculum_total_completed_attempts),
+            "total_windows": int(self.recovery_curriculum_total_windows),
+            "total_level_advances": int(self.recovery_curriculum_total_level_advances),
+        }
+
+    def load_recovery_curriculum_state(self, state):
+        """Validate and restore the exact scalar Recovery curriculum state."""
+        if not isinstance(state, dict):
+            raise TypeError("Recovery curriculum state must be a dict.")
+
+        required_fields = {
+            "level",
+            "window_attempts",
+            "window_successes",
+            "current_assist_force",
+            "current_beta",
+            "last_window_success_ratio",
+            "last_window_attempts",
+            "last_window_successes",
+            "last_window_advanced",
+            "total_completed_attempts",
+            "total_windows",
+            "total_level_advances",
+        }
+        missing_fields = required_fields - state.keys()
+        extra_fields = state.keys() - required_fields
+        if missing_fields or extra_fields:
+            raise ValueError(
+                "Recovery curriculum state fields do not match: "
+                f"missing={sorted(missing_fields)}, extra={sorted(extra_fields)}."
+            )
+
+        integer_fields = (
+            "level",
+            "window_attempts",
+            "window_successes",
+            "last_window_attempts",
+            "last_window_successes",
+            "total_completed_attempts",
+            "total_windows",
+            "total_level_advances",
+        )
+        for name in integer_fields:
+            value = state[name]
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"Recovery curriculum state '{name}' must be an int.")
+            if value < 0:
+                raise ValueError(f"Recovery curriculum state '{name}' cannot be negative.")
+
+        if not isinstance(state["last_window_advanced"], bool):
+            raise TypeError("Recovery curriculum state 'last_window_advanced' must be a bool.")
+        for name in ("current_assist_force", "current_beta", "last_window_success_ratio"):
+            value = state[name]
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"Recovery curriculum state '{name}' must be numeric.")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"Recovery curriculum state '{name}' must be finite.")
+
+        window_size = int(self.cfg.recovery.curriculum_min_attempts)
+        if state["window_attempts"] >= window_size:
+            raise ValueError(
+                f"Recovery curriculum window_attempts must be in [0, {window_size}), "
+                f"got {state['window_attempts']}."
+            )
+        if state["window_successes"] > state["window_attempts"]:
+            raise ValueError("Recovery curriculum window_successes cannot exceed window_attempts.")
+        if state["last_window_successes"] > state["last_window_attempts"]:
+            raise ValueError("Recovery curriculum last_window_successes cannot exceed last_window_attempts.")
+        if not 0.0 <= float(state["last_window_success_ratio"]) <= 1.0:
+            raise ValueError("Recovery curriculum last_window_success_ratio must be in [0, 1].")
+
+        min_force = float(self.cfg.recovery.min_assist_force)
+        initial_force = float(self.cfg.recovery.initial_assist_force)
+        assist_force = float(state["current_assist_force"])
+        if not min_force <= assist_force <= initial_force:
+            raise ValueError(
+                "Recovery curriculum current_assist_force must be within "
+                f"[{min_force}, {initial_force}], got {assist_force}."
+            )
+        min_beta = float(self.cfg.recovery.min_beta)
+        initial_beta = float(self.cfg.recovery.initial_beta)
+        beta = float(state["current_beta"])
+        if not min_beta <= beta <= initial_beta:
+            raise ValueError(
+                f"Recovery curriculum current_beta must be within [{min_beta}, {initial_beta}], got {beta}."
+            )
+
+        self.recovery_curriculum_level = state["level"]
+        self.recovery_curriculum_window_attempts = state["window_attempts"]
+        self.recovery_curriculum_window_successes = state["window_successes"]
+        self.current_recovery_assist_force = assist_force
+        self.current_recovery_beta = beta
+        self.recovery_curriculum_last_window_success_ratio = float(state["last_window_success_ratio"])
+        self.recovery_curriculum_last_window_attempts = state["last_window_attempts"]
+        self.recovery_curriculum_last_window_successes = state["last_window_successes"]
+        self.recovery_curriculum_last_window_advanced = state["last_window_advanced"]
+        self.recovery_curriculum_total_completed_attempts = state["total_completed_attempts"]
+        self.recovery_curriculum_total_windows = state["total_windows"]
+        self.recovery_curriculum_total_level_advances = state["total_level_advances"]
 
     @staticmethod
     def _route_support_height(
@@ -1272,6 +1444,14 @@ class G1RENetEnv(VecEnv):
             "RecoveryCurriculum/beta": zero.clone(),
             "RecoveryCurriculum/window_attempts": zero.clone(),
             "RecoveryCurriculum/window_success_ratio": zero.clone(),
+            "RecoveryCurriculum/window_target_attempts": zero.clone(),
+            "RecoveryCurriculum/last_window_attempts": zero.clone(),
+            "RecoveryCurriculum/last_window_successes": zero.clone(),
+            "RecoveryCurriculum/last_window_success_ratio": zero.clone(),
+            "RecoveryCurriculum/last_window_advanced": zero.clone(),
+            "RecoveryCurriculum/total_completed_attempts": zero.clone(),
+            "RecoveryCurriculum/total_windows": zero.clone(),
+            "RecoveryCurriculum/total_level_advances": zero.clone(),
             "RecoveryAction/action_rate_valid_ratio": zero.clone(),
             "Actor/recovery_beta": zero.clone(),
         }
@@ -1344,6 +1524,30 @@ class G1RENetEnv(VecEnv):
         diagnostics["RecoveryCurriculum/beta"] = scalar(self.current_recovery_beta)
         diagnostics["RecoveryCurriculum/window_attempts"] = scalar(attempts)
         diagnostics["RecoveryCurriculum/window_success_ratio"] = scalar(success_ratio)
+        diagnostics["RecoveryCurriculum/window_target_attempts"] = scalar(
+            self.cfg.recovery.curriculum_min_attempts
+        )
+        diagnostics["RecoveryCurriculum/last_window_attempts"] = scalar(
+            self.recovery_curriculum_last_window_attempts
+        )
+        diagnostics["RecoveryCurriculum/last_window_successes"] = scalar(
+            self.recovery_curriculum_last_window_successes
+        )
+        diagnostics["RecoveryCurriculum/last_window_success_ratio"] = scalar(
+            self.recovery_curriculum_last_window_success_ratio
+        )
+        diagnostics["RecoveryCurriculum/last_window_advanced"] = scalar(
+            self.recovery_curriculum_last_window_advanced
+        )
+        diagnostics["RecoveryCurriculum/total_completed_attempts"] = scalar(
+            self.recovery_curriculum_total_completed_attempts
+        )
+        diagnostics["RecoveryCurriculum/total_windows"] = scalar(
+            self.recovery_curriculum_total_windows
+        )
+        diagnostics["RecoveryCurriculum/total_level_advances"] = scalar(
+            self.recovery_curriculum_total_level_advances
+        )
         diagnostics["RecoveryAction/action_rate_valid_ratio"] = self._safe_masked_mean(
             self.recovery_action_rate_valid_sample.float(),
             recovery_mask_t,
@@ -1602,6 +1806,7 @@ class G1RENetEnv(VecEnv):
         # multiple references to one subsequently mutated diagnostics object.
         step_log = dict(self.extras.get("log", {})) if self.reset_env_ids.numel() > 0 else {}
         step_log.update(recovery_diagnostics)
+        step_log.update(self.get_depth_noise_diagnostics())
         self.extras["log"] = step_log
 
         # ---------------------------------------------------------
@@ -1819,14 +2024,43 @@ class G1RENetEnv(VecEnv):
 
         return amp_obs
     
-    def get_processed_deepcamera(self):
+    def get_depth_noise_diagnostics(self):
+        """Return fixed depth-noise configuration diagnostics without device synchronization."""
+        return dict(self._depth_noise_diagnostics)
+
+    def _apply_distance_dependent_depth_noise(self, depth: torch.Tensor, env_ids: torch.Tensor):
+        """Apply the only stochastic RENet depth corruption to metric depth."""
+        if not self.use_depth_gaussian_noise:
+            return depth
+        noisy_depth = distance_dependent_gaussian_noise(
+            depth.unsqueeze(-1),
+            self.depth_gaussian_noise_cfg,
+            env_ids,
+            min_distance=self.depth_min_distance,
+            max_distance=self.depth_max_distance,
+        )
+        return noisy_depth.squeeze(-1)
+
+    def get_processed_deepcamera(self, env_ids=None):
         # 获取底层输出: (num_envs, H=36, W=64)
-        depth = self.camera.data.output["distance_to_image_plane"].clone()
+        raw_depth = self.camera.data.output["distance_to_image_plane"]
+        if env_ids is None:
+            env_ids = torch.arange(raw_depth.shape[0], device=raw_depth.device, dtype=torch.long)
+            depth = raw_depth.clone()
+        else:
+            env_ids = env_ids.to(device=raw_depth.device, dtype=torch.long)
+            depth = raw_depth[env_ids].clone()
         depth = depth.squeeze(-1)
 
         # 1. CropAndResize: 裁剪掉无用视野 (up=18, down=0, left=16, right=16)
         # 结果尺寸: (num_envs, 18, 32)
-        depth_cropped = depth[:, self.cfg.robot.depth_crop[0]:self.cfg.scene.camera.camera.pattern_cfg.height-self.cfg.robot.depth_crop[1], self.cfg.robot.depth_crop[2]:self.cfg.scene.camera.camera.pattern_cfg.width-self.cfg.robot.depth_crop[3]]
+        depth_cropped = depth[
+            :,
+            self.cfg.robot.depth_crop[0] : self.cfg.scene.camera.camera.pattern_cfg.height
+            - self.cfg.robot.depth_crop[1],
+            self.cfg.robot.depth_crop[2] : self.cfg.scene.camera.camera.pattern_cfg.width
+            - self.cfg.robot.depth_crop[3],
+        ]
         
         # 截断与归一化
         depth_cropped[torch.isinf(depth_cropped)] = self.cfg.robot.depth_max
@@ -1838,32 +2072,51 @@ class G1RENetEnv(VecEnv):
         depth_blurred = blur_transform(depth_cropped)
         depth_blurred = depth_blurred.squeeze(1) # 恢复为 (N, H, W)
         
-        # 截断到 2.5 米
-        depth_clipped = torch.clip(depth_blurred, min=self.cfg.scene.camera.camera.min_distance, max=self.cfg.robot.depth_max)
+        # 在米制空间裁剪，再根据 clean/clipped depth 计算并施加距离相关高斯噪声。
+        depth_clipped = torch.clip(
+            depth_blurred,
+            min=self.depth_min_distance,
+            max=self.depth_max_distance,
+        )
+        depth_clipped = self._apply_distance_dependent_depth_noise(depth_clipped, env_ids)
+        # 高斯噪声可能越过有效测距范围，因此 normalization 前必须再次裁剪。
+        depth_clipped = torch.clip(
+            depth_clipped,
+            min=self.depth_min_distance,
+            max=self.depth_max_distance,
+        )
         
         # 线性映射并归一化到 [0, 1]
-        depth_normalized = depth_clipped / self.cfg.robot.depth_max
+        depth_normalized = depth_clipped / self.depth_max_distance
         
         return depth_normalized  # （N，H，W）
 
     def get_deepcamera_history(self):
-        current_depth = self.get_processed_deepcamera()
-
         update_mask = (self.episode_length_buf % self.cfg.robot.depth_update_interval == 0)
         reset_mask = (self.episode_length_buf == 0)
+        need_depth_mask = update_mask | reset_mask
+        if not need_depth_mask.any():
+            return self.depth_buffer
 
-        # 3. 缓冲区移位
-        shifted_buffer = torch.roll(self.depth_buffer, shifts=-1, dims=1)
-        shifted_buffer[:, -1, :, :] = current_depth
+        env_ids = need_depth_mask.nonzero(as_tuple=False).flatten()
+        current_depth = self.get_processed_deepcamera(env_ids=env_ids)
+        selected_reset_mask = reset_mask[env_ids]
+        selected_update_mask = update_mask[env_ids] & ~selected_reset_mask
+
+        # 3. 只有真正 camera update 的非 reset 环境才生成并写入一张新 noisy frame。
+        if selected_update_mask.any():
+            update_env_ids = env_ids[selected_update_mask]
+            shifted_buffer = torch.roll(self.depth_buffer[update_env_ids], shifts=-1, dims=1)
+            shifted_buffer[:, -1, :, :] = current_depth[selected_update_mask]
+            self.depth_buffer[update_env_ids] = shifted_buffer
         
-        # 4. 向量化条件写入
-        update_mask_4d = update_mask.view(-1, 1, 1, 1).expand_as(self.depth_buffer)
-        self.depth_buffer = torch.where(update_mask_4d, shifted_buffer, self.depth_buffer)
-        
-        # 5. 处理刚重置的环境
-        if reset_mask.any():
-            reset_frames = current_depth[reset_mask].unsqueeze(1).repeat(1, self.depth_history_frames, 1, 1)
-            self.depth_buffer[reset_mask] = reset_frames
+        # 4. Reset history 用同一张 current noisy frame 填充所有 slot，不重新采样。
+        if selected_reset_mask.any():
+            reset_env_ids = env_ids[selected_reset_mask]
+            reset_frames = current_depth[selected_reset_mask].unsqueeze(1).repeat(
+                1, self.depth_history_frames, 1, 1
+            )
+            self.depth_buffer[reset_env_ids] = reset_frames
             
         return self.depth_buffer
 

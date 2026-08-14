@@ -49,6 +49,7 @@ from legged_lab.terrains import GRAVEL_TERRAINS_CFG, ROUGH_TERRAINS_CFG, Flat_te
 from legged_lab.assets.g1.g1_29 import G1_29CFG,G1_29DOF_LINKS,G1_23CFG,G1_23DOF_LINKS
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCameraCfg
+from legged_lab.utils.camera_noise.camera_noise_cfg import DistanceDependentGaussianNoiseCfg
 import os
 import legged_lab
 LEGGED_LAB_ROOT = os.path.dirname(legged_lab.__file__)
@@ -95,7 +96,7 @@ class RecoveryStateMachineCfg:
     task_height_ratio: float = 0.80
     curriculum_height_ratio: float = 0.70
     curriculum_success_ratio: float = 0.60
-    curriculum_min_attempts: int = 256
+    curriculum_min_attempts: int = 1024
     initial_assist_force: float = 200.0
     assist_force_step: float = 20.0
     min_assist_force: float = 0.0
@@ -158,11 +159,11 @@ class Reward:
         },
     )
 
-    # feet_stumble = RewTerm(
-    #     func=mdp.feet_stumble,
-    #     weight=-2.0,
-    #     params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=[".*ankle_roll.*"])},
-    # )
+    feet_stumble = RewTerm(
+        func=mdp.feet_stumble,
+        weight=-2.0,
+        params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=[".*ankle_roll.*"])},
+    )
 
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
 
@@ -214,7 +215,7 @@ class Reward:
 
     feet_air_time = RewTerm(
         func=mdp.feet_air_time_positive_biped,
-        weight=0.15,
+        weight=0.25,
         params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=".*ankle_roll.*"), "threshold": 0.4},
     )
 
@@ -232,41 +233,6 @@ class RecoveryRegReward:
         weight=-1.0,
         params={"soft_ratio": 0.9},
     )
-
-    # gait_phase_contact = RewTerm(
-    #     func=mdp.new_gait_phase_contact,
-    #     weight=0.2,
-    #     params={
-    #         "sensor_cfg": SceneEntityCfg(
-    #             "contact_sensor",
-    #             body_names=[
-    #                 "left_ankle_roll.*",
-    #                 "right_ankle_roll.*",
-    #             ],
-    #         ),
-    #         "stance_threshold": 0.55,
-    #         "command_threshold": 0.1,
-    #     },
-    # )
-
-    # stair_edge_penalty_L = RewTerm(
-    #     func=mdp.single_foot_contact_area_penalty,
-    #     weight=-0.1,  # 权重可以根据训练效果调整
-    #     params={
-    #         "contact_sensor_cfg": SceneEntityCfg("contact_sensor", body_names="left_ankle_roll_link"),
-    #         "ray_sensor_cfg": SceneEntityCfg("left_feet_ray_caster"), # 在 SceneCfg 中定义的左脚射线
-    #         "threshold": 0.04
-    #     }
-    # )
-    # stair_edge_penalty_R = RewTerm(
-    #     func=mdp.single_foot_contact_area_penalty,
-    #     weight=-0.1, 
-    #     params={
-    #         "contact_sensor_cfg": SceneEntityCfg("contact_sensor", body_names="right_ankle_roll_link"),
-    #         "ray_sensor_cfg": SceneEntityCfg("right_feet_ray_caster"), # 在 SceneCfg 中定义的右脚射线
-    #         "threshold": 0.04
-    #     }
-    # )
 
 @configclass
 class G1RENETENVCFG:
@@ -289,7 +255,7 @@ class G1RENETENVCFG:
             drift_range=(0.0, 0.0),
         ),
         camera=CameraCfg(
-            add_camera_noise=False,
+            add_camera_noise=True,
             add_camera=True,
             camera = GroupedRayCasterCameraCfg(
                 prim_path="/World/envs/env_.*/Robot/torso_link", 
@@ -364,6 +330,12 @@ class G1RENETENVCFG:
     renet=RENetTrainCfg()
 
     recovery=RecoveryStateMachineCfg()
+
+    depth_gaussian_noise: DistanceDependentGaussianNoiseCfg = DistanceDependentGaussianNoiseCfg(
+        near_std=0.0,
+        far_std=0.10,
+        distance_exponent=2.0,
+    )
 
     robot: RobotCfg = RobotCfg(
         actor_obs_history_length=10,
@@ -509,6 +481,8 @@ class CustomRslRlPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
     recovery_task_adv_weight: float = 2.5
     recovery_amp_adv_weight: float = 1.0
     recovery_reg_adv_weight: float = 0.1
+    recovery_ppo_min_rollout_samples: int = 2048
+    recovery_drec_min_replay_samples: int = 2048
     vel_estimation_warmup_iters:int=0
     vel_estimation_coef: float = 1.0
     terrain_recon_coef: float = 0.5
@@ -658,6 +632,8 @@ class G1RENETAGENTCFG:
         recovery_task_adv_weight=2.5,
         recovery_amp_adv_weight=1.0,
         recovery_reg_adv_weight=0.1,
+        recovery_ppo_min_rollout_samples=2048,
+        recovery_drec_min_replay_samples=2048,
         terrain_recon_target_clip=1,
         terrain_recon_warmup_iters=500,
         vel_estimation_warmup_iters=0,
