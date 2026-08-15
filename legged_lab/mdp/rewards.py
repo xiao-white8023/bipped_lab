@@ -93,6 +93,11 @@ def action_rate_l2(env: BaseEnv  | G1ROUGHEnv |G1Env) -> torch.Tensor:
     )
 
 
+def locomotion_action_rate_l2(env: BaseEnv | G1ROUGHEnv | G1Env) -> torch.Tensor:
+    """Read the action-time Locomotion-only rate cost prepared by RENet."""
+    return env.locomotion_action_rate_value
+
+
 def recovery_action_rate_l2(env: BaseEnv | G1ROUGHEnv | G1Env) -> torch.Tensor:
     """Read the action-time Recovery-only rate cost prepared by the environment."""
     return env.recovery_action_rate_value
@@ -144,6 +149,28 @@ def feet_air_time_positive_biped(
     # no reward for zero command
     reward *= (
         torch.norm(env.command_generator.command[:, :2], dim=1) + torch.abs(env.command_generator.command[:, 2])
+    ) > 0.1
+    return reward
+
+
+def locomotion_feet_air_time_positive_biped(
+    env: BaseEnv | G1ROUGHEnv | G1Env,
+    threshold: float,
+) -> torch.Tensor:
+    """Use RENet's Locomotion-only foot timers with the existing reward math."""
+    air_time = env.locomotion_feet_air_time
+    contact_time = env.locomotion_feet_contact_time
+    in_contact = contact_time > 0.0
+    in_mode_time = torch.where(in_contact, contact_time, air_time)
+    single_stance = torch.sum(in_contact.int(), dim=1) == 1
+    reward = torch.min(
+        torch.where(single_stance.unsqueeze(-1), in_mode_time, 0.0),
+        dim=1,
+    )[0]
+    reward = torch.clamp(reward, max=threshold)
+    reward *= (
+        torch.norm(env.command_generator.command[:, :2], dim=1)
+        + torch.abs(env.command_generator.command[:, 2])
     ) > 0.1
     return reward
 

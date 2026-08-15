@@ -43,6 +43,7 @@ def _warmup_algorithm(rollout_samples=0, replay_samples=0):
     algorithm.recovery_ppo_min_rollout_samples = 2048
     algorithm.recovery_drec_min_replay_samples = 2048
     algorithm.drec_reward_ready = False
+    algorithm._drec_replay_ready = False
     algorithm.recovery_discriminator_updated_this_update = False
     algorithm._recovery_discriminator_loss_computed_this_update = False
     return algorithm
@@ -152,26 +153,88 @@ class _BatchSource:
 
 
 @pytest.mark.parametrize(
-    ("replay_samples", "expected_ready"),
-    [(0, False), (2047, False), (2048, True), (4096, True)],
+    (
+        "rollout_samples",
+        "replay_samples",
+        "expected_ppo_ready",
+        "expected_replay_ready",
+        "expected_drec_ready",
+    ),
+    [
+        (300, 100_000, False, True, False),
+        (4_000, 1_000, True, False, False),
+        (4_000, 100_000, True, True, True),
+    ],
 )
-def test_drec_generator_gate_uses_replay_boundary_without_stopping_loco(replay_samples, expected_ready):
-    algorithm = RENetAMPPPO.__new__(RENetAMPPPO)
+def test_drec_generator_follows_ppo_and_replay_snapshot_without_stopping_loco(
+    rollout_samples,
+    replay_samples,
+    expected_ppo_ready,
+    expected_replay_ready,
+    expected_drec_ready,
+):
+    algorithm = _warmup_algorithm(rollout_samples, replay_samples)
     algorithm.recovery_drec_min_replay_samples = 2048
     algorithm.amp_storage_loco = _BatchSource("loco_policy")
     algorithm.amp_data_loco = _BatchSource("loco_expert")
     algorithm.amp_storage_recovery = _BatchSource("recovery_policy", replay_samples)
     algorithm.amp_data_recovery = _BatchSource("recovery_expert")
 
+    algorithm._prepare_recovery_warmup_for_update()
+    assert algorithm._recovery_ppo_ready is expected_ppo_ready
+    assert algorithm._drec_replay_ready is expected_replay_ready
+    assert algorithm._drec_update_ready is expected_drec_ready
+
     batches = list(algorithm._amp_mini_batch_generator(2, 8))
     assert len(batches) == 2
-    assert algorithm._drec_update_ready is expected_ready
+    # The generator consumes the snapshot and cannot write back into either gate.
+    assert algorithm._recovery_ppo_ready is expected_ppo_ready
+    assert algorithm._drec_update_ready is expected_drec_ready
     assert algorithm.amp_storage_loco.yield_count == 2
     assert algorithm.amp_data_loco.yield_count == 2
-    assert algorithm.amp_storage_recovery.yield_count == (2 if expected_ready else 0)
-    assert algorithm.amp_data_recovery.yield_count == (2 if expected_ready else 0)
-    assert all((batch["recovery_policy"] is not None) is expected_ready for batch in batches)
+    assert algorithm.amp_storage_recovery.yield_count == (2 if expected_drec_ready else 0)
+    assert algorithm.amp_data_recovery.yield_count == (2 if expected_drec_ready else 0)
+    assert all((batch["recovery_policy"] is not None) is expected_drec_ready for batch in batches)
     assert all(batch["recovery_num_samples"] == replay_samples for batch in batches)
+
+
+@pytest.mark.parametrize(
+    (
+        "rollout_samples",
+        "replay_samples",
+        "expected_blocked_by_ppo",
+        "expected_blocked_by_replay",
+    ),
+    [
+        (300, 100_000, 1.0, 0.0),
+        (4_000, 1_000, 0.0, 1.0),
+        (4_000, 100_000, 0.0, 0.0),
+    ],
+)
+def test_drec_diagnostics_report_the_actual_blocking_gate(
+    rollout_samples,
+    replay_samples,
+    expected_blocked_by_ppo,
+    expected_blocked_by_replay,
+):
+    algorithm = _warmup_algorithm(rollout_samples, replay_samples)
+    algorithm.enable_recovery_learning = True
+    algorithm.storage.enter_recovery = torch.zeros(rollout_samples, dtype=torch.bool)
+    algorithm.storage.exit_recovery = torch.zeros(rollout_samples, dtype=torch.bool)
+    algorithm.storage.recovery_failed = torch.zeros(rollout_samples, dtype=torch.bool)
+    for name in ("task", "amp", "reg"):
+        setattr(
+            algorithm.storage,
+            f"recovery_{name}_advantages",
+            torch.zeros(rollout_samples),
+        )
+
+    algorithm._prepare_recovery_warmup_for_update()
+    algorithm._capture_recovery_rollout_diagnostics()
+    diagnostics = algorithm.get_recovery_learning_diagnostics()
+
+    assert diagnostics["RecoveryWarmup/drec_blocked_by_ppo"] == expected_blocked_by_ppo
+    assert diagnostics["RecoveryWarmup/drec_blocked_by_replay"] == expected_blocked_by_replay
 
 
 class _RewardDiscriminator:
@@ -214,7 +277,9 @@ def test_drec_reward_is_zero_when_fresh_and_replay_threshold_alone_does_not_open
 
     algorithm.amp_storage_recovery.num_samples = 2048
     algorithm._prepare_recovery_warmup_for_update()
-    assert algorithm._drec_update_ready is True
+    assert algorithm._recovery_ppo_ready is False
+    assert algorithm._drec_replay_ready is True
+    assert algorithm._drec_update_ready is False
     assert algorithm.drec_reward_ready is False
     reward, _ = algorithm.predict_routed_amp_reward(amp_obs, amp_obs, torch.ones(2), recovery_mask)
     torch.testing.assert_close(reward, torch.tensor([3.0, 0.0]))
@@ -222,11 +287,17 @@ def test_drec_reward_is_zero_when_fresh_and_replay_threshold_alone_does_not_open
 
 
 def test_real_drec_loss_and_completed_optimizer_step_make_reward_persistently_ready(monkeypatch):
-    algorithm = _warmup_algorithm(rollout_samples=0, replay_samples=2048)
+    algorithm = _warmup_algorithm(rollout_samples=2048, replay_samples=2048)
     algorithm.enable_recovery_learning = True
-    algorithm.storage.enter_recovery = torch.zeros(0, dtype=torch.bool)
-    algorithm.storage.exit_recovery = torch.zeros(0, dtype=torch.bool)
-    algorithm.storage.recovery_failed = torch.zeros(0, dtype=torch.bool)
+    algorithm.storage.enter_recovery = torch.zeros(2048, dtype=torch.bool)
+    algorithm.storage.exit_recovery = torch.zeros(2048, dtype=torch.bool)
+    algorithm.storage.recovery_failed = torch.zeros(2048, dtype=torch.bool)
+    for name in ("task", "amp", "reg"):
+        setattr(
+            algorithm.storage,
+            f"recovery_{name}_advantages",
+            torch.zeros(2048),
+        )
     algorithm._last_recovery_learning_diagnostics = {}
     algorithm.discriminator_loco = object()
     algorithm.discriminator_recovery = object()

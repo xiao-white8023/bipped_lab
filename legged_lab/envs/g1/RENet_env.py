@@ -8,7 +8,7 @@ import torchvision.transforms as T
 
 from isaaclab.assets.articulation import Articulation
 from isaaclab.envs.mdp.commands import UniformVelocityCommand, UniformVelocityCommandCfg
-from isaaclab.managers import EventManager, RewardManager
+from isaaclab.managers import EventManager
 from isaaclab.managers.scene_entity_cfg import SceneEntityCfg
 from isaaclab.scene import InteractiveScene
 from isaaclab.sensors import ContactSensor, RayCaster
@@ -20,6 +20,7 @@ from scipy.spatial.transform import Rotation
 
 from legged_lab.envs.g1.RENet_cfg import G1RENETENVCFG
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
+from legged_lab.utils.mode_aware_reward_manager import ModeAwareRewardManager
 from legged_lab.utils.camera_noise.camera_noise import distance_dependent_gaussian_noise
 from legged_lab.utils.env_utils.scene import SceneCfg
 
@@ -114,10 +115,22 @@ class G1RENetEnv(VecEnv):
         )
         # 设置了 速度命令生成器 奖励管理器
         self.command_generator = UniformVelocityCommand(cfg=command_cfg, env=self)
-        self.reward_manager = RewardManager(self.cfg.reward, self)
+        self.reward_manager = ModeAwareRewardManager(self.cfg.reward, self)
         
         self.init_buffers()
-        self.recovery_reg_reward_manager = RewardManager(self.cfg.recovery_reg_reward, self)
+        self.recovery_reg_reward_manager = ModeAwareRewardManager(
+            self.cfg.recovery_reg_reward,
+            self,
+        )
+        print(
+            "Reward routing:\n"
+            "  Locomotion manager = mode-aware\n"
+            "  Recovery REG manager = mode-aware\n"
+            "History routing:\n"
+            "  Locomotion action-rate = mode-specific\n"
+            "  Recovery action-rate = mode-specific\n"
+            "  Locomotion feet-air-time = mode-specific"
+        )
 
         env_ids = torch.arange(self.num_envs, device=self.device)
         
@@ -462,6 +475,16 @@ class G1RENetEnv(VecEnv):
         self.recovery_foot_support_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.recovery_torso_clear_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.recovery_mask_t = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        self.locomotion_prev_action = torch.zeros(
+            self.num_envs, self.num_actions, dtype=torch.float, device=self.device
+        )
+        self.locomotion_prev_action_valid = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.bool
+        )
+        self.locomotion_action_rate_value = torch.zeros(self.num_envs, device=self.device)
+        self.locomotion_action_rate_valid_sample = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.bool
+        )
         self.recovery_prev_action = torch.zeros(
             self.num_envs, self.num_actions, dtype=torch.float, device=self.device
         )
@@ -470,6 +493,16 @@ class G1RENetEnv(VecEnv):
         self.recovery_action_rate_valid_sample = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.bool
         )
+        self.locomotion_feet_air_time = torch.zeros(
+            self.num_envs, 2, dtype=torch.float, device=self.device
+        )
+        self.locomotion_feet_contact_time = torch.zeros_like(
+            self.locomotion_feet_air_time
+        )
+        self.locomotion_mode_steps = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self.recovery_mode_steps = torch.zeros_like(self.locomotion_mode_steps)
         self.recovery_upright_reward_buf = torch.zeros(self.num_envs, device=self.device)
         self.recovery_height_reward_buf = torch.zeros(self.num_envs, device=self.device)
         self.recovery_task_reward_buf = torch.zeros(self.num_envs, device=self.device)
@@ -1132,6 +1165,22 @@ class G1RENetEnv(VecEnv):
         recovery_targets = current_joint_pos + recovery_beta * actions
         return torch.where(recovery_mask_t.unsqueeze(-1), recovery_targets, normal_targets)
 
+    def _update_locomotion_action_rate(self, recovery_mask_t: torch.Tensor):
+        """Update Locomotion-only history from the delayed/clipped action_t."""
+        locomotion_mask_t = ~recovery_mask_t
+        valid_sample = locomotion_mask_t & self.locomotion_prev_action_valid
+        squared_difference = torch.sum(
+            torch.square(self.action - self.locomotion_prev_action),
+            dim=1,
+        )
+        self.locomotion_action_rate_value.copy_(
+            torch.where(valid_sample, squared_difference, torch.zeros_like(squared_difference))
+        )
+        self.locomotion_action_rate_valid_sample.copy_(valid_sample)
+        self.locomotion_prev_action[locomotion_mask_t] = self.action[locomotion_mask_t]
+        self.locomotion_prev_action[recovery_mask_t] = 0.0
+        self.locomotion_prev_action_valid.copy_(locomotion_mask_t)
+
     def _update_recovery_action_rate(self, recovery_mask_t: torch.Tensor):
         """Update Recovery-only action history using the delayed/clipped action_t."""
         valid_sample = recovery_mask_t & self.recovery_prev_action_valid
@@ -1143,6 +1192,32 @@ class G1RENetEnv(VecEnv):
         self.recovery_prev_action[recovery_mask_t] = self.action[recovery_mask_t]
         self.recovery_prev_action[~recovery_mask_t] = 0.0
         self.recovery_prev_action_valid.copy_(recovery_mask_t)
+
+    def _update_locomotion_feet_timers(self, recovery_mask_t: torch.Tensor):
+        """Update reward-only foot timers after one physics substep."""
+        in_contact = (
+            self.contact_sensor.data.current_contact_time[:, self.feet_cfg.body_ids]
+            > 0.0
+        )
+        locomotion_rows = (~recovery_mask_t).unsqueeze(-1)
+        zeros = torch.zeros_like(self.locomotion_feet_air_time)
+
+        next_contact_time = torch.where(
+            in_contact,
+            self.locomotion_feet_contact_time + self.physics_dt,
+            zeros,
+        )
+        next_air_time = torch.where(
+            in_contact,
+            zeros,
+            self.locomotion_feet_air_time + self.physics_dt,
+        )
+        self.locomotion_feet_contact_time.copy_(
+            torch.where(locomotion_rows, next_contact_time, zeros)
+        )
+        self.locomotion_feet_air_time.copy_(
+            torch.where(locomotion_rows, next_air_time, zeros)
+        )
 
     @staticmethod
     def _assist_force_gate(
@@ -1665,10 +1740,18 @@ class G1RENetEnv(VecEnv):
         self.recovery_foot_support_buf[env_ids] = False
         self.recovery_torso_clear_buf[env_ids] = False
         self.recovery_mask_t[env_ids] = False
+        self.locomotion_prev_action[env_ids] = 0.0
+        self.locomotion_prev_action_valid[env_ids] = False
+        self.locomotion_action_rate_value[env_ids] = 0.0
+        self.locomotion_action_rate_valid_sample[env_ids] = False
         self.recovery_prev_action[env_ids] = 0.0
         self.recovery_prev_action_valid[env_ids] = False
         self.recovery_action_rate_value[env_ids] = 0.0
         self.recovery_action_rate_valid_sample[env_ids] = False
+        self.locomotion_feet_air_time[env_ids] = 0.0
+        self.locomotion_feet_contact_time[env_ids] = 0.0
+        self.locomotion_mode_steps[env_ids] = 0
+        self.recovery_mode_steps[env_ids] = 0
         self.recovery_upright_reward_buf[env_ids] = 0.0
         self.recovery_height_reward_buf[env_ids] = 0.0
         self.recovery_task_reward_buf[env_ids] = 0.0
@@ -1692,6 +1775,23 @@ class G1RENetEnv(VecEnv):
                 terrain_levels = self.update_terrain_levels(env_ids)
                 self.extras["log"].update(terrain_levels)
 
+        locomotion_steps = self.locomotion_mode_steps[env_ids].float()
+        recovery_steps = self.recovery_mode_steps[env_ids].float()
+        total_mode_steps = locomotion_steps + recovery_steps
+        valid_episodes = total_mode_steps > 0
+        locomotion_fraction = torch.where(
+            valid_episodes,
+            locomotion_steps / total_mode_steps.clamp(min=1.0),
+            torch.zeros_like(total_mode_steps),
+        )
+        recovery_fraction = torch.where(
+            valid_episodes,
+            recovery_steps / total_mode_steps.clamp(min=1.0),
+            torch.zeros_like(total_mode_steps),
+        )
+        self.extras["log"]["Episode_Mode/locomotion_fraction"] = locomotion_fraction.mean()
+        self.extras["log"]["Episode_Mode/recovery_fraction"] = recovery_fraction.mean()
+
         self.scene.reset(env_ids)
         if "reset" in self.event_manager.available_modes:
             self.event_manager.apply(
@@ -1703,9 +1803,10 @@ class G1RENetEnv(VecEnv):
 
         reward_extras = self.reward_manager.reset(env_ids)
         self.extras["log"].update(reward_extras)
-        # Keep the manager's internal episodic buffers correct, but do not mix
-        # its per-term episode summaries into locomotion RewardManager logs.
-        self.recovery_reg_reward_manager.reset(env_ids)
+        recovery_reg_extras = self.recovery_reg_reward_manager.reset(env_ids)
+        for key, value in recovery_reg_extras.items():
+            term_name = key.removeprefix("Episode_Reward/")
+            self.extras["log"][f"Episode_RecoveryReg/{term_name}"] = value
         self.extras["time_outs"] = self.time_out_buf
 
         self.command_generator.reset(env_ids)
@@ -1734,6 +1835,9 @@ class G1RENetEnv(VecEnv):
         # after check_reset() mutates the state machine.
         recovery_mask_t = self.recovery_mask.clone()
         self.recovery_mask_t.copy_(recovery_mask_t)
+        locomotion_mask_t = ~recovery_mask_t
+        self.locomotion_mode_steps += locomotion_mask_t.long()
+        self.recovery_mode_steps += recovery_mask_t.long()
         current_joint_pos = self.robot.data.joint_pos.clone()
         delayed_actions = self.action_buffer.compute(actions)
 
@@ -1743,6 +1847,7 @@ class G1RENetEnv(VecEnv):
             self.clip_actions,
         ).to(self.device)
 
+        self._update_locomotion_action_rate(recovery_mask_t)
         self._update_recovery_action_rate(recovery_mask_t)
         processed_actions = self._mode_dependent_joint_targets(
             self.robot.data.default_joint_pos,
@@ -1783,6 +1888,7 @@ class G1RENetEnv(VecEnv):
             self.scene.write_data_to_sim()
             self.sim.step(render=False)
             self.scene.update(dt=self.physics_dt)
+            self._update_locomotion_feet_timers(recovery_mask_t)
 
             self.avg_feet_force_per_step += torch.norm(
                 self.contact_sensor.data.net_forces_w[
@@ -1833,14 +1939,21 @@ class G1RENetEnv(VecEnv):
 
         self.reset_buf, self.time_out_buf = self.check_reset()
 
-        # RewardManager must still compute every raw locomotion term so its
-        # Episode_Reward/* summaries keep their historical *raw* meaning.
-        # Only the tensor sent to the PPO rollout is mode-routed below.
-        raw_locomotion_reward = self.reward_manager.compute(self.step_dt)
+        # Manager-level action-time masks route both reward tensors and their
+        # per-term statistics before any accumulation occurs.
+        raw_locomotion_reward = self.reward_manager.compute(
+            self.step_dt,
+            active_mask=locomotion_mask_t,
+        )
         if self.recovery_state_machine_enabled:
-            raw_recovery_reg_reward = self.recovery_reg_reward_manager.compute(self.step_dt)
+            raw_recovery_reg_reward = self.recovery_reg_reward_manager.compute(
+                self.step_dt,
+                active_mask=recovery_mask_t,
+            )
         else:
             raw_recovery_reg_reward = torch.zeros_like(raw_locomotion_reward)
+        # Defensive final routing remains intentionally redundant with the
+        # manager masks so no PPO reward stream can cross mode ownership.
         locomotion_reward, recovery_task_reward, recovery_reg_reward = self._route_action_time_rewards(
             raw_locomotion_reward,
             recovery_task_reward,

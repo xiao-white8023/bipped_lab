@@ -118,7 +118,7 @@ class Reward:
 
     dof_acc_l2 = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
 
-    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
+    action_rate_l2 = RewTerm(func=mdp.locomotion_action_rate_l2, weight=-0.01)
 
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
@@ -214,9 +214,9 @@ class Reward:
     alive = RewTerm(func=mdp.alive, weight=0.15)
 
     feet_air_time = RewTerm(
-        func=mdp.feet_air_time_positive_biped,
+        func=mdp.locomotion_feet_air_time_positive_biped,
         weight=0.25,
-        params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=".*ankle_roll.*"), "threshold": 0.4},
+        params={"threshold": 0.4},
     )
 
 

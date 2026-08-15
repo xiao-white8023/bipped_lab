@@ -88,6 +88,7 @@ class RENetAMPPPO(AMPPPO):
         self.recovery_drec_min_replay_samples = recovery_drec_min_replay_samples
         self._current_recovery_rollout_samples = 0
         self._recovery_ppo_ready = False
+        self._drec_replay_ready = False
         self._drec_update_ready = False
         self.drec_reward_ready = False
         self.recovery_discriminator_updated_this_update = False
@@ -149,7 +150,10 @@ class RENetAMPPPO(AMPPPO):
             "RecoveryWarmup/ppo_ready": 0.0,
             "RecoveryWarmup/drec_min_replay_samples": float(self.recovery_drec_min_replay_samples),
             "RecoveryWarmup/drec_replay_samples": 0.0,
+            "RecoveryWarmup/drec_replay_ready": 0.0,
             "RecoveryWarmup/drec_update_ready": 0.0,
+            "RecoveryWarmup/drec_blocked_by_ppo": 0.0,
+            "RecoveryWarmup/drec_blocked_by_replay": 0.0,
             "RecoveryWarmup/drec_reward_ready": 0.0,
             "RecoveryWarmup/drec_updated_this_update": 0.0,
             "RecoveryWarmup/recovery_update_skipped": 1.0,
@@ -181,6 +185,13 @@ class RENetAMPPPO(AMPPPO):
             self.feet_height_obs_start_idx = (
                 (self.critic_history_len - 1) * self.single_critic_dim + self.feet_height_in_critic_offset
             )
+
+        print(
+            "Recovery learning gate:\n"
+            f"  PPO min rollout samples = {self.recovery_ppo_min_rollout_samples}\n"
+            f"  D_REC min replay samples = {self.recovery_drec_min_replay_samples}\n"
+            "  D_REC requires PPO ready = True"
+        )
 
     def _assert_independent_recovery_critics(self):
         parameter_ids = {
@@ -739,13 +750,17 @@ class RENetAMPPPO(AMPPPO):
         return chain(self.policy.parameters(), self.recovery_critic.parameters())
 
     def _prepare_recovery_warmup_for_update(self):
-        """Snapshot the two independent Recovery sample gates for this update."""
+        """Snapshot the authoritative one-way Recovery gates for this update."""
         self._current_recovery_rollout_samples = int(self.storage.recovery_masks.sum().item())
         self._recovery_ppo_ready = (
             self._current_recovery_rollout_samples >= self.recovery_ppo_min_rollout_samples
         )
+        self._drec_replay_ready = (
+            int(self.amp_storage_recovery.num_samples)
+            >= self.recovery_drec_min_replay_samples
+        )
         self._drec_update_ready = (
-            int(self.amp_storage_recovery.num_samples) >= self.recovery_drec_min_replay_samples
+            self._recovery_ppo_ready and self._drec_replay_ready
         )
         self.recovery_discriminator_updated_this_update = False
         self._recovery_discriminator_loss_computed_this_update = False
@@ -769,7 +784,14 @@ class RENetAMPPPO(AMPPPO):
             "RecoveryWarmup/ppo_ready": float(self._recovery_ppo_ready),
             "RecoveryWarmup/drec_min_replay_samples": float(self.recovery_drec_min_replay_samples),
             "RecoveryWarmup/drec_replay_samples": float(drec_replay_samples),
+            "RecoveryWarmup/drec_replay_ready": float(self._drec_replay_ready),
             "RecoveryWarmup/drec_update_ready": float(self._drec_update_ready),
+            "RecoveryWarmup/drec_blocked_by_ppo": float(
+                self._drec_replay_ready and not self._recovery_ppo_ready
+            ),
+            "RecoveryWarmup/drec_blocked_by_replay": float(
+                self._recovery_ppo_ready and not self._drec_replay_ready
+            ),
             "RecoveryWarmup/drec_reward_ready": float(self.drec_reward_ready),
             "RecoveryWarmup/drec_updated_this_update": 0.0,
             "RecoveryWarmup/recovery_update_skipped": float(not self._recovery_ppo_ready),
@@ -830,8 +852,9 @@ class RENetAMPPPO(AMPPPO):
         loco_expert_generator = self.amp_data_loco.feed_forward_generator(num_updates, mini_batch_size)
 
         recovery_num_samples = self.amp_storage_recovery.num_samples
-        use_recovery = recovery_num_samples >= self.recovery_drec_min_replay_samples
-        self._drec_update_ready = use_recovery
+        # _prepare_recovery_warmup_for_update() is the single authority for
+        # this update. Historical replay readiness cannot bypass PPO readiness.
+        use_recovery = self._drec_update_ready
         if use_recovery:
             recovery_policy_generator = self.amp_storage_recovery.feed_forward_generator(
                 num_updates, mini_batch_size
