@@ -257,6 +257,45 @@ class RENetAmpOnPolicyRunner:
                 )
         return bundle
 
+    def _replace_reset_rows_with_terminal_amp_states(
+        self,
+        next_amp_obs: dict[str, torch.Tensor],
+        infos: dict,
+        reset_env_ids: torch.Tensor,
+    ):
+        """Use true pre-reset AMP states for terminal transition next states."""
+        next_amp_obs_with_term = {
+            key: value.clone() for key, value in next_amp_obs.items()
+        }
+        if reset_env_ids.numel() == 0:
+            return next_amp_obs_with_term
+        terminal_fields = {
+            "loco": "terminal_locomotion_amp_states",
+            "recovery": "terminal_recovery_amp_states",
+        }
+        for name, info_key in terminal_fields.items():
+            if info_key not in infos:
+                raise RuntimeError(
+                    "The environment reset one or more environments, but infos "
+                    f"does not contain '{info_key}'."
+                )
+            terminal_states = infos[info_key].to(self.device)
+            expected_shape = (
+                reset_env_ids.numel(),
+                next_amp_obs[name].shape[1],
+            )
+            if tuple(terminal_states.shape) != expected_shape:
+                raise RuntimeError(
+                    f"{info_key} must have shape {expected_shape}, got "
+                    f"{tuple(terminal_states.shape)}."
+                )
+            next_amp_obs_with_term[name].index_copy_(
+                0,
+                reset_env_ids,
+                terminal_states,
+            )
+        return next_amp_obs_with_term
+
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False):  # noqa: C901
         # initialize writer
         if self.log_dir is not None and self.writer is None and not self.disable_logs:
@@ -283,9 +322,14 @@ class RENetAmpOnPolicyRunner:
 
         # randomize initial episode lengths (for exploration)
         if init_at_random_ep_len:
-            self.env.episode_length_buf = torch.randint_like(
-                self.env.episode_length_buf, high=int(self.env.max_episode_length)
-            )
+            if hasattr(self.env, "randomize_initial_episode_progress"):
+                # Dedicated Recovery attempts must start at t=0. Natural rows
+                # randomize wall-clock and Locomotion-budget progress together.
+                self.env.randomize_initial_episode_progress()
+            else:
+                self.env.episode_length_buf = torch.randint_like(
+                    self.env.episode_length_buf, high=int(self.env.max_episode_length)
+                )
 
         # start learning
         obs, extras = self.env.get_observations()
@@ -354,37 +398,12 @@ class RENetAmpOnPolicyRunner:
                     # these contain post-reset states. Replace reset rows with
                     # discriminator-specific true terminal states for this
                     # transition only.
-                    next_amp_obs_with_term = {
-                        key: value.clone() for key, value in next_amp_obs.items()
-                    }
                     reset_env_ids = self.env.reset_env_ids.to(self.device)
-
-                    if reset_env_ids.numel() > 0:
-                        terminal_fields = {
-                            "loco": "terminal_locomotion_amp_states",
-                            "recovery": "terminal_recovery_amp_states",
-                        }
-                        for name, info_key in terminal_fields.items():
-                            if info_key not in infos:
-                                raise RuntimeError(
-                                    "The environment reset one or more environments, but infos "
-                                    f"does not contain '{info_key}'."
-                                )
-                            terminal_states = infos[info_key].to(self.device)
-                            expected_shape = (
-                                reset_env_ids.numel(),
-                                next_amp_obs[name].shape[1],
-                            )
-                            if tuple(terminal_states.shape) != expected_shape:
-                                raise RuntimeError(
-                                    f"{info_key} must have shape {expected_shape}, got "
-                                    f"{tuple(terminal_states.shape)}."
-                                )
-                            next_amp_obs_with_term[name].index_copy_(
-                                0,
-                                reset_env_ids,
-                                terminal_states,
-                            )
+                    next_amp_obs_with_term = self._replace_reset_rows_with_terminal_amp_states(
+                        next_amp_obs,
+                        infos,
+                        reset_env_ids,
+                    )
 
                     timeout_bootstrap_values = self._compute_timeout_bootstrap_values(
                         infos,

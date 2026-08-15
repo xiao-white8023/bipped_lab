@@ -1,4 +1,5 @@
 import math
+import warnings
 
 import isaaclab.sim as sim_utils
 import isaacsim.core.utils.torch as torch_utils  # type: ignore
@@ -21,6 +22,11 @@ from scipy.spatial.transform import Rotation
 from legged_lab.envs.g1.RENet_cfg import G1RENETENVCFG
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
 from legged_lab.utils.mode_aware_reward_manager import ModeAwareRewardManager
+from legged_lab.utils.recovery_reset_motion_loader import (
+    RECOVERY_RESET_FORMAT,
+    RECOVERY_RESET_FRAME_SIZE,
+    RecoveryResetMotionLoader,
+)
 from legged_lab.utils.camera_noise.camera_noise import distance_dependent_gaussian_noise
 from legged_lab.utils.env_utils.scene import SceneCfg
 
@@ -352,6 +358,9 @@ class G1RENetEnv(VecEnv):
             else self.baseline_max_episode_length_s
         )
         self.max_episode_length = math.ceil(self.max_episode_length_s / self.step_dt)
+        self.locomotion_budget_steps = math.ceil(
+            self.baseline_max_episode_length_s / self.step_dt
+        )
         self.recovery_max_steps = math.ceil(float(self.cfg.recovery.max_duration_s) / self.step_dt)
         self.recovery_ready_hold_steps = math.ceil(float(self.cfg.recovery.ready_hold_s) / self.step_dt)
 
@@ -708,6 +717,7 @@ class G1RENetEnv(VecEnv):
             ],
             preserve_order=True,
         )
+        self._initialize_dedicated_recovery_training()
         # 脚的平均接触力
         self.avg_feet_force_per_step = torch.zeros(
             self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
@@ -1533,6 +1543,446 @@ class G1RENetEnv(VecEnv):
         )
         return next_counter, was_recovery & (next_counter >= hold_steps)
 
+    @staticmethod
+    def _build_dedicated_recovery_env_mask(
+        terrain_types: torch.Tensor,
+        ratio: float,
+        enabled: bool,
+        stratify_by_terrain_type: bool = True,
+        generator: torch.Generator | None = None,
+    ):
+        """Choose one persistent Dedicated subset, optionally within every terrain type."""
+        if not isinstance(terrain_types, torch.Tensor):
+            raise TypeError("terrain_types must be a torch.Tensor.")
+        if terrain_types.ndim != 1 or terrain_types.numel() == 0:
+            raise ValueError(
+                "terrain_types must be a non-empty one-dimensional tensor, got "
+                f"{tuple(terrain_types.shape)}."
+            )
+        if terrain_types.dtype == torch.bool or terrain_types.is_floating_point():
+            raise TypeError(f"terrain_types must use an integer dtype, got {terrain_types.dtype}.")
+        if not isinstance(enabled, bool) or not isinstance(stratify_by_terrain_type, bool):
+            raise TypeError("Dedicated enable/stratification flags must be bool.")
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)):
+            raise TypeError("Dedicated Recovery ratio must be numeric.")
+        ratio = float(ratio)
+        if not math.isfinite(ratio) or not 0.0 < ratio < 1.0:
+            raise ValueError(f"Dedicated Recovery ratio must be in (0, 1), got {ratio}.")
+
+        dedicated_mask = torch.zeros_like(terrain_types, dtype=torch.bool)
+        if not enabled:
+            return dedicated_mask
+
+        if stratify_by_terrain_type:
+            group_values = torch.unique(terrain_types, sorted=True)
+        else:
+            group_values = torch.tensor(
+                [terrain_types[0]], dtype=terrain_types.dtype, device=terrain_types.device
+            )
+
+        all_env_ids = torch.arange(terrain_types.numel(), device=terrain_types.device)
+        for group_value in group_values:
+            if stratify_by_terrain_type:
+                group_env_ids = all_env_ids[terrain_types == group_value]
+            else:
+                group_env_ids = all_env_ids
+            group_size = int(group_env_ids.numel())
+            dedicated_count = round(group_size * ratio)
+            if dedicated_count <= 0 or dedicated_count >= group_size:
+                label = int(group_value.item()) if stratify_by_terrain_type else "all"
+                raise RuntimeError(
+                    "Dedicated Recovery stratification cannot retain both groups for "
+                    f"terrain type {label}: size={group_size}, ratio={ratio}, "
+                    f"dedicated={dedicated_count}."
+                )
+            permutation = torch.randperm(
+                group_size,
+                device=terrain_types.device,
+                generator=generator,
+            )
+            dedicated_mask[group_env_ids[permutation[:dedicated_count]]] = True
+            if not stratify_by_terrain_type:
+                break
+        return dedicated_mask
+
+    def _initialize_dedicated_recovery_training(self):
+        recovery_cfg = self.cfg.recovery
+        configured_enable = getattr(recovery_cfg, "dedicated_training_enable", False)
+        if not isinstance(configured_enable, bool):
+            raise TypeError("recovery.dedicated_training_enable must be bool.")
+        for name in (
+            "dedicated_stratify_by_terrain_type",
+            "dedicated_inherit_natural_terrain_level",
+        ):
+            if not isinstance(getattr(recovery_cfg, name), bool):
+                raise TypeError(f"recovery.{name} must be bool.")
+
+        ratio = float(recovery_cfg.dedicated_training_ratio)
+        if not math.isfinite(ratio) or not 0.0 < ratio < 1.0:
+            raise ValueError(
+                "recovery.dedicated_training_ratio must be in (0, 1), "
+                f"got {ratio}."
+            )
+        self.dedicated_recovery_enabled = bool(
+            self.recovery_state_machine_enabled and configured_enable
+        )
+        self.dedicated_recovery_target_ratio = ratio
+
+        terrain = getattr(self.scene, "terrain", None)
+        terrain_types = getattr(terrain, "terrain_types", None)
+        if terrain_types is None:
+            identity_terrain_types = torch.zeros(
+                self.num_envs, dtype=torch.long, device=self.device
+            )
+        else:
+            if not isinstance(terrain_types, torch.Tensor):
+                raise TypeError("TerrainImporter terrain_types must be a torch.Tensor.")
+            if terrain_types.shape != (self.num_envs,):
+                raise RuntimeError(
+                    "TerrainImporter terrain_types must have shape "
+                    f"({self.num_envs},), got {tuple(terrain_types.shape)}."
+                )
+            identity_terrain_types = terrain_types.to(device=self.device, dtype=torch.long)
+
+        self.dedicated_identity_terrain_types = identity_terrain_types.clone()
+        self.dedicated_recovery_env_mask = self._build_dedicated_recovery_env_mask(
+            identity_terrain_types,
+            ratio,
+            self.dedicated_recovery_enabled,
+            recovery_cfg.dedicated_stratify_by_terrain_type,
+        )
+        self.natural_env_mask = ~self.dedicated_recovery_env_mask
+        self.dedicated_recovery_env_ids = torch.nonzero(
+            self.dedicated_recovery_env_mask, as_tuple=False
+        ).flatten()
+        self.natural_env_ids = torch.nonzero(self.natural_env_mask, as_tuple=False).flatten()
+
+        scalar_long = lambda: torch.zeros((), dtype=torch.long, device=self.device)
+        scalar_float = lambda: torch.zeros((), dtype=torch.float, device=self.device)
+        self.dedicated_recovery_attempt_success_total = scalar_long()
+        self.dedicated_recovery_attempt_failure_total = scalar_long()
+        self.dedicated_recovery_attempt_duration_sum_s = scalar_float()
+        self.dedicated_recovery_reset_total = scalar_long()
+        self.dedicated_recovery_joint_clamp_total = scalar_long()
+        self.dedicated_recovery_joint_sample_total = scalar_long()
+        self.dedicated_recovery_absolute_timeout_total = scalar_long()
+        self.dedicated_recovery_sample_crop_counts = torch.zeros(
+            8, dtype=torch.long, device=self.device
+        )
+        self.natural_recovery_attempt_total = scalar_long()
+        self.natural_recovery_success_total = scalar_long()
+        self._dedicated_joint_clamp_warning_emitted = False
+        self.dedicated_last_sample_motion_id = torch.full(
+            (self.num_envs,), -1, dtype=torch.long, device=self.device
+        )
+        self.dedicated_last_sample_frame_id = torch.full_like(
+            self.dedicated_last_sample_motion_id, -1
+        )
+
+        self.recovery_reset_motion_loader = None
+        self.recovery_reset_joint_ids = []
+        self.recovery_reset_joint_names = []
+        if self.dedicated_recovery_enabled:
+            reset_motion_files = list(self.cfg.recovery_reset_motion_files)
+            if len(reset_motion_files) != 8:
+                raise ValueError(
+                    "Dedicated Recovery V1 requires exactly 8 recovery_reset_motion_files, "
+                    f"got {len(reset_motion_files)}."
+                )
+            self.recovery_reset_motion_loader = RecoveryResetMotionLoader(
+                reset_motion_files,
+                device=self.device,
+            )
+            reset_joint_names = self.recovery_reset_motion_loader.joint_names
+            reset_joint_ids, resolved_names = self.robot.find_joints(
+                reset_joint_names,
+                preserve_order=True,
+            )
+            if len(reset_joint_ids) != 23 or resolved_names != reset_joint_names:
+                raise RuntimeError(
+                    "Recovery reset JointNames did not resolve exactly in metadata order: "
+                    f"ids={reset_joint_ids}, names={resolved_names}."
+                )
+            if len(set(reset_joint_ids)) != 23:
+                raise RuntimeError("Recovery reset joint mapping contains duplicate joint IDs.")
+            self.recovery_reset_joint_ids = list(reset_joint_ids)
+            self.recovery_reset_joint_names = list(resolved_names)
+
+        dedicated_count = int(self.dedicated_recovery_env_mask.sum().item())
+        natural_count = self.num_envs - dedicated_count
+        actual_ratio = dedicated_count / self.num_envs
+        print(
+            "Dedicated Recovery environments:\n"
+            f"  enabled = {self.dedicated_recovery_enabled}\n"
+            f"  target_ratio = {ratio:.2f}\n"
+            f"  actual_count = {dedicated_count}\n"
+            f"  actual_ratio = {actual_ratio:.6f}\n"
+            f"  natural_count = {natural_count}"
+        )
+        if self.dedicated_recovery_enabled:
+            for terrain_type in torch.unique(identity_terrain_types, sorted=True).tolist():
+                type_rows = identity_terrain_types == terrain_type
+                type_dedicated = int(
+                    (type_rows & self.dedicated_recovery_env_mask).sum().item()
+                )
+                type_natural = int((type_rows & self.natural_env_mask).sum().item())
+                print(
+                    f"  type {terrain_type}: natural = {type_natural}, "
+                    f"dedicated = {type_dedicated}"
+                )
+            print(
+                "Dedicated Recovery V1:\n"
+                f"  ratio: {100.0 * actual_ratio:.2f}%\n"
+                f"  dedicated env count: {dedicated_count}\n"
+                f"  natural env count: {natural_count}\n"
+                f"  reset format: {RECOVERY_RESET_FORMAT}\n"
+                f"  reset frame size: {RECOVERY_RESET_FRAME_SIZE}\n"
+                "  reset motion count: 8\n"
+                f"  max recovery duration: {float(recovery_cfg.max_duration_s):.1f} s\n"
+                f"  Ready hold: {float(recovery_cfg.ready_hold_s):.1f} s\n"
+                "Natural timing:\n"
+                f"  locomotion budget: {self.baseline_max_episode_length_s:.1f} s\n"
+                f"  absolute cap: {self.max_episode_length_s:.1f} s\n"
+                "Terrain:\n"
+                "  dedicated identity stratified by terrain type: "
+                f"{recovery_cfg.dedicated_stratify_by_terrain_type}\n"
+                "  dedicated distance curriculum: False\n"
+                "  dedicated level inherited from natural same-type env: "
+                f"{recovery_cfg.dedicated_inherit_natural_terrain_level}\n"
+                "  complex XY sampling: False"
+            )
+
+    def _activate_dedicated_recovery_mode(self, dedicated_ids: torch.Tensor):
+        """Start a fresh Dedicated episode directly in Recovery mode."""
+        if dedicated_ids.numel() == 0:
+            return
+        self.recovery_mask[dedicated_ids] = True
+        self.recovery_mask_t[dedicated_ids] = True
+        self.recovery_timer[dedicated_ids] = 0
+        self.recovery_ready_counter[dedicated_ids] = 0
+        self.recovery_attempt_active[dedicated_ids] = True
+        self.recovery_trigger_armed[dedicated_ids] = False
+        self.enter_recovery_buf[dedicated_ids] = False
+        self.exit_recovery_buf[dedicated_ids] = False
+        self.recovery_failed_buf[dedicated_ids] = False
+
+    def _apply_dedicated_recovery_reset(self, dedicated_ids: torch.Tensor):
+        """Override normal reset events with one sampled 59-D physical state."""
+        if dedicated_ids.numel() == 0:
+            return
+        if self.recovery_reset_motion_loader is None:
+            raise RuntimeError("Dedicated Recovery reset loader is not initialized.")
+        frames, motion_ids, frame_ids = self.recovery_reset_motion_loader.sample(
+            int(dedicated_ids.numel()),
+            return_indices=True,
+        )
+        root_pose = frames[:, 0:7].clone()
+        root_pose[:, 0:3] += self.scene.env_origins[dedicated_ids]
+        root_velocity = frames[:, 7:13].clone()
+        source_joint_pos = frames[:, 13:36]
+        joint_velocity = frames[:, 36:59].clone()
+
+        joint_limits = self.robot.data.soft_joint_pos_limits.index_select(
+            0, dedicated_ids
+        )[:, self.recovery_reset_joint_ids, :]
+        if joint_limits.shape != (dedicated_ids.numel(), 23, 2):
+            raise RuntimeError(
+                "Recovery reset soft joint limits must have shape "
+                f"({dedicated_ids.numel()}, 23, 2), got {tuple(joint_limits.shape)}."
+            )
+        joint_pos = torch.clamp(
+            source_joint_pos,
+            min=joint_limits[..., 0],
+            max=joint_limits[..., 1],
+        )
+        clamped = torch.abs(joint_pos - source_joint_pos) > 1.0e-6
+        clamped_count = clamped.sum()
+        sampled_joint_count = source_joint_pos.numel()
+        self.dedicated_recovery_joint_clamp_total += clamped_count
+        self.dedicated_recovery_joint_sample_total += sampled_joint_count
+        # The initial reset contains the full Dedicated population and is a
+        # representative, one-time safety audit without a recurring GPU sync.
+        if not self._dedicated_joint_clamp_warning_emitted:
+            batch_clamp_ratio = clamped_count.float() / max(sampled_joint_count, 1)
+            batch_clamp_ratio_value = float(batch_clamp_ratio.item())
+            if batch_clamp_ratio_value > 0.05:
+                warnings.warn(
+                    "Dedicated Recovery reset joint-position clamp ratio exceeded 5%: "
+                    f"{batch_clamp_ratio_value:.4f}.",
+                    stacklevel=2,
+                )
+            self._dedicated_joint_clamp_warning_emitted = True
+
+        self.robot.write_root_link_pose_to_sim(root_pose, env_ids=dedicated_ids)
+        self.robot.write_root_link_velocity_to_sim(root_velocity, env_ids=dedicated_ids)
+        self.robot.write_joint_state_to_sim(
+            joint_pos,
+            joint_velocity,
+            joint_ids=self.recovery_reset_joint_ids,
+            env_ids=dedicated_ids,
+        )
+        self.dedicated_last_sample_motion_id[dedicated_ids] = motion_ids
+        self.dedicated_last_sample_frame_id[dedicated_ids] = frame_ids
+        self.dedicated_recovery_sample_crop_counts += torch.bincount(
+            motion_ids, minlength=8
+        )
+        self.dedicated_recovery_reset_total += dedicated_ids.numel()
+        self._activate_dedicated_recovery_mode(dedicated_ids)
+
+    def _inherit_dedicated_terrain_levels(self, dedicated_ids: torch.Tensor):
+        """Copy levels from random same-type Natural donors without curriculum stepping."""
+        if (
+            dedicated_ids.numel() == 0
+            or not self.dedicated_recovery_enabled
+            or not self.cfg.recovery.dedicated_inherit_natural_terrain_level
+        ):
+            return
+        terrain = getattr(self.scene, "terrain", None)
+        if terrain is None or getattr(terrain, "terrain_origins", None) is None:
+            return
+        for name in ("terrain_levels", "terrain_types", "env_origins", "terrain_origins"):
+            value = getattr(terrain, name, None)
+            if not isinstance(value, torch.Tensor):
+                raise RuntimeError(f"TerrainImporter {name} must be a torch.Tensor.")
+        if terrain.terrain_levels.shape != (self.num_envs,):
+            raise RuntimeError("TerrainImporter terrain_levels shape does not match num_envs.")
+        if terrain.terrain_types.shape != (self.num_envs,):
+            raise RuntimeError("TerrainImporter terrain_types shape does not match num_envs.")
+        if terrain.env_origins.shape != (self.num_envs, 3):
+            raise RuntimeError("TerrainImporter env_origins shape does not match [num_envs, 3].")
+        if terrain.terrain_origins.ndim != 3 or terrain.terrain_origins.shape[2] != 3:
+            raise RuntimeError("TerrainImporter terrain_origins must have shape [levels, types, 3].")
+        if dedicated_ids.device != terrain.terrain_levels.device:
+            raise RuntimeError("Dedicated IDs and TerrainImporter metadata must share a device.")
+
+        dedicated_types = terrain.terrain_types[dedicated_ids]
+        for terrain_type in torch.unique(dedicated_types, sorted=True):
+            selected = dedicated_types == terrain_type
+            selected_ids = dedicated_ids[selected]
+            donor_ids = torch.nonzero(
+                self.natural_env_mask & (terrain.terrain_types == terrain_type),
+                as_tuple=False,
+            ).flatten()
+            if donor_ids.numel() == 0:
+                raise RuntimeError(
+                    "Dedicated terrain level inheritance found no Natural donor for "
+                    f"terrain type {int(terrain_type.item())}."
+                )
+            donor_selection = torch.randint(
+                donor_ids.numel(),
+                (selected_ids.numel(),),
+                device=dedicated_ids.device,
+            )
+            terrain.terrain_levels[selected_ids] = terrain.terrain_levels[
+                donor_ids[donor_selection]
+            ]
+        selected_levels = terrain.terrain_levels[dedicated_ids]
+        selected_types = terrain.terrain_types[dedicated_ids]
+        if torch.any((selected_levels < 0) | (selected_levels >= terrain.terrain_origins.shape[0])):
+            raise RuntimeError("Inherited Dedicated terrain level is out of range.")
+        if torch.any((selected_types < 0) | (selected_types >= terrain.terrain_origins.shape[1])):
+            raise RuntimeError("Dedicated terrain type is out of range.")
+        terrain.env_origins[dedicated_ids] = terrain.terrain_origins[
+            selected_levels,
+            selected_types,
+        ]
+
+    @staticmethod
+    def _compute_recovery_episode_boundaries(
+        was_recovery: torch.Tensor,
+        locomotion_failure: torch.Tensor,
+        exit_recovery: torch.Tensor,
+        recovery_failed: torch.Tensor,
+        absolute_timeout: torch.Tensor,
+        locomotion_budget_exhausted: torch.Tensor,
+        dedicated_mask: torch.Tensor,
+    ):
+        """Return action-time episode boundaries for Natural and Dedicated rows."""
+        natural_mask = ~dedicated_mask
+        enter_recovery = (
+            natural_mask
+            & ~was_recovery
+            & locomotion_failure
+            & ~absolute_timeout
+        )
+        natural_locomotion_timeout = (
+            natural_mask
+            & ~was_recovery
+            & locomotion_budget_exhausted
+            & ~enter_recovery
+            & ~absolute_timeout
+        )
+        natural_post_budget_success = (
+            natural_mask
+            & was_recovery
+            & exit_recovery
+            & locomotion_budget_exhausted
+            & ~absolute_timeout
+        )
+        dedicated_success = dedicated_mask & exit_recovery & ~absolute_timeout
+        reset_buf = (
+            recovery_failed
+            | absolute_timeout
+            | natural_locomotion_timeout
+            | natural_post_budget_success
+            | dedicated_success
+        )
+        time_out_buf = absolute_timeout | natural_locomotion_timeout
+        natural_exit_to_locomotion = (
+            natural_mask
+            & exit_recovery
+            & ~locomotion_budget_exhausted
+            & ~absolute_timeout
+        )
+        return {
+            "enter_recovery": enter_recovery,
+            "natural_exit_to_locomotion": natural_exit_to_locomotion,
+            "dedicated_success": dedicated_success,
+            "natural_locomotion_timeout": natural_locomotion_timeout,
+            "natural_post_budget_success": natural_post_budget_success,
+            "reset_buf": reset_buf,
+            "time_out_buf": time_out_buf,
+        }
+
+    @staticmethod
+    def _compute_recovery_attempt_failure(
+        was_recovery: torch.Tensor,
+        recovery_timer: torch.Tensor,
+        recovery_max_steps: int,
+        exit_recovery: torch.Tensor,
+        absolute_timeout: torch.Tensor,
+    ):
+        """Terminate an unfinished Recovery attempt exactly at its step limit."""
+        if isinstance(recovery_max_steps, bool) or not isinstance(recovery_max_steps, int):
+            raise TypeError("recovery_max_steps must be an integer.")
+        if recovery_max_steps <= 0:
+            raise ValueError("recovery_max_steps must be positive.")
+        return (
+            was_recovery
+            & (recovery_timer >= recovery_max_steps)
+            & ~exit_recovery
+            & ~absolute_timeout
+        )
+
+    def randomize_initial_episode_progress(self):
+        """Randomize only coherent Natural Locomotion progress; Dedicated starts fresh."""
+        natural_ids = self.natural_env_ids
+        if natural_ids.numel() > 0:
+            progress = torch.randint(
+                self.locomotion_budget_steps,
+                (natural_ids.numel(),),
+                dtype=self.episode_length_buf.dtype,
+                device=self.device,
+            )
+            self.episode_length_buf[natural_ids] = progress
+            self.locomotion_mode_steps[natural_ids] = progress
+            self.recovery_mode_steps[natural_ids] = 0
+        dedicated_ids = self.dedicated_recovery_env_ids
+        if dedicated_ids.numel() > 0:
+            self.episode_length_buf[dedicated_ids] = 0
+            self.locomotion_mode_steps[dedicated_ids] = 0
+            self.recovery_mode_steps[dedicated_ids] = 0
+
     def compute_locomotion_failure(self):
         """The original RENet torso-contact termination condition, unchanged."""
         net_contact_forces = self.contact_sensor.data.net_forces_w_history
@@ -1724,7 +2174,59 @@ class G1RENetEnv(VecEnv):
 
     def get_recovery_diagnostics(self):
         """Expose the most recent pre-reset Recovery diagnostics."""
-        return dict(self._recovery_diagnostics)
+        diagnostics = dict(self._recovery_diagnostics)
+        diagnostics.update(self._get_dedicated_recovery_diagnostics())
+        return diagnostics
+
+    def _get_dedicated_recovery_diagnostics(self):
+        scalar = lambda value: torch.as_tensor(
+            value, dtype=torch.float, device=self.device
+        )
+        dedicated_count = self.dedicated_recovery_env_mask.sum()
+        dedicated_attempts = (
+            self.dedicated_recovery_attempt_success_total
+            + self.dedicated_recovery_attempt_failure_total
+            + self.dedicated_recovery_absolute_timeout_total
+        )
+        dedicated_success_ratio = (
+            self.dedicated_recovery_attempt_success_total.float()
+            / dedicated_attempts.float().clamp(min=1.0)
+        )
+        mean_duration = (
+            self.dedicated_recovery_attempt_duration_sum_s
+            / dedicated_attempts.float().clamp(min=1.0)
+        )
+        clamp_ratio = (
+            self.dedicated_recovery_joint_clamp_total.float()
+            / self.dedicated_recovery_joint_sample_total.float().clamp(min=1.0)
+        )
+        sample_total = self.dedicated_recovery_sample_crop_counts.sum().float().clamp(min=1.0)
+        natural_success_ratio = (
+            self.natural_recovery_success_total.float()
+            / self.natural_recovery_attempt_total.float().clamp(min=1.0)
+        )
+        diagnostics = {
+            "DedicatedRecovery/enabled": scalar(self.dedicated_recovery_enabled),
+            "DedicatedRecovery/target_ratio": scalar(self.dedicated_recovery_target_ratio),
+            "DedicatedRecovery/actual_ratio": dedicated_count.float() / float(self.num_envs),
+            "DedicatedRecovery/num_envs": dedicated_count.float(),
+            "DedicatedRecovery/attempt_success_count": self.dedicated_recovery_attempt_success_total.float(),
+            "DedicatedRecovery/attempt_failure_count": self.dedicated_recovery_attempt_failure_total.float(),
+            "DedicatedRecovery/success_ratio": dedicated_success_ratio,
+            "DedicatedRecovery/mean_attempt_duration_s": mean_duration,
+            "DedicatedRecovery/reset_count": self.dedicated_recovery_reset_total.float(),
+            "DedicatedRecovery/joint_pos_clamp_ratio": clamp_ratio,
+            "DedicatedRecovery/absolute_timeout_count": self.dedicated_recovery_absolute_timeout_total.float(),
+            "RecoveryNatural/attempts": self.natural_recovery_attempt_total.float(),
+            "RecoveryNatural/success_ratio": natural_success_ratio,
+            "RecoveryDedicated/attempts": dedicated_attempts.float(),
+            "RecoveryDedicated/success_ratio": dedicated_success_ratio,
+        }
+        for crop_index in range(8):
+            diagnostics[
+                f"DedicatedRecovery/sample_crop_{crop_index + 1:02d}_ratio"
+            ] = self.dedicated_recovery_sample_crop_counts[crop_index].float() / sample_total
+        return diagnostics
 
     def _reset_recovery_buffers(self, env_ids):
         self.recovery_mask[env_ids] = False
@@ -1761,19 +2263,31 @@ class G1RENetEnv(VecEnv):
         self.recovery_attempt_active[env_ids] = False
         self.recovery_assist_force_active_buf[env_ids] = False
 
+    def _update_reset_terrain(self, natural_ids: torch.Tensor, dedicated_ids: torch.Tensor):
+        """Apply distance curriculum only to Natural rows, then inherit Dedicated levels."""
+        extras = {}
+        terrain_generator = self.cfg.scene.terrain_generator
+        if terrain_generator is not None:
+            if terrain_generator.curriculum and natural_ids.numel() > 0:
+                extras.update(self.update_terrain_levels(natural_ids))
+            self._inherit_dedicated_terrain_levels(dedicated_ids)
+        return extras
+
     def reset(self, env_ids):
         if len(env_ids) == 0:
             return
+
+        natural_ids = env_ids[self.natural_env_mask[env_ids]]
+        dedicated_ids = env_ids[self.dedicated_recovery_env_mask[env_ids]]
 
         # Reset buffer
         self.avg_feet_force_per_step[env_ids] = 0.0
         self.avg_feet_speed_per_step[env_ids] = 0.0
 
         self.extras["log"] = dict()
-        if self.cfg.scene.terrain_generator is not None:
-            if self.cfg.scene.terrain_generator.curriculum:
-                terrain_levels = self.update_terrain_levels(env_ids)
-                self.extras["log"].update(terrain_levels)
+        self.extras["log"].update(
+            self._update_reset_terrain(natural_ids, dedicated_ids)
+        )
 
         locomotion_steps = self.locomotion_mode_steps[env_ids].float()
         recovery_steps = self.recovery_mode_steps[env_ids].float()
@@ -1819,6 +2333,10 @@ class G1RENetEnv(VecEnv):
         # state-machine bookkeeping is additionally cleared.
         self._reset_recovery_buffers(env_ids)
         self._clear_recovery_assist_force(env_ids)
+        # Domain randomization/reset events above apply to every row. Dedicated
+        # rows are then overwritten with a complete 59-D physical Recovery
+        # state and begin the new episode directly in Recovery mode.
+        self._apply_dedicated_recovery_reset(dedicated_ids)
 
         #
         if self.camera is not None:
@@ -2021,6 +2539,9 @@ class G1RENetEnv(VecEnv):
         # multiple references to one subsequently mutated diagnostics object.
         step_log = dict(self.extras.get("log", {})) if self.reset_env_ids.numel() > 0 else {}
         step_log.update(recovery_diagnostics)
+        # Reset sampling occurs after the pre-reset transition snapshot, so
+        # refresh cumulative Dedicated reset/crop/clamp counters here.
+        step_log.update(self._get_dedicated_recovery_diagnostics())
         step_log.update(self.get_depth_noise_diagnostics())
         self.extras["log"] = step_log
 
@@ -2072,7 +2593,7 @@ class G1RENetEnv(VecEnv):
 
         # A trigger disarmed by entry/success may only re-arm on a later step
         # that started in NORMAL and has a genuinely clear history signal.
-        rearm = ~was_recovery & ~locomotion_failure
+        rearm = self.natural_env_mask & ~was_recovery & ~locomotion_failure
         self.recovery_trigger_armed[rearm] = True
 
         self.recovery_timer = torch.where(
@@ -2087,20 +2608,27 @@ class G1RENetEnv(VecEnv):
             self.recovery_ready_counter,
             self.recovery_ready_hold_steps,
         )
-        recovery_failed = (
-            was_recovery
-            & (self.recovery_timer >= self.recovery_max_steps)
-            & ~exit_recovery
+        recovery_failed = self._compute_recovery_attempt_failure(
+            was_recovery,
+            self.recovery_timer,
+            self.recovery_max_steps,
+            exit_recovery,
+            absolute_timeout,
         )
 
-        # Absolute timeout wins over a simultaneous NORMAL locomotion failure:
-        # that environment resets directly and never enters Recovery.
-        enter_recovery = (
-            ~was_recovery
-            & self.recovery_trigger_armed
-            & locomotion_failure
-            & ~absolute_timeout
+        locomotion_budget_exhausted = (
+            self.locomotion_mode_steps >= self.locomotion_budget_steps
         )
+        boundaries = self._compute_recovery_episode_boundaries(
+            was_recovery=was_recovery,
+            locomotion_failure=locomotion_failure & self.recovery_trigger_armed,
+            exit_recovery=exit_recovery,
+            recovery_failed=recovery_failed,
+            absolute_timeout=absolute_timeout,
+            locomotion_budget_exhausted=locomotion_budget_exhausted,
+            dedicated_mask=self.dedicated_recovery_env_mask,
+        )
+        enter_recovery = boundaries["enter_recovery"]
 
         self.enter_recovery_buf.copy_(enter_recovery)
         self.exit_recovery_buf.copy_(exit_recovery)
@@ -2113,7 +2641,34 @@ class G1RENetEnv(VecEnv):
             self.recovery_torso_height_valid_buf
             & (self.recovery_torso_height_buf >= self.recovery_curriculum_height_threshold)
         )
+        # Preserve the existing Natural curriculum criterion. Dedicated V1
+        # has an explicit terminal success/failure outcome, so a timed-out
+        # attempt can never be counted as successful merely due to height.
+        curriculum_success = torch.where(
+            self.dedicated_recovery_env_mask,
+            exit_recovery,
+            curriculum_success,
+        )
         self._record_recovery_curriculum_attempts(completed_attempt, curriculum_success)
+
+        dedicated_completed = completed_attempt & self.dedicated_recovery_env_mask
+        natural_completed = completed_attempt & self.natural_env_mask
+        self.dedicated_recovery_attempt_success_total += (
+            dedicated_completed & exit_recovery
+        ).sum()
+        self.dedicated_recovery_attempt_failure_total += (
+            dedicated_completed & recovery_failed
+        ).sum()
+        self.dedicated_recovery_absolute_timeout_total += (
+            dedicated_completed & absolute_timeout
+        ).sum()
+        self.dedicated_recovery_attempt_duration_sum_s += (
+            self.recovery_timer[dedicated_completed].float().sum() * self.step_dt
+        )
+        self.natural_recovery_attempt_total += natural_completed.sum()
+        self.natural_recovery_success_total += (
+            natural_completed & exit_recovery
+        ).sum()
         self.recovery_attempt_active[completed_attempt] = False
 
         self.recovery_mask[enter_recovery] = True
@@ -2122,16 +2677,18 @@ class G1RENetEnv(VecEnv):
         self.recovery_trigger_armed[enter_recovery] = False
         self.recovery_attempt_active[enter_recovery] = True
 
-        self.recovery_mask[exit_recovery] = False
-        self.recovery_timer[exit_recovery] = 0
-        self.recovery_ready_counter[exit_recovery] = 0
+        natural_exit_to_locomotion = boundaries["natural_exit_to_locomotion"]
+        self.recovery_mask[natural_exit_to_locomotion] = False
+        self.recovery_timer[natural_exit_to_locomotion] = 0
+        self.recovery_ready_counter[natural_exit_to_locomotion] = 0
         # Deliberately keep recovery_trigger_armed=False on success. A later
         # NORMAL step with locomotion_failure=False performs the re-arm.
 
-        # Recovery torso contact is ignored. Only its own timeout and the
-        # whole-episode absolute horizon are true terminations.
-        reset_buf = recovery_failed | absolute_timeout
-        time_out_buf = absolute_timeout
+        # Dedicated success/failure and post-budget Natural success are true
+        # task terminals. Only the Natural 20 s horizon and 27 s absolute cap
+        # use timeout bootstrap semantics.
+        reset_buf = boundaries["reset_buf"]
+        time_out_buf = boundaries["time_out_buf"]
         self._update_recovery_diagnostics(was_recovery)
         return reset_buf, time_out_buf
     

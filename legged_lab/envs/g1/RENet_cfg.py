@@ -104,6 +104,10 @@ class RecoveryStateMachineCfg:
     beta_step: float = 0.02
     min_beta: float = 0.25
     force_upright_gate: float = 0.8
+    dedicated_training_enable: bool = True
+    dedicated_training_ratio: float = 0.20
+    dedicated_stratify_by_terrain_type: bool = True
+    dedicated_inherit_natural_terrain_level: bool = True
 
 
 @configclass
@@ -330,6 +334,14 @@ class G1RENETENVCFG:
     renet=RENetTrainCfg()
 
     recovery=RecoveryStateMachineCfg()
+
+    # These 59-D files contain physical simulator reset states only. Recovery
+    # AMP expert files remain the separate 53-D discriminator-only interface.
+    recovery_reset_motion_files = [
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_recovery_reset/"
+        f"fallAndGetUp2_subject2_reset_crop_{crop_id:02d}.txt"
+        for crop_id in range(1, 9)
+    ]
 
     depth_gaussian_noise: DistanceDependentGaussianNoiseCfg = DistanceDependentGaussianNoiseCfg(
         near_std=0.0,
