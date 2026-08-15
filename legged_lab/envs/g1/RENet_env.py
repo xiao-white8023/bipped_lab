@@ -1630,7 +1630,14 @@ class G1RENetEnv(VecEnv):
 
         terrain = getattr(self.scene, "terrain", None)
         terrain_types = getattr(terrain, "terrain_types", None)
+        self.dedicated_recovery_stratified_by_terrain_type = bool(
+            terrain_types is not None
+            and recovery_cfg.dedicated_stratify_by_terrain_type
+        )
         if terrain_types is None:
+            # Plane/grid scenes do not expose curriculum terrain metadata.
+            # Treat all environments as one global group for the one-time
+            # Dedicated identity selection.
             identity_terrain_types = torch.zeros(
                 self.num_envs, dtype=torch.long, device=self.device
             )
@@ -1649,7 +1656,7 @@ class G1RENetEnv(VecEnv):
             identity_terrain_types,
             ratio,
             self.dedicated_recovery_enabled,
-            recovery_cfg.dedicated_stratify_by_terrain_type,
+            self.dedicated_recovery_stratified_by_terrain_type,
         )
         self.natural_env_mask = ~self.dedicated_recovery_env_mask
         self.dedicated_recovery_env_ids = torch.nonzero(
@@ -1679,7 +1686,7 @@ class G1RENetEnv(VecEnv):
             self.dedicated_last_sample_motion_id, -1
         )
 
-        self.recovery_reset_motion_loader = None
+        self.recovery_reset_loader = None
         self.recovery_reset_joint_ids = []
         self.recovery_reset_joint_names = []
         if self.dedicated_recovery_enabled:
@@ -1689,11 +1696,11 @@ class G1RENetEnv(VecEnv):
                     "Dedicated Recovery V1 requires exactly 8 recovery_reset_motion_files, "
                     f"got {len(reset_motion_files)}."
                 )
-            self.recovery_reset_motion_loader = RecoveryResetMotionLoader(
+            self.recovery_reset_loader = RecoveryResetMotionLoader(
                 reset_motion_files,
                 device=self.device,
             )
-            reset_joint_names = self.recovery_reset_motion_loader.joint_names
+            reset_joint_names = self.recovery_reset_loader.joint_names
             reset_joint_ids, resolved_names = self.robot.find_joints(
                 reset_joint_names,
                 preserve_order=True,
@@ -1717,18 +1724,26 @@ class G1RENetEnv(VecEnv):
             f"  target_ratio = {ratio:.2f}\n"
             f"  actual_count = {dedicated_count}\n"
             f"  actual_ratio = {actual_ratio:.6f}\n"
-            f"  natural_count = {natural_count}"
+            f"  natural_count = {natural_count}\n"
+            "  stratified_by_terrain_type = "
+            f"{self.dedicated_recovery_stratified_by_terrain_type}"
         )
         if self.dedicated_recovery_enabled:
-            for terrain_type in torch.unique(identity_terrain_types, sorted=True).tolist():
-                type_rows = identity_terrain_types == terrain_type
-                type_dedicated = int(
-                    (type_rows & self.dedicated_recovery_env_mask).sum().item()
-                )
-                type_natural = int((type_rows & self.natural_env_mask).sum().item())
+            if self.dedicated_recovery_stratified_by_terrain_type:
+                for terrain_type in torch.unique(identity_terrain_types, sorted=True).tolist():
+                    type_rows = identity_terrain_types == terrain_type
+                    type_dedicated = int(
+                        (type_rows & self.dedicated_recovery_env_mask).sum().item()
+                    )
+                    type_natural = int((type_rows & self.natural_env_mask).sum().item())
+                    print(
+                        f"  type {terrain_type}: natural = {type_natural}, "
+                        f"dedicated = {type_dedicated}"
+                    )
+            else:
                 print(
-                    f"  type {terrain_type}: natural = {type_natural}, "
-                    f"dedicated = {type_dedicated}"
+                    "  global fallback: "
+                    f"natural = {natural_count}, dedicated = {dedicated_count}"
                 )
             print(
                 "Dedicated Recovery V1:\n"
@@ -1745,7 +1760,7 @@ class G1RENetEnv(VecEnv):
                 f"  absolute cap: {self.max_episode_length_s:.1f} s\n"
                 "Terrain:\n"
                 "  dedicated identity stratified by terrain type: "
-                f"{recovery_cfg.dedicated_stratify_by_terrain_type}\n"
+                f"{self.dedicated_recovery_stratified_by_terrain_type}\n"
                 "  dedicated distance curriculum: False\n"
                 "  dedicated level inherited from natural same-type env: "
                 f"{recovery_cfg.dedicated_inherit_natural_terrain_level}\n"
@@ -1770,14 +1785,21 @@ class G1RENetEnv(VecEnv):
         """Override normal reset events with one sampled 59-D physical state."""
         if dedicated_ids.numel() == 0:
             return
-        if self.recovery_reset_motion_loader is None:
+        if self.recovery_reset_loader is None:
             raise RuntimeError("Dedicated Recovery reset loader is not initialized.")
-        frames, motion_ids, frame_ids = self.recovery_reset_motion_loader.sample(
+        frames, motion_ids, frame_ids = self.recovery_reset_loader.sample(
             int(dedicated_ids.numel()),
             return_indices=True,
         )
         root_pose = frames[:, 0:7].clone()
-        root_pose[:, 0:3] += self.scene.env_origins[dedicated_ids]
+        # The normal reset event has already sampled a legal center-region
+        # world X/Y. Preserve only those two coordinates. Source Z and WXYZ
+        # orientation remain the physical Recovery frame values.
+        normal_reset_world_xy = self.robot.data.root_link_pos_w.index_select(
+            0, dedicated_ids
+        )[:, :2].clone()
+        root_pose[:, :2] = normal_reset_world_xy
+        root_pose[:, 2] += self.scene.env_origins[dedicated_ids, 2]
         root_velocity = frames[:, 7:13].clone()
         source_joint_pos = frames[:, 13:36]
         joint_velocity = frames[:, 36:59].clone()
@@ -1805,9 +1827,9 @@ class G1RENetEnv(VecEnv):
         if not self._dedicated_joint_clamp_warning_emitted:
             batch_clamp_ratio = clamped_count.float() / max(sampled_joint_count, 1)
             batch_clamp_ratio_value = float(batch_clamp_ratio.item())
-            if batch_clamp_ratio_value > 0.05:
+            if batch_clamp_ratio_value > 0.01:
                 warnings.warn(
-                    "Dedicated Recovery reset joint-position clamp ratio exceeded 5%: "
+                    "Dedicated Recovery reset joint-position clamp ratio exceeded 1%: "
                     f"{batch_clamp_ratio_value:.4f}.",
                     stacklevel=2,
                 )
@@ -2212,14 +2234,18 @@ class G1RENetEnv(VecEnv):
             "DedicatedRecovery/num_envs": dedicated_count.float(),
             "DedicatedRecovery/attempt_success_count": self.dedicated_recovery_attempt_success_total.float(),
             "DedicatedRecovery/attempt_failure_count": self.dedicated_recovery_attempt_failure_total.float(),
+            "DedicatedRecovery/success_count": self.dedicated_recovery_attempt_success_total.float(),
+            "DedicatedRecovery/failure_count": self.dedicated_recovery_attempt_failure_total.float(),
             "DedicatedRecovery/success_ratio": dedicated_success_ratio,
             "DedicatedRecovery/mean_attempt_duration_s": mean_duration,
             "DedicatedRecovery/reset_count": self.dedicated_recovery_reset_total.float(),
             "DedicatedRecovery/joint_pos_clamp_ratio": clamp_ratio,
             "DedicatedRecovery/absolute_timeout_count": self.dedicated_recovery_absolute_timeout_total.float(),
             "RecoveryNatural/attempts": self.natural_recovery_attempt_total.float(),
+            "RecoveryNatural/attempt_count": self.natural_recovery_attempt_total.float(),
             "RecoveryNatural/success_ratio": natural_success_ratio,
             "RecoveryDedicated/attempts": dedicated_attempts.float(),
+            "RecoveryDedicated/attempt_count": dedicated_attempts.float(),
             "RecoveryDedicated/success_ratio": dedicated_success_ratio,
         }
         for crop_index in range(8):

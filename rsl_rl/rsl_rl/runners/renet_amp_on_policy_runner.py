@@ -5,6 +5,7 @@ import statistics
 import time
 import warnings
 from collections import deque
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -28,6 +29,28 @@ class RENetAmpOnPolicyRunner:
 
     LOCOMOTION_AMP_OBS_DIM = 50
     RECOVERY_AMP_OBS_DIM = 53
+
+    @staticmethod
+    def _validate_recovery_amp_expert_files(motion_files):
+        """Fail clearly before loading if configured 53-D D_REC experts are missing."""
+        if motion_files is None:
+            motion_files = ()
+        if isinstance(motion_files, (str, os.PathLike)):
+            raise TypeError("recovery_amp_motion_files must be a sequence of file paths.")
+        paths = tuple(Path(path).expanduser() for path in motion_files)
+        if not paths:
+            raise FileNotFoundError(
+                "Recovery AMP expert data are missing. "
+                "59D recovery reset files cannot replace 53D D_REC expert files."
+            )
+        missing = [str(path) for path in paths if not path.is_file()]
+        if missing:
+            raise FileNotFoundError(
+                "Recovery AMP expert data are missing. "
+                "59D recovery reset files cannot replace 53D D_REC expert files. "
+                f"Missing: {missing}"
+            )
+        return [str(path) for path in paths]
 
     def __init__(self, env: VecEnv, train_cfg: dict, log_dir: str | None = None, device="cpu"):
         self.cfg = train_cfg
@@ -99,6 +122,9 @@ class RENetAmpOnPolicyRunner:
             self.alg_cfg["symmetry_cfg"]["_env"] = env
 
         # Initialize fully independent locomotion/recovery AMP data paths.
+        recovery_amp_motion_files = self._validate_recovery_amp_expert_files(
+            train_cfg["recovery_amp_motion_files"]
+        )
         amp_data_loco = AMPLoader(
             device,
             time_between_frames=self.env.step_dt,
@@ -112,7 +138,7 @@ class RENetAmpOnPolicyRunner:
             time_between_frames=self.env.step_dt,
             preload_transitions=True,
             num_preload_transitions=train_cfg["recovery_amp_num_preload_transitions"],
-            motion_files=train_cfg["recovery_amp_motion_files"],
+            motion_files=recovery_amp_motion_files,
             frame_size=self.RECOVERY_AMP_OBS_DIM,
         )
 

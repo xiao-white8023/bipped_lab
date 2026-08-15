@@ -78,6 +78,11 @@ def test_recovery_reset_loader_loads_valid_59d_and_samples_shape(tmp_path):
     samples, motion_ids, frame_ids = loader.sample(17, return_indices=True)
 
     assert samples.shape == (17, 59)
+    assert samples[:, 0:7].shape == (17, 7)
+    assert samples[:, 7:13].shape == (17, 6)
+    assert samples[:, 13:36].shape == (17, 23)
+    assert samples[:, 36:59].shape == (17, 23)
+    assert torch.isfinite(samples).all()
     assert motion_ids.shape == (17,)
     assert frame_ids.shape == (17,)
     assert torch.count_nonzero(motion_ids) == 0
@@ -216,6 +221,27 @@ def test_dedicated_identity_is_terrain_stratified_and_persistent():
     assert not torch.any(env.recovery_failed_buf[dedicated_ids])
 
 
+def test_dedicated_identity_falls_back_to_one_global_group_without_terrain_types():
+    (build_mask,) = _load_env_methods("_build_dedicated_recovery_env_mask")
+    fallback_group = torch.zeros(40, dtype=torch.long)
+    generator = torch.Generator(device="cpu").manual_seed(11)
+
+    mask = build_mask(fallback_group, 0.20, True, False, generator)
+
+    assert mask.dtype == torch.bool
+    assert mask.shape == (40,)
+    assert mask.sum().item() == 8
+    assert (~mask).sum().item() == 32
+
+
+def test_terrain_stratification_fails_when_a_type_cannot_retain_both_groups():
+    (build_mask,) = _load_env_methods("_build_dedicated_recovery_env_mask")
+    terrain_types = torch.repeat_interleave(torch.arange(3), 2)
+
+    with pytest.raises(RuntimeError, match="terrain type 0: size=2"):
+        build_mask(terrain_types, 0.20, True, True)
+
+
 def _boundaries(
     *,
     was_recovery=False,
@@ -337,7 +363,14 @@ class _FakeRobot:
         limits = torch.zeros(2, 23, 2)
         limits[..., 0] = -1.0
         limits[..., 1] = 1.0
-        self.data = SimpleNamespace(soft_joint_pos_limits=limits)
+        self.data = SimpleNamespace(
+            soft_joint_pos_limits=limits,
+            # World X/Y already sampled by reset_root_state_uniform around the
+            # current terrain origin before the 59-D physical override.
+            root_link_pos_w=torch.tensor(
+                [[0.0, 0.0, 0.8], [5.25, 5.75, 0.8]]
+            ),
+        )
         self.calls = {}
 
     def write_root_link_pose_to_sim(self, value, env_ids):
@@ -374,7 +407,7 @@ def test_dedicated_reset_writes_complete_physical_state_and_clamps_joint_positio
         )
     )
     env = SimpleNamespace(
-        recovery_reset_motion_loader=loader,
+        recovery_reset_loader=loader,
         scene=SimpleNamespace(env_origins=torch.tensor([[0.0, 0.0, 0.0], [5.0, 6.0, 1.0]])),
         robot=_FakeRobot(),
         recovery_reset_joint_ids=list(range(23)),
@@ -404,7 +437,10 @@ def test_dedicated_reset_writes_complete_physical_state_and_clamps_joint_positio
     root_pose, pose_ids = env.robot.calls["root_pose"]
     root_velocity, velocity_ids = env.robot.calls["root_velocity"]
     joint_pos, joint_vel, joint_ids, joint_env_ids = env.robot.calls["joints"]
-    torch.testing.assert_close(root_pose[0, :3], torch.tensor([5.0, 6.0, 1.4]))
+    torch.testing.assert_close(root_pose[0, :3], torch.tensor([5.25, 5.75, 1.4]))
+    root_xy_from_origin = root_pose[0, :2] - env.scene.env_origins[1, :2]
+    assert torch.all(root_xy_from_origin >= -0.5)
+    assert torch.all(root_xy_from_origin <= 0.5)
     torch.testing.assert_close(root_pose[0, 3:7], torch.tensor([1.0, 0.0, 0.0, 0.0]))
     torch.testing.assert_close(root_velocity[0], torch.arange(6).float())
     assert joint_pos[0, 0].item() == 1.0
@@ -513,6 +549,16 @@ def test_terminal_recovery_amp_transition_uses_pre_reset_state_not_teleport_stat
     torch.testing.assert_close(routed["recovery"], torch.tensor([[100.0], [7.0]]))
     # The original post-reset bundle remains Y for the next new episode.
     torch.testing.assert_close(next_amp_obs["recovery"], torch.tensor([[100.0], [200.0]]))
+
+
+def test_missing_recovery_amp_expert_has_dedicated_53d_error(tmp_path):
+    missing = tmp_path / "missing_recovery_amp_53d.txt"
+
+    with pytest.raises(
+        FileNotFoundError,
+        match="59D recovery reset files cannot replace 53D D_REC expert files",
+    ):
+        RENetAmpOnPolicyRunner._validate_recovery_amp_expert_files([missing])
 
 
 class _CaptureReplay:
