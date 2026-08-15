@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 
@@ -174,8 +175,9 @@ def test_drec_generator_gate_uses_replay_boundary_without_stopping_loco(replay_s
 
 
 class _RewardDiscriminator:
-    def __init__(self, reward_value):
+    def __init__(self, reward_value, input_dim=4):
         self.reward_value = reward_value
+        self.input_dim = input_dim
         self.calls = 0
 
     def predict_amp_reward(self, state, _next_state, _task_reward, normalizer=None):
@@ -192,13 +194,16 @@ def _reward_algorithm():
     algorithm.discriminator_loco = _RewardDiscriminator(3.0)
     algorithm.discriminator_recovery = _RewardDiscriminator(7.0)
     algorithm.amp_normalizer_loco = None
-    algorithm.amp_normalizer_recovery = None
+    algorithm.amp_normalizer_recovery = SimpleNamespace(mean=np.zeros(53))
     return algorithm
 
 
 def test_drec_reward_is_zero_when_fresh_and_replay_threshold_alone_does_not_open_it():
     algorithm = _reward_algorithm()
-    amp_obs = torch.zeros(2, 2)
+    amp_obs = {
+        "loco": torch.zeros(2, 2),
+        "recovery": torch.zeros(2, 2),
+    }
     recovery_mask = torch.tensor([False, True])
     reward, logits = algorithm.predict_routed_amp_reward(
         amp_obs, amp_obs, torch.ones(2), recovery_mask
@@ -266,7 +271,10 @@ def test_real_drec_loss_and_completed_optimizer_step_make_reward_persistently_re
     algorithm.device = "cpu"
     algorithm.discriminator_loco = _RewardDiscriminator(3.0)
     algorithm.discriminator_recovery = _RewardDiscriminator(7.0)
-    amp_obs = torch.zeros(2, 2)
+    amp_obs = {
+        "loco": torch.zeros(2, 2),
+        "recovery": torch.zeros(2, 2),
+    }
     reward, _ = algorithm.predict_routed_amp_reward(
         amp_obs,
         amp_obs,
@@ -399,7 +407,7 @@ def test_runner_resume_restores_ready_true_with_empty_replay_but_keeps_update_ga
         "discriminator_state_dict": {},
         "amp_normalizer": None,
         "recovery_discriminator_state_dict": {},
-        "recovery_amp_normalizer": None,
+        "recovery_amp_normalizer": SimpleNamespace(mean=np.zeros(53)),
         "recovery_critic_state_dict": {},
         "recovery_curriculum_state": curriculum_state,
         "recovery_warmup_state": {"drec_reward_ready": True},

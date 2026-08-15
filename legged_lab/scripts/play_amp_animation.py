@@ -2,7 +2,7 @@
 # All rights reserved.
 # Original code is licensed under the BSD-3-Clause license.
 
-"""Replay a G1 visualization trajectory and optionally save AMP expert frames.
+"""Replay a 58D G1 visualization trajectory and save AMP expert frames.
 
 By default, playback uses the exact `FrameDuration` stored in the input
 visualization file. Passing `--fps` explicitly performs temporal resampling at
@@ -14,7 +14,11 @@ During playback, the terminal displays:
 - current playback time
 - total motion duration
 
-This is useful for manually identifying recovery clip boundaries.
+Locomotion export preserves the existing 58D full-AMP layout. Recovery export
+appends ``robot.data.projected_gravity_b`` after IsaacLab replay, producing a
+61D full-AMP frame. The gravity is deliberately not reconstructed from the
+visualization Euler angles so expert and policy Recovery AMP use the exact same
+IsaacLab definition.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -66,6 +71,33 @@ parser.add_argument(
     help="Output AMP expert JSON/TXT path.",
 )
 parser.add_argument(
+    "--motion_file",
+    type=str,
+    default=None,
+    help=(
+        "Optional 58D visualization motion to replay. When provided, this "
+        "temporarily overrides env_cfg.amp_motion_files_display."
+    ),
+)
+parser.add_argument(
+    "--amp_profile",
+    choices=("locomotion", "recovery"),
+    default="locomotion",
+    help="AMP export layout: locomotion=58D, recovery=61D with projected gravity.",
+)
+parser.add_argument(
+    "--start_time",
+    type=float,
+    default=None,
+    help="Optional crop start time in seconds (default: 0).",
+)
+parser.add_argument(
+    "--end_time",
+    type=float,
+    default=None,
+    help="Optional crop end time in seconds (default: source duration).",
+)
+parser.add_argument(
     "--fps",
     type=float,
     default=None,
@@ -93,12 +125,20 @@ args_cli, hydra_args = parser.parse_known_args()
 
 if args_cli.task is not None and "sensor" in args_cli.task:
     args_cli.enable_cameras = True
+if args_cli.save_path is not None and not args_cli.headless:
+    print(
+        "[play_amp_animation] WARNING: exporting without --headless enables "
+        "the GUI and per-frame rendering, which is substantially slower.",
+        flush=True,
+    )
 
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 
 # Safe to import simulation-dependent project modules after launching the app.
+import torch  # noqa: E402
+
 from legged_lab.envs import *  # noqa: F401,F403,E402
 from legged_lab.utils import task_registry  # noqa: E402
 
@@ -162,13 +202,18 @@ def _write_motion_file(
     frames: np.ndarray,
     frame_duration: float,
     motion_weight: float,
+    amp_profile: str,
+    start_time: float,
+    end_time: float,
 ) -> None:
     output_path = Path(save_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if frames.ndim != 2 or frames.shape[1] != 58:
+    expected_dim = {"locomotion": 58, "recovery": 61}[amp_profile]
+    if frames.ndim != 2 or frames.shape[1] != expected_dim:
         raise ValueError(
-            f"Expected AMP expert data with shape (T, 58), got {frames.shape}."
+            f"Expected {amp_profile} AMP expert data with shape "
+            f"(T, {expected_dim}), got {frames.shape}."
         )
     if not np.isfinite(frames).all():
         raise ValueError("Generated AMP expert frames contain NaN or Inf values.")
@@ -187,10 +232,14 @@ def _write_motion_file(
         file.write("\n")
 
     print(
-        f"Saved AMP expert motion to '{output_path}': "
-        f"frames={frames.shape[0]}, dim={frames.shape[1]}, "
-        f"FrameDuration={frame_duration:.9f}, "
-        f"fps={1.0 / frame_duration:.6f}."
+        f"Saved AMP expert motion to '{output_path}':\n"
+        f"  AMP profile   = {amp_profile}\n"
+        f"  frame count   = {frames.shape[0]}\n"
+        f"  dimension     = {frames.shape[1]}\n"
+        f"  FrameDuration = {frame_duration:.9f}\n"
+        f"  fps           = {1.0 / frame_duration:.6f}\n"
+        f"  start_time    = {start_time:.6f} s\n"
+        f"  end_time      = {end_time:.6f} s"
     )
 
 
@@ -249,6 +298,28 @@ def _parse_clip_ranges(
     return ranges
 
 
+def _resolve_time_range(
+    start_time: float | None,
+    end_time: float | None,
+    source_duration: float,
+) -> tuple[float, float] | None:
+    """Resolve and validate the optional single crop range."""
+    if start_time is None and end_time is None:
+        return None
+
+    resolved_start = 0.0 if start_time is None else float(start_time)
+    resolved_end = source_duration if end_time is None else float(end_time)
+    if not np.isfinite(resolved_start) or not np.isfinite(resolved_end):
+        raise ValueError("--start_time and --end_time must be finite.")
+    if not 0.0 <= resolved_start < resolved_end <= source_duration + 1e-8:
+        raise ValueError(
+            "Expected 0 <= start_time < end_time <= source_duration, got "
+            f"{resolved_start:.6f} <= {resolved_end:.6f} with "
+            f"source_duration={source_duration:.6f}."
+        )
+    return resolved_start, min(resolved_end, source_duration)
+
+
 def _make_clip_sample_times(
     start_time: float,
     end_time: float,
@@ -291,7 +362,9 @@ def _clip_save_path(
     clip_name = f"{stem}_{clip_index:02d}{suffix}"
     return str(path.with_name(clip_name))
 
+
 def play_amp_animation() -> None:
+    print("[play_amp_animation] Preparing task configuration...", flush=True)
     env_cfg, agent_cfg = task_registry.get_cfgs(args_cli.task)
 
     _disable_generation_randomization(env_cfg)
@@ -300,6 +373,12 @@ def play_amp_animation() -> None:
     env_cfg.scene.env_spacing = 2.5
     env_cfg.scene.terrain_generator = None
     env_cfg.scene.terrain_type = "plane"
+
+    if args_cli.motion_file is not None:
+        motion_path = Path(args_cli.motion_file).expanduser().resolve()
+        if not motion_path.is_file():
+            raise FileNotFoundError(f"Visualization motion file not found: {motion_path}")
+        env_cfg.amp_motion_files_display = [str(motion_path)]
 
     if hasattr(env_cfg, "commands"):
         _set_if_present(env_cfg.commands, "debug_vis", False)
@@ -315,8 +394,20 @@ def play_amp_animation() -> None:
             "Generating one AMP expert trajectory requires --num_envs=1."
         )
 
+    print(
+        "[play_amp_animation] Creating the IsaacLab environment. The first "
+        "URDF import/cache build can take 1-2 minutes; URDF merge and Fabric "
+        "missing-visual warnings during this stage are non-fatal.",
+        flush=True,
+    )
+    environment_start_time = time.perf_counter()
     env_class = task_registry.get_task_class(args_cli.task)
     env = env_class(env_cfg, args_cli.headless)
+    print(
+        "[play_amp_animation] Environment ready in "
+        f"{time.perf_counter() - environment_start_time:.1f} s.",
+        flush=True,
+    )
 
     source_num_frames = int(
         env.amp_loader_display.trajectory_num_frames[0]
@@ -346,6 +437,15 @@ def play_amp_animation() -> None:
         args_cli.clip_ranges,
         source_duration=source_duration,
     )
+    single_time_range = _resolve_time_range(
+        args_cli.start_time,
+        args_cli.end_time,
+        source_duration,
+    )
+    if clip_ranges and single_time_range is not None:
+        raise ValueError("Use either --clip_ranges or --start_time/--end_time, not both.")
+    if single_time_range is not None:
+        clip_ranges = [single_time_range]
 
     # No crop ranges: preserve the original full-motion behavior.
     if not clip_ranges:
@@ -386,6 +486,7 @@ def play_amp_animation() -> None:
 
     print(
         "Starting G1 motion playback:\n"
+        f"  AMP profile       = {args_cli.amp_profile}\n"
         f"  source_frames     = {source_num_frames}\n"
         f"  source_fps        = {1.0 / source_frame_duration:.6f}\n"
         f"  source_duration   = {source_duration:.6f} s\n"
@@ -454,19 +555,39 @@ def play_amp_animation() -> None:
                 flush=True,
             )
 
-            frame = env.visualize_motion(float(sample_time))
+            base_amp_frame = env.visualize_motion(float(sample_time))
 
             if args_cli.save_path:
-                frame_np = frame.detach().cpu().numpy()
-
-                if frame_np.shape != (1, 58):
+                if tuple(base_amp_frame.shape) != (1, 58):
                     raise ValueError(
                         "env.visualize_motion() must return shape (1, 58) "
                         "for full G1 23-DoF AMP, "
-                        f"but returned {frame_np.shape}."
+                        f"but returned {tuple(base_amp_frame.shape)}."
                     )
 
-                all_frames.append(frame_np[0].copy())
+                amp_frame = base_amp_frame[0]
+                if args_cli.amp_profile == "recovery":
+                    # This is the same simulator-state field used by
+                    # G1RENetEnv.get_recovery_amp_obs() during policy rollout.
+                    projected_gravity = env.robot.data.projected_gravity_b
+                    if tuple(projected_gravity.shape) != (1, 3):
+                        raise ValueError(
+                            "robot.data.projected_gravity_b must have shape (1, 3) "
+                            "while exporting with --num_envs=1, got "
+                            f"{tuple(projected_gravity.shape)}."
+                        )
+                    gravity = projected_gravity[0]
+                    if not gravity.isfinite().all():
+                        raise ValueError("projected_gravity_b contains NaN or Inf.")
+                    gravity_norm = float(gravity.norm().item())
+                    if abs(gravity_norm - 1.0) >= 1e-3:
+                        raise ValueError(
+                            "projected_gravity_b must have unit norm, got "
+                            f"{gravity_norm:.8f}."
+                        )
+                    amp_frame = torch.cat((amp_frame, gravity), dim=-1)
+
+                all_frames.append(amp_frame.detach().cpu().numpy().copy())
 
         print()
 
@@ -487,6 +608,9 @@ def play_amp_animation() -> None:
                 frames=np.stack(all_frames, axis=0),
                 frame_duration=output_frame_duration,
                 motion_weight=args_cli.motion_weight,
+                amp_profile=args_cli.amp_profile,
+                start_time=start_time,
+                end_time=end_time,
             )
 
 

@@ -6,6 +6,7 @@ import time
 import warnings
 from collections import deque
 
+import numpy as np
 import torch
 
 import rsl_rl
@@ -24,6 +25,9 @@ from rsl_rl.utils import AMPLoader, Normalizer, store_code_state
 
 class RENetAmpOnPolicyRunner:
     """AMP runner for RENet training."""
+
+    LOCOMOTION_AMP_OBS_DIM = 50
+    RECOVERY_AMP_OBS_DIM = 53
 
     def __init__(self, env: VecEnv, train_cfg: dict, log_dir: str | None = None, device="cpu"):
         self.cfg = train_cfg
@@ -101,6 +105,7 @@ class RENetAmpOnPolicyRunner:
             preload_transitions=True,
             num_preload_transitions=train_cfg["amp_num_preload_transitions"],
             motion_files=train_cfg["amp_motion_files"],
+            frame_size=self.LOCOMOTION_AMP_OBS_DIM,
         )
         amp_data_recovery = AMPLoader(
             device,
@@ -108,21 +113,31 @@ class RENetAmpOnPolicyRunner:
             preload_transitions=True,
             num_preload_transitions=train_cfg["recovery_amp_num_preload_transitions"],
             motion_files=train_cfg["recovery_amp_motion_files"],
+            frame_size=self.RECOVERY_AMP_OBS_DIM,
         )
 
-        amp_obs_demo = self.env.get_amp_obs_for_expert_trans()
-        if amp_obs_demo.ndim != 2:
-            raise ValueError(f"Environment AMP observations must be 2-D, got {tuple(amp_obs_demo.shape)}.")
-        if amp_data_loco.observation_dim != 50:
+        loco_demo = self.env.get_locomotion_amp_obs()
+        recovery_demo = self.env.get_recovery_amp_obs()
+        if amp_data_loco.observation_dim != self.LOCOMOTION_AMP_OBS_DIM:
             raise ValueError(
-                f"Locomotion AMP expert observation dimension must be 50, got {amp_data_loco.observation_dim}."
+                "Locomotion AMP expert observation dimension must be "
+                f"{self.LOCOMOTION_AMP_OBS_DIM}, got {amp_data_loco.observation_dim}."
             )
-        if amp_data_recovery.observation_dim != 50:
+        if amp_data_recovery.observation_dim != self.RECOVERY_AMP_OBS_DIM:
             raise ValueError(
-                f"Recovery AMP expert observation dimension must be 50, got {amp_data_recovery.observation_dim}."
+                "Recovery AMP expert observation dimension must be "
+                f"{self.RECOVERY_AMP_OBS_DIM}, got {amp_data_recovery.observation_dim}."
             )
-        if amp_obs_demo.shape[1] != 50:
-            raise ValueError(f"Environment AMP observation dimension must be 50, got {amp_obs_demo.shape[1]}.")
+        expected_demo_shapes = {
+            "loco": (self.env.num_envs, amp_data_loco.observation_dim),
+            "recovery": (self.env.num_envs, amp_data_recovery.observation_dim),
+        }
+        for name, demo in (("loco", loco_demo), ("recovery", recovery_demo)):
+            if not isinstance(demo, torch.Tensor) or tuple(demo.shape) != expected_demo_shapes[name]:
+                raise ValueError(
+                    f"Environment {name} AMP observation must have shape "
+                    f"{expected_demo_shapes[name]}, got {getattr(demo, 'shape', None)}."
+                )
 
         amp_normalizer_loco = Normalizer(amp_data_loco.observation_dim)
         amp_normalizer_recovery = Normalizer(amp_data_recovery.observation_dim)
@@ -140,6 +155,17 @@ class RENetAmpOnPolicyRunner:
             device,
             train_cfg["recovery_amp_task_reward_lerp"],
         ).to(self.device)
+
+        print(
+            "Locomotion AMP:\n"
+            f"  expert_dim = {amp_data_loco.observation_dim}\n"
+            f"  policy_dim = {loco_demo.shape[1]}\n"
+            f"  discriminator_input_dim = {discriminator_loco.input_dim}\n\n"
+            "Recovery AMP:\n"
+            f"  expert_dim = {amp_data_recovery.observation_dim}\n"
+            f"  policy_dim = {recovery_demo.shape[1]}\n"
+            f"  discriminator_input_dim = {discriminator_recovery.input_dim}"
+        )
         
         min_std = torch.tensor(
             train_cfg["min_normalized_std"],
@@ -212,6 +238,25 @@ class RENetAmpOnPolicyRunner:
         self.current_learning_iteration = 0
         self.git_status_repos = [rsl_rl.__file__]
 
+    def _get_amp_obs_bundle(self) -> dict[str, torch.Tensor]:
+        """Read both noise-free policy AMP states on the runner device."""
+        bundle = {
+            "loco": self.env.get_locomotion_amp_obs().to(self.device),
+            "recovery": self.env.get_recovery_amp_obs().to(self.device),
+        }
+        expected_widths = {
+            "loco": self.LOCOMOTION_AMP_OBS_DIM,
+            "recovery": self.RECOVERY_AMP_OBS_DIM,
+        }
+        for name, amp_obs in bundle.items():
+            expected_shape = (self.env.num_envs, expected_widths[name])
+            if tuple(amp_obs.shape) != expected_shape:
+                raise RuntimeError(
+                    f"Policy {name} AMP observation must have shape {expected_shape}, "
+                    f"got {tuple(amp_obs.shape)}."
+                )
+        return bundle
+
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False):  # noqa: C901
         # initialize writer
         if self.log_dir is not None and self.writer is None and not self.disable_logs:
@@ -245,8 +290,8 @@ class RENetAmpOnPolicyRunner:
         # start learning
         obs, extras = self.env.get_observations()
         privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
-        amp_obs = self.env.get_amp_obs_for_expert_trans()
-        obs, privileged_obs, amp_obs = obs.to(self.device), privileged_obs.to(self.device), amp_obs.to(self.device)
+        amp_obs = self._get_amp_obs_bundle()
+        obs, privileged_obs = obs.to(self.device), privileged_obs.to(self.device)
         self.train_mode()  # switch to train mode (for dropout for example) 
 
         # Book keeping
@@ -288,13 +333,12 @@ class RENetAmpOnPolicyRunner:
                     actions = self.alg.act(obs, privileged_obs, amp_obs)
                     # Step the environment
                     obs, rewards, dones, infos = self.env.step(actions.to(self.env.device))
-                    next_amp_obs = self.env.get_amp_obs_for_expert_trans()
+                    next_amp_obs = self._get_amp_obs_bundle()
                     # Move to device
-                    obs, rewards, dones, next_amp_obs = (
+                    obs, rewards, dones = (
                         obs.to(self.device),
                         rewards.to(self.device),
                         dones.to(self.device),
-                        next_amp_obs.to(self.device),
                     )
                     # perform normalization
                     obs = self.obs_normalizer(obs)
@@ -306,43 +350,41 @@ class RENetAmpOnPolicyRunner:
                         privileged_obs = obs
 
                     # Account for terminal state transitions.
-                    # env.step() has already reset terminated environments, so next_amp_obs
-                    # contains reset states for those environments. The environment must cache
-                    # the true pre-reset AMP states in infos["terminal_amp_states"].
-                    next_amp_obs_with_term = next_amp_obs.clone()
+                    # env.step() has already reset terminated environments, so
+                    # these contain post-reset states. Replace reset rows with
+                    # discriminator-specific true terminal states for this
+                    # transition only.
+                    next_amp_obs_with_term = {
+                        key: value.clone() for key, value in next_amp_obs.items()
+                    }
                     reset_env_ids = self.env.reset_env_ids.to(self.device)
 
                     if reset_env_ids.numel() > 0:
-                        if "terminal_amp_states" not in infos:
-                            raise RuntimeError(
-                                "The environment reset one or more environments, but infos does not contain "
-                                "'terminal_amp_states'. Cache the AMP observations before env.reset() inside env.step()."
+                        terminal_fields = {
+                            "loco": "terminal_locomotion_amp_states",
+                            "recovery": "terminal_recovery_amp_states",
+                        }
+                        for name, info_key in terminal_fields.items():
+                            if info_key not in infos:
+                                raise RuntimeError(
+                                    "The environment reset one or more environments, but infos "
+                                    f"does not contain '{info_key}'."
+                                )
+                            terminal_states = infos[info_key].to(self.device)
+                            expected_shape = (
+                                reset_env_ids.numel(),
+                                next_amp_obs[name].shape[1],
                             )
-
-                        terminal_amp_states = infos["terminal_amp_states"].to(self.device)
-
-                        if terminal_amp_states.ndim != 2:
-                            raise RuntimeError(
-                                "terminal_amp_states must be a 2-D tensor, got "
-                                f"shape={tuple(terminal_amp_states.shape)}."
+                            if tuple(terminal_states.shape) != expected_shape:
+                                raise RuntimeError(
+                                    f"{info_key} must have shape {expected_shape}, got "
+                                    f"{tuple(terminal_states.shape)}."
+                                )
+                            next_amp_obs_with_term[name].index_copy_(
+                                0,
+                                reset_env_ids,
+                                terminal_states,
                             )
-                        if terminal_amp_states.shape[0] != reset_env_ids.numel():
-                            raise RuntimeError(
-                                "The number of terminal AMP states does not match the number of reset environments: "
-                                f"{terminal_amp_states.shape[0]} != {reset_env_ids.numel()}."
-                            )
-                        if terminal_amp_states.shape[1] != next_amp_obs.shape[1]:
-                            raise RuntimeError(
-                                "Terminal AMP state dimension does not match the normal AMP observation dimension: "
-                                f"{terminal_amp_states.shape[1]} != {next_amp_obs.shape[1]}."
-                            )
-
-                        # terminal_amp_states[i] corresponds to reset_env_ids[i].
-                        next_amp_obs_with_term.index_copy_(
-                            0,
-                            reset_env_ids,
-                            terminal_amp_states,
-                        )
 
                     timeout_bootstrap_values = self._compute_timeout_bootstrap_values(
                         infos,
@@ -399,7 +441,9 @@ class RENetAmpOnPolicyRunner:
                     routing_log["RecoveryAMP/reward_mean"] = recovery_amp_mean
 
                     # Start the next rollout transition from the post-reset states.
-                    amp_obs = next_amp_obs.clone()
+                    amp_obs = {
+                        key: value.clone() for key, value in next_amp_obs.items()
+                    }
 
                     # Store current -> true terminal transitions for reset environments.
                     self.alg.process_env_step(
@@ -690,20 +734,43 @@ class RENetAmpOnPolicyRunner:
         self.alg.discriminator_loco.load_state_dict(loaded_dict["discriminator_state_dict"])
         self.alg.amp_normalizer_loco = loaded_dict["amp_normalizer"]
         self.alg.amp_normalizer = self.alg.amp_normalizer_loco
-        if "recovery_discriminator_state_dict" in loaded_dict:
-            self.alg.discriminator_recovery.load_state_dict(loaded_dict["recovery_discriminator_state_dict"])
+        recovery_amp_compatible = "recovery_discriminator_state_dict" in loaded_dict
+        if recovery_amp_compatible:
+            try:
+                self.alg.discriminator_recovery.load_state_dict(
+                    loaded_dict["recovery_discriminator_state_dict"]
+                )
+            except RuntimeError as error:
+                recovery_amp_compatible = False
+                warnings.warn(
+                    "Recovery discriminator checkpoint was not loaded because its input shape is incompatible. "
+                    "Old Recovery AMP = 50D; new Recovery AMP = 53D; D_REC must be reinitialized. "
+                    f"Original load error: {error}",
+                    stacklevel=2,
+                )
         else:
             warnings.warn(
                 "Checkpoint has no recovery_discriminator_state_dict; recovery discriminator remains newly initialized.",
                 stacklevel=2,
             )
-        if "recovery_amp_normalizer" in loaded_dict:
-            self.alg.amp_normalizer_recovery = loaded_dict["recovery_amp_normalizer"]
+        checkpoint_recovery_normalizer = loaded_dict.get("recovery_amp_normalizer")
+        recovery_normalizer_compatible = (
+            recovery_amp_compatible
+            and checkpoint_recovery_normalizer is not None
+            and getattr(checkpoint_recovery_normalizer, "mean", np.empty(0)).shape
+            == (self.RECOVERY_AMP_OBS_DIM,)
+        )
+        if recovery_normalizer_compatible:
+            self.alg.amp_normalizer_recovery = checkpoint_recovery_normalizer
         else:
             warnings.warn(
-                "Checkpoint has no recovery_amp_normalizer; recovery AMP normalizer remains newly initialized.",
+                "Checkpoint has no compatible 53D recovery_amp_normalizer; "
+                "Recovery AMP normalizer remains newly initialized.",
                 stacklevel=2,
             )
+        recovery_amp_checkpoint_ready = (
+            recovery_amp_compatible and recovery_normalizer_compatible
+        )
         if "recovery_critic_state_dict" in loaded_dict:
             self.alg.recovery_critic.load_state_dict(loaded_dict["recovery_critic_state_dict"])
         else:
@@ -741,7 +808,7 @@ class RENetAmpOnPolicyRunner:
 
         load_warmup_state = getattr(self.alg, "load_recovery_warmup_state", None)
         if callable(load_warmup_state):
-            if "recovery_warmup_state" in loaded_dict:
+            if "recovery_warmup_state" in loaded_dict and recovery_amp_checkpoint_ready:
                 load_warmup_state(loaded_dict["recovery_warmup_state"])
             else:
                 load_warmup_state({"drec_reward_ready": False})
@@ -767,7 +834,7 @@ class RENetAmpOnPolicyRunner:
                 # is not loaded, as the observation space could differ from the previous rl training.
                 self.privileged_obs_normalizer.load_state_dict(loaded_dict["obs_norm_state_dict"])
         # -- load optimizer if used
-        checkpoint_has_recovery_amp = "recovery_discriminator_state_dict" in loaded_dict
+        checkpoint_has_recovery_amp = recovery_amp_checkpoint_ready
         checkpoint_has_recovery_critic = "recovery_critic_state_dict" in loaded_dict
         if (
             load_optimizer

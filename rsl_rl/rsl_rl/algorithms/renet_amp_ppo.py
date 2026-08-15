@@ -13,6 +13,8 @@ from .amp_ppo import AMPPPO
 class RENetAMPPPO(AMPPPO):
     """RENet PPO with independently routed locomotion and recovery AMP."""
 
+    AMP_BUNDLE_KEYS = frozenset(("loco", "recovery"))
+
     def __init__(
         self,
         *args,
@@ -108,11 +110,15 @@ class RENetAMPPPO(AMPPPO):
             self.device,
         )
 
-        if self.discriminator_loco.input_dim != self.discriminator_recovery.input_dim:
-            raise ValueError(
-                "Locomotion and recovery discriminator input dimensions must match: "
-                f"{self.discriminator_loco.input_dim} != {self.discriminator_recovery.input_dim}."
-            )
+        for name, discriminator in (
+            ("locomotion", self.discriminator_loco),
+            ("recovery", self.discriminator_recovery),
+        ):
+            if discriminator.input_dim <= 0 or discriminator.input_dim % 2 != 0:
+                raise ValueError(
+                    f"{name} discriminator input_dim must be a positive even number, "
+                    f"got {discriminator.input_dim}."
+                )
 
         # The shared optimizer has explicit, independently named groups for
         # both discriminator trunks and heads.
@@ -203,7 +209,57 @@ class RENetAMPPPO(AMPPPO):
             )
         return recovery_mask_t
 
+    def _validate_amp_obs_bundle(self, bundle, batch_size: int | None = None):
+        """Validate the two independent AMP observation tensors."""
+        if not isinstance(bundle, dict):
+            raise TypeError("RENet AMP observations must be a dict bundle.")
+        if set(bundle) != self.AMP_BUNDLE_KEYS:
+            raise KeyError(
+                "RENet AMP observation bundle must have exact keys "
+                f"{sorted(self.AMP_BUNDLE_KEYS)}, got {sorted(bundle)}."
+            )
+
+        expected_widths = {
+            "loco": self.discriminator_loco.input_dim // 2,
+            "recovery": self.discriminator_recovery.input_dim // 2,
+        }
+        inferred_batch_size = batch_size
+        reference_device = None
+        for name in ("loco", "recovery"):
+            amp_obs = bundle[name]
+            if not isinstance(amp_obs, torch.Tensor):
+                raise TypeError(f"AMP bundle['{name}'] must be a torch.Tensor.")
+            if amp_obs.ndim != 2:
+                raise ValueError(
+                    f"AMP bundle['{name}'] must be 2-D, got {tuple(amp_obs.shape)}."
+                )
+            if not torch.is_floating_point(amp_obs):
+                raise TypeError(
+                    f"AMP bundle['{name}'] must be floating point, got {amp_obs.dtype}."
+                )
+            if amp_obs.shape[1] != expected_widths[name]:
+                raise ValueError(
+                    f"AMP bundle['{name}'] width must be {expected_widths[name]}, "
+                    f"got {amp_obs.shape[1]}."
+                )
+            if inferred_batch_size is None:
+                inferred_batch_size = amp_obs.shape[0]
+            elif amp_obs.shape[0] != inferred_batch_size:
+                raise ValueError(
+                    f"AMP bundle['{name}'] batch size must be {inferred_batch_size}, "
+                    f"got {amp_obs.shape[0]}."
+                )
+            if reference_device is None:
+                reference_device = amp_obs.device
+            elif amp_obs.device != reference_device:
+                raise ValueError(
+                    "Locomotion and Recovery AMP observations must share a device, got "
+                    f"{reference_device} and {amp_obs.device}."
+                )
+        return inferred_batch_size
+
     def act(self, obs, critic_obs, amp_obs):
+        self._validate_amp_obs_bundle(amp_obs, batch_size=obs.shape[0])
         actions = super().act(obs, critic_obs, amp_obs)
         if self.recovery_state_machine_enabled and self.enable_recovery_learning:
             recovery_values = self.recovery_critic(critic_obs)
@@ -459,17 +515,20 @@ class RENetAMPPPO(AMPPPO):
             advantages_buffer.copy_(advantages)
 
     def _store_amp_transition(self, amp_obs, next_amp_obs, recovery_mask_t=None):
-        if amp_obs.ndim != 2 or next_amp_obs.shape != amp_obs.shape:
-            raise ValueError(
-                "AMP transition states must be matching 2-D tensors, got "
-                f"{tuple(amp_obs.shape)} and {tuple(next_amp_obs.shape)}."
-            )
-        recovery_mask_t = self._validate_recovery_mask(recovery_mask_t, amp_obs.shape[0])
+        batch_size = self._validate_amp_obs_bundle(amp_obs)
+        self._validate_amp_obs_bundle(next_amp_obs, batch_size=batch_size)
+        recovery_mask_t = self._validate_recovery_mask(recovery_mask_t, batch_size)
         locomotion_mask_t = ~recovery_mask_t
         if locomotion_mask_t.any():
-            self.amp_storage_loco.insert(amp_obs[locomotion_mask_t], next_amp_obs[locomotion_mask_t])
+            self.amp_storage_loco.insert(
+                amp_obs["loco"][locomotion_mask_t],
+                next_amp_obs["loco"][locomotion_mask_t],
+            )
         if recovery_mask_t.any():
-            self.amp_storage_recovery.insert(amp_obs[recovery_mask_t], next_amp_obs[recovery_mask_t])
+            self.amp_storage_recovery.insert(
+                amp_obs["recovery"][recovery_mask_t],
+                next_amp_obs["recovery"][recovery_mask_t],
+            )
 
     def predict_routed_amp_reward(
         self,
@@ -479,25 +538,26 @@ class RENetAMPPPO(AMPPPO):
         recovery_mask_t=None,
     ):
         """Route each ``s_t -> s_t+1`` reward by the mode that produced ``a_t``."""
-        if amp_obs.ndim != 2 or next_amp_obs.shape != amp_obs.shape:
+        batch_size = self._validate_amp_obs_bundle(amp_obs)
+        self._validate_amp_obs_bundle(next_amp_obs, batch_size=batch_size)
+        if task_reward.shape != (batch_size,):
             raise ValueError(
-                "AMP reward states must be matching 2-D tensors, got "
-                f"{tuple(amp_obs.shape)} and {tuple(next_amp_obs.shape)}."
-            )
-        if task_reward.shape != (amp_obs.shape[0],):
-            raise ValueError(
-                f"task_reward must have shape ({amp_obs.shape[0]},), got {tuple(task_reward.shape)}."
+                f"task_reward must have shape ({batch_size},), got {tuple(task_reward.shape)}."
             )
 
-        recovery_mask_t = self._validate_recovery_mask(recovery_mask_t, amp_obs.shape[0])
+        recovery_mask_t = self._validate_recovery_mask(recovery_mask_t, batch_size)
         locomotion_mask_t = ~recovery_mask_t
         routed_reward = torch.zeros_like(task_reward)
-        routed_logits = torch.zeros((amp_obs.shape[0], 1), dtype=amp_obs.dtype, device=self.device)
+        routed_logits = torch.zeros(
+            (batch_size, 1),
+            dtype=amp_obs["loco"].dtype,
+            device=self.device,
+        )
 
         if locomotion_mask_t.any():
             loco_reward, loco_logits = self.discriminator_loco.predict_amp_reward(
-                amp_obs[locomotion_mask_t],
-                next_amp_obs[locomotion_mask_t],
+                amp_obs["loco"][locomotion_mask_t],
+                next_amp_obs["loco"][locomotion_mask_t],
                 task_reward[locomotion_mask_t],
                 normalizer=self.amp_normalizer_loco,
             )
@@ -505,8 +565,8 @@ class RENetAMPPPO(AMPPPO):
             routed_logits[locomotion_mask_t] = loco_logits
         if recovery_mask_t.any() and self.drec_reward_ready:
             recovery_reward, recovery_logits = self.discriminator_recovery.predict_amp_reward(
-                amp_obs[recovery_mask_t],
-                next_amp_obs[recovery_mask_t],
+                amp_obs["recovery"][recovery_mask_t],
+                next_amp_obs["recovery"][recovery_mask_t],
                 task_reward[recovery_mask_t],
                 normalizer=self.amp_normalizer_recovery,
             )

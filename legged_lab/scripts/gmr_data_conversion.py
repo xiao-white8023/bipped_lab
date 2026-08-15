@@ -1,3 +1,10 @@
+"""Convert GMR PKL data to the unchanged 58D visualization-motion layout.
+
+Recovery projected gravity is not generated here. ``play_amp_animation.py``
+appends IsaacLab's ``robot.data.projected_gravity_b`` after replay so Recovery
+expert data uses exactly the same definition as policy observations.
+"""
+
 import pickle
 import numpy as np
 import torch
@@ -63,7 +70,7 @@ def convert_pkl_to_custom(input_pkl, output_txt, fps):
 
     dof_vel = (dof_pos[1:] - dof_pos[:-1]) / dt
 
-    # 注意：标准 AMP 通常需要四元数，如果训练报错维度不对，把这里的 euler 换回四元数
+    # This is the visualization Euler field, not a Recovery AMP gravity source.
     euler_angles = Rotation.from_quat(root_rot[:-1, [1, 2, 3, 0]]).as_euler('XYZ', degrees=False)
     euler_angles = np.unwrap(euler_angles, axis=0)
 

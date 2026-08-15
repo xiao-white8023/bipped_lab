@@ -750,20 +750,26 @@ def test_amp_replay_storage_receives_disjoint_action_time_transitions():
 
     algorithm = RENetAMPPPO.__new__(RENetAMPPPO)
     algorithm.device = "cpu"
+    algorithm.discriminator_loco = SimpleNamespace(input_dim=100)
+    algorithm.discriminator_recovery = SimpleNamespace(input_dim=106)
     algorithm.amp_storage_loco = CaptureStorage()
     algorithm.amp_storage_recovery = CaptureStorage()
-    amp_obs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+    amp_obs = {
+        "loco": torch.arange(4 * 50, dtype=torch.float32).reshape(4, 50),
+        "recovery": torch.arange(4 * 53, dtype=torch.float32).reshape(4, 53),
+    }
+    next_amp_obs = {key: value + 10.0 for key, value in amp_obs.items()}
     recovery_mask_t = torch.tensor([False, True, False, True])
 
-    algorithm._store_amp_transition(amp_obs, amp_obs + 10.0, recovery_mask_t)
+    algorithm._store_amp_transition(amp_obs, next_amp_obs, recovery_mask_t)
 
     torch.testing.assert_close(
         algorithm.amp_storage_loco.states[0],
-        torch.tensor([[0.0], [2.0]]),
+        amp_obs["loco"][[0, 2]],
     )
     torch.testing.assert_close(
         algorithm.amp_storage_recovery.states[0],
-        torch.tensor([[1.0], [3.0]]),
+        amp_obs["recovery"][[1, 3]],
     )
 
 

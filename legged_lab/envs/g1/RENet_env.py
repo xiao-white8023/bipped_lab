@@ -30,6 +30,8 @@ class G1RENetEnv(VecEnv):
     VP_ACTOR_MODE = 0.0
     OP_ACTOR_MODE = 1.0
     RECOVERY_ACTOR_MODE = 2.0
+    LOCOMOTION_AMP_OBS_DIM = 50
+    RECOVERY_AMP_OBS_DIM = 53
     
     def __init__(
         self,
@@ -1863,26 +1865,23 @@ class G1RENetEnv(VecEnv):
         # ---------------------------------------------------------
         # 5. 关键：必须在reset前保存真实终止AMP状态
         # ---------------------------------------------------------
-        pre_reset_amp_obs = (
-            self.get_amp_obs_for_expert_trans()
-            .detach()
-        )
+        pre_reset_locomotion_amp_obs = self.get_locomotion_amp_obs().detach()
+        pre_reset_recovery_amp_obs = self.get_recovery_amp_obs().detach()
 
-        # 只保存需要reset的环境，避免保存整个4096×50张量
-        terminal_amp_states = (
-            pre_reset_amp_obs[self.reset_env_ids]
-            .clone()
-        )
+        # Cache only reset rows. Each row corresponds to the same row in
+        # reset_env_ids and must retain its discriminator-specific width.
+        terminal_locomotion_amp_states = pre_reset_locomotion_amp_obs[self.reset_env_ids].clone()
+        terminal_recovery_amp_states = pre_reset_recovery_amp_obs[self.reset_env_ids].clone()
         terminal_critic_obs = self.build_terminal_critic_obs(self.reset_env_ids).detach()
 
         # 确保extras结构存在
         if "observations" not in self.extras:
             self.extras["observations"] = {}
 
-        # terminal_amp_states的第i行对应reset_env_ids的第i个环境
-        self.extras["terminal_amp_states"] = (
-            terminal_amp_states
-        )
+        self.extras["terminal_locomotion_amp_states"] = terminal_locomotion_amp_states
+        self.extras["terminal_recovery_amp_states"] = terminal_recovery_amp_states
+        # Legacy single-AMP interface remains locomotion 50D.
+        self.extras["terminal_amp_states"] = terminal_locomotion_amp_states
         # terminal_critic_obs[i] is the complete pre-reset critic observation
         # for reset_env_ids[i]. The post-reset critic observation belongs to a
         # new episode and must never be used for truncation bootstrap.
@@ -2049,7 +2048,8 @@ class G1RENetEnv(VecEnv):
         self.extras["observations"]["critic"] = critic_obs
         return actor_obs, self.extras
     
-    def get_amp_obs_for_expert_trans(self):
+    def _get_base_amp_obs(self):
+        """Build the shared, noise-free 50D locomotion AMP state."""
 
         joint_pos = self.robot.data.joint_pos[
             :, self.amp_joint_ids
@@ -2120,12 +2120,44 @@ class G1RENetEnv(VecEnv):
             dim=-1,
         )
 
-        if amp_obs.shape[1] != 50:
+        if amp_obs.shape != (self.num_envs, self.LOCOMOTION_AMP_OBS_DIM):
             raise RuntimeError(
-                f"AMP obs 应为50维，实际为 {amp_obs.shape}"
+                "Base AMP obs shape mismatch: expected "
+                f"({self.num_envs}, {self.LOCOMOTION_AMP_OBS_DIM}), got {tuple(amp_obs.shape)}."
             )
 
         return amp_obs
+
+    def get_locomotion_amp_obs(self):
+        """Return the unchanged 50D locomotion AMP observation."""
+        return self._get_base_amp_obs()
+
+    def get_recovery_amp_obs(self):
+        """Return 53D Recovery AMP using IsaacLab's projected gravity.
+
+        Expert Recovery data is generated from this same articulation field in
+        play_amp_animation.py; neither path reconstructs gravity from Euler
+        angles or from a noisy actor observation.
+        """
+        base_amp_obs = self._get_base_amp_obs()
+        projected_gravity = self.robot.data.projected_gravity_b
+        if projected_gravity.shape != (self.num_envs, 3):
+            raise RuntimeError(
+                "projected_gravity_b shape mismatch: expected "
+                f"({self.num_envs}, 3), got {tuple(projected_gravity.shape)}."
+            )
+        recovery_amp_obs = torch.cat((base_amp_obs, projected_gravity), dim=-1)
+        if recovery_amp_obs.shape != (self.num_envs, self.RECOVERY_AMP_OBS_DIM):
+            raise RuntimeError(
+                "Recovery AMP obs shape mismatch: expected "
+                f"({self.num_envs}, {self.RECOVERY_AMP_OBS_DIM}), "
+                f"got {tuple(recovery_amp_obs.shape)}."
+            )
+        return recovery_amp_obs
+
+    def get_amp_obs_for_expert_trans(self):
+        """Legacy single-AMP interface: locomotion 50D."""
+        return self.get_locomotion_amp_obs()
     
     def get_depth_noise_diagnostics(self):
         """Return fixed depth-noise configuration diagnostics without device synchronization."""

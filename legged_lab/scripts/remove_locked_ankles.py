@@ -6,6 +6,10 @@ import numpy as np
 
 
 ANKLE_JOINT_INDICES = {4, 5, 10, 11}
+BASE_FULL_FRAME_SIZE = 58
+BASE_REDUCED_FRAME_SIZE = 50
+RECOVERY_FULL_FRAME_SIZE = 61
+RECOVERY_REDUCED_FRAME_SIZE = 53
 
 KEEP_JOINT_INDICES = [
     index
@@ -32,9 +36,12 @@ def convert_file(input_path: Path, output_path: Path) -> None:
         dtype=np.float32,
     )
 
-    if frames.ndim != 2 or frames.shape[1] != 58:
+    if frames.ndim != 2 or frames.shape[1] not in (
+        BASE_FULL_FRAME_SIZE,
+        RECOVERY_FULL_FRAME_SIZE,
+    ):
         raise ValueError(
-            f"{input_path} 应为 (T, 58)，"
+            f"{input_path} 应为 (T, 58) 或 (T, 61)，"
             f"实际为 {frames.shape}"
         )
 
@@ -43,12 +50,34 @@ def convert_file(input_path: Path, output_path: Path) -> None:
             f"{input_path} 含有 NaN 或 Inf"
         )
 
-    reduced_frames = frames[:, KEEP_FRAME_INDICES]
+    reduced_base = frames[:, KEEP_FRAME_INDICES]
+    extras = frames[:, BASE_FULL_FRAME_SIZE:]
+    reduced_frames = np.concatenate((reduced_base, extras), axis=1)
 
-    if reduced_frames.shape[1] != 50:
+    expected_output_dim = (
+        BASE_REDUCED_FRAME_SIZE
+        if frames.shape[1] == BASE_FULL_FRAME_SIZE
+        else RECOVERY_REDUCED_FRAME_SIZE
+    )
+    if reduced_frames.shape[1] != expected_output_dim:
         raise RuntimeError(
             f"输出维度错误：{reduced_frames.shape}"
         )
+
+    if frames.shape[1] == RECOVERY_FULL_FRAME_SIZE:
+        projected_gravity = frames[:, BASE_FULL_FRAME_SIZE:RECOVERY_FULL_FRAME_SIZE]
+        gravity_norms = np.linalg.norm(projected_gravity, axis=1)
+        if not np.all(np.abs(gravity_norms - 1.0) < 1e-3):
+            bad_indices = np.flatnonzero(np.abs(gravity_norms - 1.0) >= 1e-3)[:10]
+            raise ValueError(
+                f"{input_path} 的 projected_gravity_b 必须为单位向量；"
+                f"异常帧索引: {bad_indices.tolist()}"
+            )
+        if not np.array_equal(
+            reduced_frames[:, BASE_REDUCED_FRAME_SIZE:RECOVERY_REDUCED_FRAME_SIZE],
+            projected_gravity,
+        ):
+            raise RuntimeError("Recovery projected_gravity_b 在降维过程中发生了变化。")
 
     motion["Frames"] = reduced_frames.tolist()
 

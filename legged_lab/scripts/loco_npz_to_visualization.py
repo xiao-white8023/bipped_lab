@@ -13,6 +13,9 @@ This script intentionally does NOT run MuJoCo or IsaacLab. It only converts the
 stored LocoMuJoCo qpos/qvel trajectory into the visualization format already
 consumed by bipped_lab. The converted file can then be replayed in IsaacLab via
 play_amp_animation.py, which recomputes the hand/foot FK used by AMP.
+Recovery projected gravity is also appended there, after IsaacLab replay, from
+``robot.data.projected_gravity_b``. It is intentionally not part of this 58D
+visualization format.
 """
 
 from __future__ import annotations

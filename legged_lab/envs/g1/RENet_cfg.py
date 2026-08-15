@@ -671,17 +671,18 @@ class G1RENETAGENTCFG:
     amp_discr_hidden_dims = [1024, 512, 256]
 
     # Recovery expert frames are discriminator-only data. They must never be
-    # used as environment reset states.
+    # used as environment reset states. These files are 53D: the unchanged
+    # 50D AMP state followed by IsaacLab projected_gravity_b.
     recovery_amp_motion_files = [
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_no_ankle/"
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_recovery_no_ankle/"
         "fallAndGetUp2_subject2_crop_01.txt",
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_no_ankle/"
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_recovery_no_ankle/"
         "fallAndGetUp2_subject2_crop_02.txt",
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_no_ankle/"
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_recovery_no_ankle/"
         "fallAndGetUp2_subject2_crop_03.txt",
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_no_ankle/"
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_recovery_no_ankle/"
         "fallAndGetUp2_subject2_crop_04.txt",
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_no_ankle/"
+        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_recovery_no_ankle/"
         "fallAndGetUp2_subject2_crop_05.txt",
     ]
     recovery_amp_num_preload_transitions = 200000

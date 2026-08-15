@@ -1,9 +1,13 @@
-"""AMP expert-motion loader for the Unitree G1 23-DoF configuration.
+"""AMP expert-motion loader for reduced Unitree G1 AMP frames.
 
-Expected expert frame layout (58 values):
-    G1 joint positions (23)
-    G1 joint velocities (23)
+The first 50 values always use the existing locomotion layout:
+    G1 non-ankle joint positions (19)
+    G1 non-ankle joint velocities (19)
     end-effector positions in the root frame (12)
+
+Recovery loaders may request 53D frames whose final three values are
+``projected_gravity_b``. All frame features are linearly interpolated; Recovery
+gravity is renormalized afterwards.
 
 The 12 end-effector values are expected in the same order produced by the
 current G1 environment:
@@ -27,7 +31,8 @@ class AMPLoader:
         joint positions: 19
         joint velocities: 19
         end-effector positions: 12
-        total: 50
+        optional Recovery projected gravity: 3
+        total: 50 by default, or the requested ``frame_size``
     """
 
     JOINT_POS_SIZE = 19
@@ -49,7 +54,11 @@ class AMPLoader:
         END_POS_START_IDX + END_EFFECTOR_POS_SIZE
     )  # 50
 
-    FRAME_SIZE = END_POS_END_IDX
+    BASE_FRAME_SIZE = END_POS_END_IDX
+    RECOVERY_PROJECTED_GRAVITY_SIZE = 3
+    RECOVERY_FRAME_SIZE = BASE_FRAME_SIZE + RECOVERY_PROJECTED_GRAVITY_SIZE
+    # Backwards-compatible class constant for existing single-AMP callers.
+    FRAME_SIZE = BASE_FRAME_SIZE
 
     def __init__(
         self,
@@ -59,9 +68,15 @@ class AMPLoader:
         preload_transitions=False,
         num_preload_transitions=1_000_000,
         motion_files=None,
+        frame_size: int | None = None,
     ):
         self.device = device
         self.time_between_frames = float(time_between_frames)
+        if frame_size is None:
+            frame_size = self.BASE_FRAME_SIZE
+        if isinstance(frame_size, bool) or not isinstance(frame_size, int) or frame_size <= 0:
+            raise ValueError(f"frame_size must be a positive integer, got {frame_size!r}.")
+        self.frame_size = frame_size
 
         if motion_files is None:
             search_root = data_dir or "datasets/motion_amp_expert"
@@ -135,19 +150,28 @@ class AMPLoader:
 
         self.all_trajectories_full = torch.vstack(self.trajectories_full)
 
-    @classmethod
-    def _validate_motion_data(cls, motion_data: np.ndarray, path: Path) -> None:
+    def _validate_motion_data(self, motion_data: np.ndarray, path: Path) -> None:
         if motion_data.ndim != 2:
             raise ValueError(f"Motion Frames must be a 2-D array, got {motion_data.shape} in {path}.")
         if motion_data.shape[0] < 2:
             raise ValueError(f"Motion must contain at least two frames: {path}.")
-        if motion_data.shape[1] != cls.FRAME_SIZE:
+        if motion_data.shape[1] != self.frame_size:
             raise ValueError(
-                f"G1 23-DoF AMP expert frames must contain {cls.FRAME_SIZE} values, "
+                f"AMP expert frames must contain {self.frame_size} values, "
                 f"but {path} contains {motion_data.shape[1]}."
             )
         if not np.isfinite(motion_data).all():
             raise ValueError(f"Motion contains NaN or Inf values: {path}.")
+        if self.frame_size == self.RECOVERY_FRAME_SIZE:
+            gravity_norms = np.linalg.norm(
+                motion_data[:, self.BASE_FRAME_SIZE : self.RECOVERY_FRAME_SIZE],
+                axis=1,
+            )
+            if not np.all(np.abs(gravity_norms - 1.0) < 1e-3):
+                raise ValueError(
+                    "Recovery projected_gravity_b must have unit norm in "
+                    f"{path}."
+                )
 
     def weighted_traj_idx_sample(self):
         return int(np.random.choice(self.trajectory_idxs, p=self.trajectory_weights))
@@ -213,7 +237,7 @@ class AMPLoader:
         idx_low, idx_high, blend = self._frame_indices(traj_idx, time)
         frame_start = self.trajectories[int(traj_idx)][idx_low]
         frame_end = self.trajectories[int(traj_idx)][idx_high]
-        return self.slerp(frame_start, frame_end, blend)
+        return self._blend_frames(frame_start, frame_end, blend)
 
     def get_frame_at_time_batch(self, traj_idxs, times):
         return self._get_frames_at_time_batch(self.trajectories, traj_idxs, times)
@@ -222,7 +246,7 @@ class AMPLoader:
         idx_low, idx_high, blend = self._frame_indices(traj_idx, time)
         frame_start = self.trajectories_full[int(traj_idx)][idx_low]
         frame_end = self.trajectories_full[int(traj_idx)][idx_high]
-        return self.blend_frame_pose(frame_start, frame_end, blend)
+        return self._blend_frames(frame_start, frame_end, blend)
 
     def get_full_frame_at_time_batch(self, traj_idxs, times):
         return self._get_frames_at_time_batch(self.trajectories_full, traj_idxs, times)
@@ -232,7 +256,7 @@ class AMPLoader:
         idx_low, idx_high, blend = self._frame_indices_batch(traj_idxs, times)
         batch_size = int(traj_idxs.shape[0])
 
-        frame_starts = torch.empty((batch_size, self.FRAME_SIZE), dtype=torch.float32, device=self.device)
+        frame_starts = torch.empty((batch_size, self.frame_size), dtype=torch.float32, device=self.device)
         frame_ends = torch.empty_like(frame_starts)
 
         for traj_idx in np.unique(traj_idxs):
@@ -246,7 +270,7 @@ class AMPLoader:
             frame_ends[batch_indices_t] = trajectory[high_indices_t]
 
         blend_tensor = torch.as_tensor(blend, dtype=torch.float32, device=self.device).unsqueeze(-1)
-        return self.slerp(frame_starts, frame_ends, blend_tensor)
+        return self._blend_frames(frame_starts, frame_ends, blend_tensor)
 
     def get_frame(self):
         traj_idx = self.weighted_traj_idx_sample()
@@ -264,11 +288,24 @@ class AMPLoader:
         times = self.traj_time_sample_batch(traj_idxs)
         return self.get_full_frame_at_time_batch(traj_idxs, times)
 
+    def _blend_frames(self, frame0, frame1, blend):
+        """Linearly interpolate every feature without truncating frame extras."""
+        blended = self.slerp(frame0, frame1, blend)
+        if self.frame_size == self.RECOVERY_FRAME_SIZE:
+            gravity = blended[..., self.BASE_FRAME_SIZE : self.RECOVERY_FRAME_SIZE]
+            gravity = gravity / torch.clamp(
+                torch.linalg.vector_norm(gravity, dim=-1, keepdim=True),
+                min=1e-8,
+            )
+            blended = torch.cat(
+                (blended[..., : self.BASE_FRAME_SIZE], gravity),
+                dim=-1,
+            )
+        return blended
+
     def blend_frame_pose(self, frame0, frame1, blend):
-        joint_pos = self.slerp(self.get_joint_pose(frame0), self.get_joint_pose(frame1), blend)
-        joint_vel = self.slerp(self.get_joint_vel(frame0), self.get_joint_vel(frame1), blend)
-        end_pos = self.slerp(self.get_end_pos(frame0), self.get_end_pos(frame1), blend)
-        return torch.cat([joint_pos, joint_vel, end_pos], dim=-1)
+        """Backwards-compatible alias for complete-frame interpolation."""
+        return self._blend_frames(frame0, frame1, blend)
 
     def feed_forward_generator(self, num_mini_batch, mini_batch_size):
         """Yield batches of expert transitions ``(s, s_next)``."""
@@ -286,7 +323,7 @@ class AMPLoader:
 
     @property
     def observation_dim(self):
-        return self.FRAME_SIZE
+        return self.frame_size
 
     @property
     def num_motions(self):
