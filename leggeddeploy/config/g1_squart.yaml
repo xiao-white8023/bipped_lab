@@ -9,7 +9,7 @@ imu_type: "pelvis"    # "torso" or "pelvis"
 
 lowcmd_topic: "rt/lowcmd"
 lowstate_topic: "rt/lowstate"
-
+right_arm_topic: "rt/user/g1/right_arm_lowcmd"
 # 策略路径 (导出的 TorchScript JIT 模型)
 policy_path: "/home/cjh/TienKung-Lab/logs/g1_squat/2026-07-22_20-44-15/exported/policy.pt"
 

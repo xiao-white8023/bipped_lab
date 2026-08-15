@@ -176,6 +176,7 @@ class Controller:
             这个通道里接收的数据类型是 HG 版本的 LowState。
             '''
             self.lowstate_subscriber = ChannelSubscriber(config.lowstate_topic, LowStateHG)
+            self.right_arm_lococmd = ChannelSubscriber()
             '''
             每次来消息就要调用self.LowStateHandler这个回调函数
             10的意思是：机器人消息发送太快的话 可以做多储存10次的消息
