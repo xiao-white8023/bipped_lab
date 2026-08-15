@@ -28,7 +28,7 @@ class Config:
 
                 self.lowcmd_topic = config["lowcmd_topic"]
                 self.lowstate_topic = config["lowstate_topic"]
-                self.right_arm_lowcmd = config["right_arm_topic"]
+                self.right_arm_topic = config["right_arm_topic"]
 
                 self.policy_path = config["policy_path"]
 

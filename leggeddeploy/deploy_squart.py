@@ -11,7 +11,7 @@
 
 import sys
 import time
-from threading import Lock,Thread
+from threading import Lock
 
 import numpy as np
 import torch
@@ -70,6 +70,10 @@ from common.rotation_helper import get_gravity_orientation, transform_imu_data
 from config_squart import Config
 from depth.depth_client import DepthClient
 
+
+RIGHT_ARM_MOTOR_IDS = range(22, 29)
+
+
 class Controller:
     def __init__(self, config: Config, net: str) -> None:
 
@@ -83,6 +87,11 @@ class Controller:
         self.run_thread = RecurrentThread(interval=self.config.control_dt, target=self.run)  # 100Hz/50Hz #创建一个周期线程 每隔 control_dt 秒，执行一次 self.run()  self.run是回调函数  策略每秒钟执行50次
         self.publish_thread = RecurrentThread(interval=1 / 500, target=self.publish)  # self.publish_thread  因为 policy 没必要 500Hz 推理，太耗算力；但是底层命令最好高频持续发送，机器人控制更稳定
         self.cmd_lock = Lock() # 这是线程锁。# 因为现在有两个线程都可能访问 self.low_cmd：
+        self.right_arm_lock = Lock()
+        self.latest_right_arm_lowcmd = None
+        self.right_arm_cmd_received = False
+        self.external_right_arm_enabled_logged = False
+        self.control_start_time = None
  
         self.joint_pos = np.zeros(config.num_joints, dtype=np.float32) # 29
         self.joint_vel = np.zeros(config.num_joints, dtype=np.float32) # 29 
@@ -169,20 +178,22 @@ class Controller:
             self.lowcmd_publisher_ = ChannelPublisher(config.lowcmd_topic, LowCmdHG) 
             self.lowcmd_publisher_.Init() # 初始化发布者
             
-            #创建订阅者
+            # 创建订阅者
             '''
             我要创建一个订阅通道；
             这个通道的名字叫 rt/lowstate；
             这个通道里接收的数据类型是 HG 版本的 LowState。
             '''
             self.lowstate_subscriber = ChannelSubscriber(config.lowstate_topic, LowStateHG)
-            self.right_arm_lococmd = ChannelSubscriber(config.right_arm_lowcmd, LowCmdHG)
+            self.right_arm_subscriber = ChannelSubscriber(config.right_arm_topic, LowCmdHG)
             '''
             每次来消息就要调用self.LowStateHandler这个回调函数
             10的意思是：机器人消息发送太快的话 可以做多储存10次的消息
             '''
             # 调用这一句之后，订阅器就开始监听机器人状态 topic 了
-            self.lowstate_subscriber.Init(self.LowStateHandler, 10) # 初始化订阅者 # 
+            self.lowstate_subscriber.Init(self.LowStateHandler, 10) # 初始化订阅者 #
+            self.right_arm_subscriber.Init(self.RightArmLowCmdHandler, 10)
+            print(f"Right arm LowCmd subscriber initialized: {config.right_arm_topic}")
         else:
             raise ValueError("Invalid msg_type")
 
@@ -199,6 +210,7 @@ class Controller:
         self.move_to_default_pos()
         self.wait_for_control()
 
+        self.control_start_time = time.monotonic()
         print("Start Control!")
         self.run_thread.Start()
     
@@ -206,6 +218,17 @@ class Controller:
     def LowStateHandler(self, msg: LowStateHG):
         self.low_state = msg
         self.remote_controller.set(self.low_state.wireless_remote)
+
+    def RightArmLowCmdHandler(self, msg: LowCmdHG):
+        first_message = False
+        with self.right_arm_lock:
+            self.latest_right_arm_lowcmd = msg
+            if not self.right_arm_cmd_received:
+                self.right_arm_cmd_received = True
+                first_message = True
+
+        if first_message:
+            print("Received first right arm LowCmd.")
 
     def publish(self):
         with self.cmd_lock:
@@ -509,6 +532,8 @@ class Controller:
             + self.action * self.config.action_scale
         )
 
+        right_arm_cmd_snapshot = None
+
         # ==========================================================
         # 10. 发送 29 个关节命令
         #
@@ -525,6 +550,47 @@ class Controller:
                 self.low_cmd.motor_cmd[motor_idx].kp = float(self.config.kps[i])
                 self.low_cmd.motor_cmd[motor_idx].kd = float(self.config.kds[i])
                 self.low_cmd.motor_cmd[motor_idx].tau = 0.0
+
+            # 先按原逻辑写完全部 29 个关节，再只覆盖真机右臂 motor 22~28。
+            # LowCmd 顶层的 mode_pr/mode_machine/reserve/crc 均保持本程序生成的值。
+            elapsed = time.monotonic() - self.control_start_time
+            if elapsed >= 0.5:
+                # DDS callback 与控制线程并发运行。right_arm_lock 只用于
+                # 快速复制最新一帧的右臂 motor command 控制字段。
+                with self.right_arm_lock:
+                    if self.right_arm_cmd_received:
+                        right_arm_cmd_snapshot = tuple(
+                            (
+                                self.latest_right_arm_lowcmd.motor_cmd[motor_idx].mode,
+                                self.latest_right_arm_lowcmd.motor_cmd[motor_idx].q,
+                                self.latest_right_arm_lowcmd.motor_cmd[motor_idx].dq,
+                                self.latest_right_arm_lowcmd.motor_cmd[motor_idx].kp,
+                                self.latest_right_arm_lowcmd.motor_cmd[motor_idx].kd,
+                                self.latest_right_arm_lowcmd.motor_cmd[motor_idx].tau,
+                            )
+                            for motor_idx in RIGHT_ARM_MOTOR_IDS
+                        )
+
+            if right_arm_cmd_snapshot is not None:
+                for motor_idx, motor_values in zip(
+                    RIGHT_ARM_MOTOR_IDS, right_arm_cmd_snapshot
+                ):
+                    motor_cmd = self.low_cmd.motor_cmd[motor_idx]
+                    (
+                        motor_cmd.mode,
+                        motor_cmd.q,
+                        motor_cmd.dq,
+                        motor_cmd.kp,
+                        motor_cmd.kd,
+                        motor_cmd.tau,
+                    ) = motor_values
+
+        if (
+            right_arm_cmd_snapshot is not None
+            and not self.external_right_arm_enabled_logged
+        ):
+            self.external_right_arm_enabled_logged = True
+            print("Switched to external right arm LowCmd after 0.5 seconds.")
 
 
 if __name__ == "__main__":
