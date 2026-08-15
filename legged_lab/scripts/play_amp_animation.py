@@ -155,8 +155,8 @@ def _disable_generation_randomization(env_cfg) -> None:
 
     scene = getattr(env_cfg, "scene", None)
     if scene is not None:
-        height_scanner = getattr(scene, "height_scanner", None)
-        _set_if_present(height_scanner, "enable_height_scan", False)
+        # height_scanner = getattr(scene, "height_scanner", None)
+        # _set_if_present(height_scanner, "enable_height_scan", False)
 
         lidar = getattr(scene, "lidar", None)
         _set_if_present(lidar, "enable_lidar", False)
