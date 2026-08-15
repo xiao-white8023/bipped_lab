@@ -305,9 +305,32 @@ class RENetAMPPPO(AMPPPO):
         recovery_mask_t=None,
         timeout_bootstrap_values=None,
     ):
+        if not isinstance(rewards, torch.Tensor):
+            raise TypeError("rewards must be a torch.Tensor.")
+        if rewards.ndim != 1:
+            raise ValueError(f"rewards must have shape [num_envs], got {tuple(rewards.shape)}.")
+        if not torch.is_floating_point(rewards):
+            raise TypeError(f"rewards must be floating point, got {rewards.dtype}.")
+        expected_device = torch.device(self.device)
+        if rewards.device != expected_device:
+            raise ValueError(f"rewards must be on {expected_device}, got {rewards.device}.")
         batch_size = rewards.shape[0]
         recovery_mask_t = self._validate_recovery_mask(recovery_mask_t, batch_size)
         recovery_rewards, rewards_valid = self._read_recovery_reward_interface(infos, batch_size)
+        for name, reward in zip(("task", "amp", "reg"), recovery_rewards):
+            if reward.dtype != rewards.dtype:
+                raise TypeError(
+                    f"Recovery {name} reward must have dtype {rewards.dtype}, got {reward.dtype}."
+                )
+
+        # Final no-leakage guard at the rollout boundary. This uses the mask
+        # captured before env.step(), never the environment's updated mode.
+        locomotion_mask_t = ~recovery_mask_t
+        rewards = rewards * locomotion_mask_t.to(dtype=rewards.dtype)
+        recovery_rewards = tuple(
+            reward * recovery_mask_t.to(dtype=reward.dtype) for reward in recovery_rewards
+        )
+        rewards_valid = rewards_valid & recovery_mask_t
 
         self.transition.recovery_mask_t = recovery_mask_t.clone()
         self.transition.enter_recovery = self._read_bool_transition_flag(

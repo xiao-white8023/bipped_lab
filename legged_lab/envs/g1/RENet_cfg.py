@@ -204,7 +204,7 @@ class Reward:
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_pitch.*", ".*_knee.*"])},
     )
 
-    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
+    # termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
 
     # Entering Recovery is a locomotion failure/value boundary, but not an
     # environment reset. Keep its penalty in the same RewardManager pipeline

@@ -2,7 +2,9 @@
 *.pyc
 .vscode
 outputs
-logs
+logs/*
+!logs/g1_squat/
+!logs/g1_squat/**
 run_bash.sh
 wandb
 MUJOCO_LOG.TXT
@@ -15,5 +17,4 @@ w?o Cl 49000/
 w?o GRU/
 paper_figures/
 
-# External dependency; install separately as documented in leggeddeploy/README.md
-unitree_sdk2_python/
+# Vendored Unitree SDK source is tracked with this repository.

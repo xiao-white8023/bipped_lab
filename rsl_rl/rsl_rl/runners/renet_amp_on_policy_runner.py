@@ -351,24 +351,52 @@ class RENetAmpOnPolicyRunner:
                         privileged_obs,
                     )
 
-                    rewards = self.alg.predict_routed_amp_reward(
+                    routed_amp_reward = self.alg.predict_routed_amp_reward(
                         amp_obs,
                         next_amp_obs_with_term,
                         rewards,
                         recovery_mask_t,
                     )[0]
-                    infos["recovery_amp_reward"] = torch.where(
+                    # Keep the two rollout reward owners physically separate:
+                    # storage.rewards is locomotion-only, while Recovery AMP
+                    # is carried by its explicit auxiliary reward stream.
+                    rewards, infos["recovery_amp_reward"] = self._split_action_time_amp_rewards(
+                        routed_amp_reward,
                         recovery_mask_t,
-                        rewards,
-                        torch.zeros_like(rewards),
                     )
-                    recovery_count = recovery_mask_t.float().sum().clamp(min=1.0)
-                    recovery_amp_mean = (
-                        infos["recovery_amp_reward"].sum() / recovery_count
-                        if torch.any(recovery_mask_t)
-                        else rewards.sum() * 0.0
+                    # Overwrite the environment-side routing diagnostics with
+                    # the final tensors that will actually enter rollout
+                    # storage (after discriminator reward composition).
+                    routing_log = infos.setdefault("log", {})
+                    locomotion_mask_t = ~recovery_mask_t
+                    recovery_weight = recovery_mask_t.to(dtype=rewards.dtype)
+                    locomotion_weight = locomotion_mask_t.to(dtype=rewards.dtype)
+                    recovery_count = recovery_weight.sum().clamp(min=1.0)
+                    locomotion_count = locomotion_weight.sum().clamp(min=1.0)
+                    recovery_task_reward = infos["recovery_task_reward"].to(self.device)
+                    recovery_reg_reward = infos["recovery_reg_reward"].to(self.device)
+                    routing_log.update(
+                        {
+                            "RewardRouting/locomotion_ratio": locomotion_weight.mean(),
+                            "RewardRouting/recovery_ratio": recovery_weight.mean(),
+                            "RewardRouting/loco_reward_on_recovery_mean": (
+                                rewards.abs() * recovery_weight
+                            ).sum()
+                            / recovery_count,
+                            "RewardRouting/recovery_task_on_loco_mean": (
+                                recovery_task_reward.abs()
+                                * locomotion_mask_t.to(dtype=recovery_task_reward.dtype)
+                            ).sum()
+                            / locomotion_count,
+                            "RewardRouting/recovery_reg_on_loco_mean": (
+                                recovery_reg_reward.abs()
+                                * locomotion_mask_t.to(dtype=recovery_reg_reward.dtype)
+                            ).sum()
+                            / locomotion_count,
+                        }
                     )
-                    infos.setdefault("log", {})["RecoveryAMP/reward_mean"] = recovery_amp_mean
+                    recovery_amp_mean = infos["recovery_amp_reward"].sum() / recovery_count
+                    routing_log["RecoveryAMP/reward_mean"] = recovery_amp_mean
 
                     # Start the next rollout transition from the post-reset states.
                     amp_obs = next_amp_obs.clone()
@@ -459,6 +487,35 @@ class RENetAmpOnPolicyRunner:
         if self.log_dir is not None and not self.disable_logs:
             self.save(os.path.join(self.log_dir, f"model_{self.current_learning_iteration}.pt"))
 
+    @staticmethod
+    def _collect_episode_info_keys(ep_infos):
+        """Return all rollout log keys in first-seen order, including reset-only reward keys."""
+        return list(dict.fromkeys(key for ep_info in ep_infos for key in ep_info))
+
+    @staticmethod
+    def _split_action_time_amp_rewards(routed_amp_reward, recovery_mask_t):
+        """Split the discriminator result into mutually exclusive rollout streams."""
+        if not isinstance(routed_amp_reward, torch.Tensor):
+            raise TypeError("routed_amp_reward must be a torch.Tensor.")
+        if not torch.is_floating_point(routed_amp_reward):
+            raise TypeError(f"routed_amp_reward must be floating point, got {routed_amp_reward.dtype}.")
+        if not isinstance(recovery_mask_t, torch.Tensor):
+            raise TypeError("recovery_mask_t must be a torch.Tensor.")
+        if recovery_mask_t.dtype != torch.bool:
+            raise TypeError(f"recovery_mask_t must have dtype bool, got {recovery_mask_t.dtype}.")
+        if routed_amp_reward.ndim != 1 or recovery_mask_t.shape != routed_amp_reward.shape:
+            raise ValueError(
+                "routed_amp_reward and recovery_mask_t must have matching [num_envs] shapes, got "
+                f"{tuple(routed_amp_reward.shape)} and {tuple(recovery_mask_t.shape)}."
+            )
+        if recovery_mask_t.device != routed_amp_reward.device:
+            raise ValueError(
+                f"recovery_mask_t must be on {routed_amp_reward.device}, got {recovery_mask_t.device}."
+            )
+        recovery_weight = recovery_mask_t.to(dtype=routed_amp_reward.dtype)
+        locomotion_weight = (~recovery_mask_t).to(dtype=routed_amp_reward.dtype)
+        return routed_amp_reward * locomotion_weight, routed_amp_reward * recovery_weight
+
     def log(self, locs: dict, width: int = 80, pad: int = 35):
         # Compute the collection size
         collection_size = self.num_steps_per_env * self.env.num_envs * self.gpu_world_size
@@ -470,7 +527,7 @@ class RENetAmpOnPolicyRunner:
         # -- Episode info
         ep_string = ""
         if locs["ep_infos"]:
-            for key in locs["ep_infos"][0]:
+            for key in self._collect_episode_info_keys(locs["ep_infos"]):
                 infotensor = torch.tensor([], device=self.device)
                 for ep_info in locs["ep_infos"]:
                     # handle scalar and zero dimensional tensor infos

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from rsl_rl.algorithms.amp_ppo import AMPPPO
 from rsl_rl.algorithms.renet_amp_ppo import RENetAMPPPO
 from rsl_rl.modules import Discriminator, RENetActorCritic
 from rsl_rl.runners.renet_amp_on_policy_runner import RENetAmpOnPolicyRunner
@@ -431,6 +432,55 @@ def test_mode_dependent_action_mapping_uses_current_pose_and_does_not_clamp_acti
     assert targets[1, 0] == 13.0  # proves no newly introduced [-1, 1] clamp
 
 
+def test_action_time_reward_routing_is_mutually_exclusive_and_preserves_tensor_contract():
+    (route_rewards,) = _load_methods(ENV_PATH, "G1RENetEnv", "_route_action_time_rewards")
+    raw_loco = torch.tensor([1.0, 2.0, 3.0, 4.0], dtype=torch.float32)
+    raw_task = torch.tensor([10.0, 20.0, 30.0, 40.0], dtype=torch.float32)
+    raw_reg = torch.tensor([-1.0, -2.0, -3.0, -4.0], dtype=torch.float32)
+    recovery_mask_t = torch.tensor([False, True, False, True])
+
+    loco, task, reg = route_rewards(raw_loco, raw_task, raw_reg, recovery_mask_t)
+
+    torch.testing.assert_close(loco, torch.tensor([1.0, 0.0, 3.0, 0.0]))
+    torch.testing.assert_close(task, torch.tensor([0.0, 20.0, 0.0, 40.0]))
+    torch.testing.assert_close(reg, torch.tensor([0.0, -2.0, 0.0, -4.0]))
+    for routed in (loco, task, reg):
+        assert routed.shape == raw_loco.shape
+        assert routed.device == raw_loco.device
+        assert routed.dtype == raw_loco.dtype
+
+    with pytest.raises(TypeError, match="dtype"):
+        route_rewards(raw_loco, raw_task.double(), raw_reg, recovery_mask_t)
+    with pytest.raises(ValueError, match="shape"):
+        route_rewards(raw_loco, raw_task, raw_reg, recovery_mask_t[:-1])
+
+
+def test_reward_routing_debug_metrics_report_owner_ratios_and_zero_leakage():
+    safe_mean, update_diagnostics = _load_methods(
+        ENV_PATH,
+        "G1RENetEnv",
+        "_safe_masked_mean",
+        "_update_reward_routing_diagnostics",
+    )
+    env = SimpleNamespace(_recovery_diagnostics={}, _safe_masked_mean=safe_mean)
+    recovery_mask_t = torch.tensor([False, True, False, True])
+    update_diagnostics(
+        env,
+        recovery_mask_t,
+        torch.tensor([1.0, 0.0, 3.0, 0.0]),
+        torch.tensor([0.0, 2.0, 0.0, 4.0]),
+        torch.tensor([0.0, -2.0, 0.0, -4.0]),
+    )
+    assert env._recovery_diagnostics["RewardRouting/locomotion_ratio"].item() == 0.5
+    assert env._recovery_diagnostics["RewardRouting/recovery_ratio"].item() == 0.5
+    for key in (
+        "RewardRouting/loco_reward_on_recovery_mean",
+        "RewardRouting/recovery_task_on_loco_mean",
+        "RewardRouting/recovery_reg_on_loco_mean",
+    ):
+        assert env._recovery_diagnostics[key].item() == 0.0
+
+
 def test_recovery_action_rate_has_no_cross_mode_boundary():
     (update_rate,) = _load_methods(ENV_PATH, "G1RENetEnv", "_update_recovery_action_rate")
     env = SimpleNamespace(
@@ -663,6 +713,102 @@ def test_recovery_advantage_weights_are_applied_once_without_renormalization():
     torch.testing.assert_close(combined, 2.5 * task + amp + 0.1 * reg)
 
 
+def test_runner_collects_reset_only_reward_log_keys_from_entire_rollout():
+    ep_infos = [
+        {"Recovery/active_ratio": torch.tensor(0.0)},
+        {"Recovery/active_ratio": torch.tensor(0.2), "Episode_Reward/track_lin_vel": torch.tensor(1.5)},
+        {"DepthNoise/enabled": torch.tensor(1.0)},
+    ]
+    assert RENetAmpOnPolicyRunner._collect_episode_info_keys(ep_infos) == [
+        "Recovery/active_ratio",
+        "Episode_Reward/track_lin_vel",
+        "DepthNoise/enabled",
+    ]
+
+
+def test_runner_splits_routed_amp_reward_into_disjoint_action_time_streams():
+    routed = torch.tensor([3.0, 7.0, -2.0, 5.0], dtype=torch.float32)
+    recovery_mask_t = torch.tensor([False, True, False, True])
+    loco, recovery = RENetAmpOnPolicyRunner._split_action_time_amp_rewards(
+        routed,
+        recovery_mask_t,
+    )
+    torch.testing.assert_close(loco, torch.tensor([3.0, 0.0, -2.0, 0.0]))
+    torch.testing.assert_close(recovery, torch.tensor([0.0, 7.0, 0.0, 5.0]))
+    assert loco.shape == recovery.shape == routed.shape
+    assert loco.device == recovery.device == routed.device
+    assert loco.dtype == recovery.dtype == routed.dtype
+
+
+def test_amp_replay_storage_receives_disjoint_action_time_transitions():
+    class CaptureStorage:
+        def __init__(self):
+            self.states = []
+
+        def insert(self, states, _next_states):
+            self.states.append(states.clone())
+
+    algorithm = RENetAMPPPO.__new__(RENetAMPPPO)
+    algorithm.device = "cpu"
+    algorithm.amp_storage_loco = CaptureStorage()
+    algorithm.amp_storage_recovery = CaptureStorage()
+    amp_obs = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+    recovery_mask_t = torch.tensor([False, True, False, True])
+
+    algorithm._store_amp_transition(amp_obs, amp_obs + 10.0, recovery_mask_t)
+
+    torch.testing.assert_close(
+        algorithm.amp_storage_loco.states[0],
+        torch.tensor([[0.0], [2.0]]),
+    )
+    torch.testing.assert_close(
+        algorithm.amp_storage_recovery.states[0],
+        torch.tensor([[1.0], [3.0]]),
+    )
+
+
+def test_ppo_rollout_boundary_masks_every_reward_stream_with_action_time_owner(monkeypatch):
+    algorithm = RENetAMPPPO.__new__(RENetAMPPPO)
+    algorithm.device = "cpu"
+    algorithm.transition = SimpleNamespace(values=torch.zeros(4, 1))
+    captured = {}
+
+    def capture_parent(_self, rewards, _dones, _infos, _amp_obs, recovery_mask_t=None):
+        captured["rewards"] = rewards.clone()
+        captured["mask"] = recovery_mask_t.clone()
+
+    monkeypatch.setattr(AMPPPO, "process_env_step", capture_parent)
+    recovery_mask_t = torch.tensor([False, True, False, True])
+    infos = {
+        "recovery_task_reward": torch.tensor([10.0, 20.0, 30.0, 40.0]),
+        "recovery_amp_reward": torch.tensor([11.0, 21.0, 31.0, 41.0]),
+        "recovery_reg_reward": torch.tensor([-1.0, -2.0, -3.0, -4.0]),
+    }
+    algorithm.process_env_step(
+        torch.tensor([1.0, 2.0, 3.0, 4.0]),
+        torch.zeros(4, dtype=torch.bool),
+        infos,
+        torch.zeros(4, 2),
+        recovery_mask_t,
+    )
+
+    torch.testing.assert_close(captured["rewards"], torch.tensor([1.0, 0.0, 3.0, 0.0]))
+    assert torch.equal(captured["mask"], recovery_mask_t)
+    torch.testing.assert_close(
+        algorithm.transition.recovery_task_reward,
+        torch.tensor([0.0, 20.0, 0.0, 40.0]),
+    )
+    torch.testing.assert_close(
+        algorithm.transition.recovery_amp_reward,
+        torch.tensor([0.0, 21.0, 0.0, 41.0]),
+    )
+    torch.testing.assert_close(
+        algorithm.transition.recovery_reg_reward,
+        torch.tensor([0.0, -2.0, 0.0, -4.0]),
+    )
+    assert torch.equal(algorithm.transition.recovery_rewards_valid, recovery_mask_t)
+
+
 def test_recovery_amp_is_pure_while_locomotion_keeps_03_07_mix():
     recovery = Discriminator(4, 1.0, [2], "cpu", task_reward_lerp=0.0)
     locomotion = Discriminator(4, 0.3, [2], "cpu", task_reward_lerp=0.7)
@@ -764,6 +910,22 @@ def test_enter_recovery_ends_locomotion_gae_without_recovery_bootstrap():
         normalize_advantage=False,
     )
     torch.testing.assert_close(advantages[0], torch.tensor([[1.0]]))
+
+
+def test_exit_recovery_transition_remains_recovery_owned_and_ends_recovery_gae():
+    _, advantages = RolloutStorage.compute_segmented_gae(
+        rewards=torch.tensor([[[2.0]], [[1000.0]]]),
+        values=torch.zeros(2, 1, 1),
+        last_values=torch.tensor([[5000.0]]),
+        sample_mask=torch.tensor([[[True]], [[False]]]),
+        trace_end=torch.tensor([[[True]], [[False]]]),
+        env_terminal=torch.zeros(2, 1, 1, dtype=torch.bool),
+        time_outs=torch.zeros(2, 1, 1, dtype=torch.bool),
+        gamma=0.99,
+        lam=0.95,
+        normalize_advantage=False,
+    )
+    torch.testing.assert_close(advantages[0], torch.tensor([[2.0]]))
 
 
 def test_no_deferred_or_forbidden_recovery_shaping_was_added():

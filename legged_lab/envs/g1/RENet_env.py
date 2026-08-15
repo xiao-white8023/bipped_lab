@@ -77,9 +77,9 @@ class G1RENetEnv(VecEnv):
         而SceneCfg（你导入的legged_lab.utils.env_utils.scene.SceneCfg）是对 Isaac Lab 原生配置的封装适配，
         专门用于整合 “静态场景参数 + 动态步长参数”，输出一个能被InteractiveScene直接使用的完整配置。
         '''
-        scene_cfg.camera = cfg.scene.camera
-        scene_cfg.left_feet_ray_caster=cfg.scene.left_feet_ray_caster
-        scene_cfg.right_feet_ray_caster=cfg.scene.right_feet_ray_caster
+        # scene_cfg.camera = cfg.scene.camera
+        # scene_cfg.left_feet_ray_caster=cfg.scene.left_feet_ray_caster
+        # scene_cfg.right_feet_ray_caster=cfg.scene.right_feet_ray_caster
 
         self.scene = InteractiveScene(scene_cfg)
         self.sim.reset()  # 重置一次
@@ -1061,6 +1061,63 @@ class G1RENetEnv(VecEnv):
         return task_reward
 
     @staticmethod
+    def _route_action_time_rewards(
+        raw_locomotion_reward: torch.Tensor,
+        recovery_task_reward: torch.Tensor,
+        raw_recovery_reg_reward: torch.Tensor,
+        recovery_mask_t: torch.Tensor,
+    ):
+        """Route all task streams by the mode that produced ``action_t``."""
+        if not isinstance(recovery_mask_t, torch.Tensor):
+            raise TypeError("recovery_mask_t must be a torch.Tensor.")
+        if recovery_mask_t.dtype != torch.bool:
+            raise TypeError(f"recovery_mask_t must have dtype bool, got {recovery_mask_t.dtype}.")
+
+        rewards = {
+            "raw_locomotion_reward": raw_locomotion_reward,
+            "recovery_task_reward": recovery_task_reward,
+            "raw_recovery_reg_reward": raw_recovery_reg_reward,
+        }
+        reference = raw_locomotion_reward
+        if not isinstance(reference, torch.Tensor):
+            raise TypeError("raw_locomotion_reward must be a torch.Tensor.")
+        if reference.ndim != 1:
+            raise ValueError(
+                "Reward routing expects one scalar per environment; "
+                f"got raw_locomotion_reward shape {tuple(reference.shape)}."
+            )
+        if not torch.is_floating_point(reference):
+            raise TypeError(f"Reward tensors must be floating point, got {reference.dtype}.")
+        if recovery_mask_t.shape != reference.shape:
+            raise ValueError(
+                f"recovery_mask_t must have shape {tuple(reference.shape)}, "
+                f"got {tuple(recovery_mask_t.shape)}."
+            )
+        if recovery_mask_t.device != reference.device:
+            raise ValueError(
+                f"recovery_mask_t must be on {reference.device}, got {recovery_mask_t.device}."
+            )
+        for name, reward in rewards.items():
+            if not isinstance(reward, torch.Tensor):
+                raise TypeError(f"{name} must be a torch.Tensor.")
+            if reward.shape != reference.shape:
+                raise ValueError(
+                    f"{name} must have shape {tuple(reference.shape)}, got {tuple(reward.shape)}."
+                )
+            if reward.device != reference.device:
+                raise ValueError(f"{name} must be on {reference.device}, got {reward.device}.")
+            if reward.dtype != reference.dtype:
+                raise TypeError(f"{name} must have dtype {reference.dtype}, got {reward.dtype}.")
+
+        recovery_weight = recovery_mask_t.to(dtype=reference.dtype)
+        locomotion_weight = (~recovery_mask_t).to(dtype=reference.dtype)
+        return (
+            raw_locomotion_reward * locomotion_weight,
+            recovery_task_reward * recovery_weight,
+            raw_recovery_reg_reward * recovery_weight,
+        )
+
+    @staticmethod
     def _mode_dependent_joint_targets(
         default_joint_pos: torch.Tensor,
         current_joint_pos: torch.Tensor,
@@ -1454,6 +1511,11 @@ class G1RENetEnv(VecEnv):
             "RecoveryCurriculum/total_level_advances": zero.clone(),
             "RecoveryAction/action_rate_valid_ratio": zero.clone(),
             "Actor/recovery_beta": zero.clone(),
+            "RewardRouting/locomotion_ratio": zero.clone(),
+            "RewardRouting/recovery_ratio": zero.clone(),
+            "RewardRouting/loco_reward_on_recovery_mean": zero.clone(),
+            "RewardRouting/recovery_task_on_loco_mean": zero.clone(),
+            "RewardRouting/recovery_reg_on_loco_mean": zero.clone(),
         }
 
     def _update_recovery_diagnostics(self, evaluated_recovery_mask):
@@ -1553,6 +1615,35 @@ class G1RENetEnv(VecEnv):
             recovery_mask_t,
         )
         diagnostics["Actor/recovery_beta"] = scalar(self.current_recovery_beta)
+
+    def _update_reward_routing_diagnostics(
+        self,
+        recovery_mask_t: torch.Tensor,
+        locomotion_reward: torch.Tensor,
+        recovery_task_reward: torch.Tensor,
+        recovery_reg_reward: torch.Tensor,
+    ):
+        """Log routed-stream leakage magnitudes using the action-time owner mask."""
+        locomotion_mask_t = ~recovery_mask_t
+        diagnostics = self._recovery_diagnostics
+        diagnostics["RewardRouting/locomotion_ratio"] = locomotion_mask_t.to(
+            dtype=locomotion_reward.dtype
+        ).mean()
+        diagnostics["RewardRouting/recovery_ratio"] = recovery_mask_t.to(
+            dtype=locomotion_reward.dtype
+        ).mean()
+        diagnostics["RewardRouting/loco_reward_on_recovery_mean"] = self._safe_masked_mean(
+            locomotion_reward.abs(),
+            recovery_mask_t,
+        )
+        diagnostics["RewardRouting/recovery_task_on_loco_mean"] = self._safe_masked_mean(
+            recovery_task_reward.abs(),
+            locomotion_mask_t,
+        )
+        diagnostics["RewardRouting/recovery_reg_on_loco_mean"] = self._safe_masked_mean(
+            recovery_reg_reward.abs(),
+            locomotion_mask_t,
+        )
 
     def get_recovery_diagnostics(self):
         """Expose the most recent pre-reset Recovery diagnostics."""
@@ -1740,16 +1831,28 @@ class G1RENetEnv(VecEnv):
 
         self.reset_buf, self.time_out_buf = self.check_reset()
 
-        reward_buf = self.reward_manager.compute(
-            self.step_dt
-        )
+        # RewardManager must still compute every raw locomotion term so its
+        # Episode_Reward/* summaries keep their historical *raw* meaning.
+        # Only the tensor sent to the PPO rollout is mode-routed below.
+        raw_locomotion_reward = self.reward_manager.compute(self.step_dt)
         if self.recovery_state_machine_enabled:
             raw_recovery_reg_reward = self.recovery_reg_reward_manager.compute(self.step_dt)
-            recovery_reg_reward = raw_recovery_reg_reward * recovery_mask_t.float()
         else:
-            recovery_reg_reward = torch.zeros_like(reward_buf)
+            raw_recovery_reg_reward = torch.zeros_like(raw_locomotion_reward)
+        locomotion_reward, recovery_task_reward, recovery_reg_reward = self._route_action_time_rewards(
+            raw_locomotion_reward,
+            recovery_task_reward,
+            raw_recovery_reg_reward,
+            recovery_mask_t,
+        )
         self.recovery_reg_reward_buf.copy_(recovery_reg_reward)
         self._update_recovery_reward_diagnostics(recovery_mask_t)
+        self._update_reward_routing_diagnostics(
+            recovery_mask_t,
+            locomotion_reward,
+            recovery_task_reward,
+            recovery_reg_reward,
+        )
         # Snapshot before true reset clears per-environment Recovery buffers.
         recovery_diagnostics = self.get_recovery_diagnostics()
 
@@ -1822,7 +1925,7 @@ class G1RENetEnv(VecEnv):
 
         return (
             actor_obs,
-            reward_buf,
+            locomotion_reward,
             self.reset_buf,
             self.extras,
         )
