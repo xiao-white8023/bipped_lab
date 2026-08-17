@@ -198,7 +198,6 @@ def test_dedicated_identity_is_terrain_stratified_and_persistent():
         recovery_mask=torch.zeros(400, dtype=torch.bool),
         recovery_mask_t=torch.zeros(400, dtype=torch.bool),
         recovery_timer=torch.ones(400, dtype=torch.long),
-        recovery_ready_counter=torch.ones(400, dtype=torch.long),
         recovery_attempt_active=torch.zeros(400, dtype=torch.bool),
         recovery_trigger_armed=torch.ones(400, dtype=torch.bool),
         enter_recovery_buf=torch.ones(400, dtype=torch.bool),
@@ -213,7 +212,6 @@ def test_dedicated_identity_is_terrain_stratified_and_persistent():
     assert torch.all(env.recovery_mask[dedicated_ids])
     assert torch.all(env.recovery_mask_t[dedicated_ids])
     assert torch.count_nonzero(env.recovery_timer[dedicated_ids]) == 0
-    assert torch.count_nonzero(env.recovery_ready_counter[dedicated_ids]) == 0
     assert torch.all(env.recovery_attempt_active[dedicated_ids])
     assert not torch.any(env.recovery_trigger_armed[dedicated_ids])
     assert not torch.any(env.enter_recovery_buf[dedicated_ids])
@@ -234,12 +232,33 @@ def test_dedicated_identity_falls_back_to_one_global_group_without_terrain_types
     assert (~mask).sum().item() == 32
 
 
-def test_terrain_stratification_fails_when_a_type_cannot_retain_both_groups():
+def test_small_terrain_strata_preserve_the_global_ratio_without_failing():
     (build_mask,) = _load_env_methods("_build_dedicated_recovery_env_mask")
     terrain_types = torch.repeat_interleave(torch.arange(3), 2)
+    generator = torch.Generator(device="cpu").manual_seed(13)
 
-    with pytest.raises(RuntimeError, match="terrain type 0: size=2"):
-        build_mask(terrain_types, 0.20, True, True)
+    mask = build_mask(terrain_types, 0.20, True, True, generator)
+
+    assert mask.sum().item() == 1
+    assert (~mask).sum().item() == 5
+    for terrain_type in range(3):
+        assert mask[terrain_types == terrain_type].sum().item() <= 1
+
+
+def test_single_environment_falls_back_to_natural_identity():
+    (build_mask,) = _load_env_methods("_build_dedicated_recovery_env_mask")
+
+    singleton_strata_mask = build_mask(
+        torch.arange(5),
+        0.20,
+        True,
+        True,
+        torch.Generator(device="cpu").manual_seed(17),
+    )
+    one_env_mask = build_mask(torch.tensor([0]), 0.20, True, True)
+
+    assert singleton_strata_mask.sum().item() == 1
+    assert torch.equal(one_env_mask, torch.tensor([False]))
 
 
 def _boundaries(
@@ -277,20 +296,9 @@ def test_dedicated_success_and_failure_are_true_non_timeout_terminals():
     assert failure["time_out_buf"].item() is False
 
 
-def test_dedicated_ready_hold_at_three_seconds_terminates_immediately():
-    advance_ready, compute_boundaries = _load_env_methods(
-        "_advance_recovery_ready_counter",
-        "_compute_recovery_episode_boundaries",
-    )
-    # At 50 Hz control, Ready begins at 2 s and its 50th held step is 3 s.
-    next_counter, exit_recovery = advance_ready(
-        torch.tensor([True]),
-        torch.tensor([True]),
-        torch.tensor([49]),
-        50,
-    )
-    assert next_counter.item() == 50
-    assert exit_recovery.item() is True
+def test_dedicated_immediate_success_is_a_true_terminal():
+    (compute_boundaries,) = _load_env_methods("_compute_recovery_episode_boundaries")
+    exit_recovery = torch.tensor([True])
     result = compute_boundaries(
         torch.tensor([True]),
         torch.tensor([False]),
@@ -414,7 +422,6 @@ def test_dedicated_reset_writes_complete_physical_state_and_clamps_joint_positio
         device="cpu",
         dedicated_recovery_joint_clamp_total=torch.zeros((), dtype=torch.long),
         dedicated_recovery_joint_sample_total=torch.zeros((), dtype=torch.long),
-        dedicated_recovery_sample_crop_counts=torch.zeros(8, dtype=torch.long),
         dedicated_recovery_reset_total=torch.zeros((), dtype=torch.long),
         dedicated_last_sample_motion_id=torch.full((2,), -1, dtype=torch.long),
         dedicated_last_sample_frame_id=torch.full((2,), -1, dtype=torch.long),
@@ -422,7 +429,6 @@ def test_dedicated_reset_writes_complete_physical_state_and_clamps_joint_positio
         recovery_mask=torch.zeros(2, dtype=torch.bool),
         recovery_mask_t=torch.zeros(2, dtype=torch.bool),
         recovery_timer=torch.ones(2, dtype=torch.long),
-        recovery_ready_counter=torch.ones(2, dtype=torch.long),
         recovery_attempt_active=torch.zeros(2, dtype=torch.bool),
         recovery_trigger_armed=torch.ones(2, dtype=torch.bool),
         enter_recovery_buf=torch.ones(2, dtype=torch.bool),
@@ -578,7 +584,6 @@ def test_first_dedicated_transition_routes_to_recovery_ppo_and_drec_only():
         recovery_mask=torch.zeros(1, dtype=torch.bool),
         recovery_mask_t=torch.zeros(1, dtype=torch.bool),
         recovery_timer=torch.ones(1, dtype=torch.long),
-        recovery_ready_counter=torch.ones(1, dtype=torch.long),
         recovery_attempt_active=torch.zeros(1, dtype=torch.bool),
         recovery_trigger_armed=torch.ones(1, dtype=torch.bool),
         enter_recovery_buf=torch.ones(1, dtype=torch.bool),

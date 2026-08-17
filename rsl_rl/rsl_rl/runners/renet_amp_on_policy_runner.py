@@ -52,6 +52,155 @@ class RENetAmpOnPolicyRunner:
             )
         return [str(path) for path in paths]
 
+    @staticmethod
+    def _resolve_natural_env_mask_for_logging(env, device):
+        """Cache the persistent Natural identity mask used by episode logs."""
+        natural_env_mask = getattr(env, "natural_env_mask", None)
+        if natural_env_mask is None:
+            warnings.warn(
+                "Environment does not expose natural_env_mask; "
+                "episode reward/length logging falls back to all environments.",
+                stacklevel=2,
+            )
+            return torch.ones(env.num_envs, dtype=torch.bool, device=device)
+        if not isinstance(natural_env_mask, torch.Tensor):
+            raise TypeError("env.natural_env_mask must be a torch.Tensor.")
+        if natural_env_mask.dtype != torch.bool:
+            raise TypeError(
+                "env.natural_env_mask must have dtype bool, "
+                f"got {natural_env_mask.dtype}."
+            )
+        expected_shape = (env.num_envs,)
+        if natural_env_mask.shape != expected_shape:
+            raise ValueError(
+                "env.natural_env_mask must have shape "
+                f"{expected_shape}, got {tuple(natural_env_mask.shape)}."
+            )
+        return natural_env_mask.to(device=device, dtype=torch.bool)
+
+    @staticmethod
+    def _split_completed_env_ids(
+        dones: torch.Tensor,
+        natural_env_mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return all completed IDs and the Natural-only completed subset."""
+        if not isinstance(dones, torch.Tensor):
+            raise TypeError("dones must be a torch.Tensor.")
+        if not isinstance(natural_env_mask, torch.Tensor):
+            raise TypeError("natural_env_mask must be a torch.Tensor.")
+        if natural_env_mask.dtype != torch.bool:
+            raise TypeError(
+                f"natural_env_mask must have dtype bool, got {natural_env_mask.dtype}."
+            )
+        if natural_env_mask.ndim != 1:
+            raise ValueError(
+                "natural_env_mask must be one-dimensional, got "
+                f"{tuple(natural_env_mask.shape)}."
+            )
+        if dones.numel() != natural_env_mask.numel():
+            raise ValueError(
+                "dones and natural_env_mask must describe the same number of environments, "
+                f"got {dones.numel()} and {natural_env_mask.numel()}."
+            )
+        if dones.device != natural_env_mask.device:
+            raise ValueError(
+                "dones and natural_env_mask must share a device, got "
+                f"{dones.device} and {natural_env_mask.device}."
+            )
+
+        done_ids = torch.nonzero(dones.reshape(-1) > 0, as_tuple=False).flatten()
+        natural_done_ids = done_ids[natural_env_mask[done_ids]]
+        return done_ids, natural_done_ids
+
+    @staticmethod
+    def _update_completed_episode_logging(
+        dones,
+        natural_env_mask,
+        cur_reward_sum,
+        cur_episode_length,
+        rewbuffer,
+        lenbuffer,
+        *,
+        cur_ereward_sum=None,
+        cur_ireward_sum=None,
+        erewbuffer=None,
+        irewbuffer=None,
+    ):
+        """Record Natural episodes, then clear every completed accumulator."""
+        done_ids, natural_done_ids = RENetAmpOnPolicyRunner._split_completed_env_ids(
+            dones,
+            natural_env_mask,
+        )
+        num_envs = natural_env_mask.numel()
+        for name, accumulator in (
+            ("cur_reward_sum", cur_reward_sum),
+            ("cur_episode_length", cur_episode_length),
+        ):
+            if not isinstance(accumulator, torch.Tensor):
+                raise TypeError(f"{name} must be a torch.Tensor.")
+            if (
+                accumulator.ndim == 0
+                or accumulator.shape[0] != num_envs
+                or accumulator.numel() != num_envs
+            ):
+                raise ValueError(
+                    f"{name} must contain one scalar per environment, got "
+                    f"{tuple(accumulator.shape)} for {num_envs} environments."
+                )
+            if accumulator.device != natural_env_mask.device:
+                raise ValueError(
+                    f"{name} must be on {natural_env_mask.device}, got {accumulator.device}."
+                )
+
+        rnd_values = (cur_ereward_sum, cur_ireward_sum, erewbuffer, irewbuffer)
+        rnd_logging_enabled = any(value is not None for value in rnd_values)
+        if rnd_logging_enabled and not all(value is not None for value in rnd_values):
+            raise ValueError("RND episode logging arguments must be provided together.")
+        if rnd_logging_enabled:
+            for name, accumulator in (
+                ("cur_ereward_sum", cur_ereward_sum),
+                ("cur_ireward_sum", cur_ireward_sum),
+            ):
+                if not isinstance(accumulator, torch.Tensor):
+                    raise TypeError(f"{name} must be a torch.Tensor.")
+                if (
+                    accumulator.ndim == 0
+                    or accumulator.shape[0] != num_envs
+                    or accumulator.numel() != num_envs
+                ):
+                    raise ValueError(
+                        f"{name} must contain one scalar per environment, got "
+                        f"{tuple(accumulator.shape)} for {num_envs} environments."
+                    )
+                if accumulator.device != natural_env_mask.device:
+                    raise ValueError(
+                        f"{name} must be on {natural_env_mask.device}, got {accumulator.device}."
+                    )
+
+        if natural_done_ids.numel() > 0:
+            rewbuffer.extend(
+                cur_reward_sum[natural_done_ids].reshape(-1).detach().cpu().tolist()
+            )
+            lenbuffer.extend(
+                cur_episode_length[natural_done_ids].reshape(-1).detach().cpu().tolist()
+            )
+            if rnd_logging_enabled:
+                erewbuffer.extend(
+                    cur_ereward_sum[natural_done_ids].reshape(-1).detach().cpu().tolist()
+                )
+                irewbuffer.extend(
+                    cur_ireward_sum[natural_done_ids].reshape(-1).detach().cpu().tolist()
+                )
+
+        # Dedicated episodes are deliberately not recorded, but their
+        # accumulators must still start the next attempt from zero.
+        cur_reward_sum[done_ids] = 0
+        cur_episode_length[done_ids] = 0
+        if rnd_logging_enabled:
+            cur_ereward_sum[done_ids] = 0
+            cur_ireward_sum[done_ids] = 0
+        return done_ids, natural_done_ids
+
     def __init__(self, env: VecEnv, train_cfg: dict, log_dir: str | None = None, device="cpu"):
         self.cfg = train_cfg
         self.alg_cfg = train_cfg["algorithm"]  #  算法参数
@@ -366,6 +515,12 @@ class RENetAmpOnPolicyRunner:
 
         # Book keeping
         ep_infos = []
+        # Dedicated identity is persistent, so resolve/copy this mask once for
+        # the whole learn() call. Train episode deques are Natural-only.
+        natural_env_mask = self._resolve_natural_env_mask_for_logging(
+            self.env,
+            self.device,
+        )
         rewbuffer = deque(maxlen=100)
         lenbuffer = deque(maxlen=100)
         cur_reward_sum = torch.zeros(self.env.num_envs, dtype=torch.float, device=self.device)
@@ -459,27 +614,10 @@ class RENetAmpOnPolicyRunner:
                     recovery_weight = recovery_mask_t.to(dtype=rewards.dtype)
                     locomotion_weight = locomotion_mask_t.to(dtype=rewards.dtype)
                     recovery_count = recovery_weight.sum().clamp(min=1.0)
-                    locomotion_count = locomotion_weight.sum().clamp(min=1.0)
-                    recovery_task_reward = infos["recovery_task_reward"].to(self.device)
-                    recovery_reg_reward = infos["recovery_reg_reward"].to(self.device)
                     routing_log.update(
                         {
                             "RewardRouting/locomotion_ratio": locomotion_weight.mean(),
                             "RewardRouting/recovery_ratio": recovery_weight.mean(),
-                            "RewardRouting/loco_reward_on_recovery_mean": (
-                                rewards.abs() * recovery_weight
-                            ).sum()
-                            / recovery_count,
-                            "RewardRouting/recovery_task_on_loco_mean": (
-                                recovery_task_reward.abs()
-                                * locomotion_mask_t.to(dtype=recovery_task_reward.dtype)
-                            ).sum()
-                            / locomotion_count,
-                            "RewardRouting/recovery_reg_on_loco_mean": (
-                                recovery_reg_reward.abs()
-                                * locomotion_mask_t.to(dtype=recovery_reg_reward.dtype)
-                            ).sum()
-                            / locomotion_count,
                         }
                     )
                     recovery_amp_mean = infos["recovery_amp_reward"].sum() / recovery_count
@@ -518,19 +656,31 @@ class RENetAmpOnPolicyRunner:
                             cur_reward_sum += rewards
                         # Update episode length
                         cur_episode_length += 1
-                        # Clear data for completed episodes
-                        # -- common
-                        new_ids = (dones > 0).nonzero(as_tuple=False)
-                        rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
-                        lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
-                        cur_reward_sum[new_ids] = 0
-                        cur_episode_length[new_ids] = 0
-                        # -- intrinsic and extrinsic rewards
+                        # Only completed Natural episodes own Train/Rnd
+                        # episode-level metrics. All completed rows, including
+                        # Dedicated, still have their accumulators cleared.
                         if self.alg.rnd:
-                            erewbuffer.extend(cur_ereward_sum[new_ids][:, 0].cpu().numpy().tolist())
-                            irewbuffer.extend(cur_ireward_sum[new_ids][:, 0].cpu().numpy().tolist())
-                            cur_ereward_sum[new_ids] = 0
-                            cur_ireward_sum[new_ids] = 0
+                            self._update_completed_episode_logging(
+                                dones,
+                                natural_env_mask,
+                                cur_reward_sum,
+                                cur_episode_length,
+                                rewbuffer,
+                                lenbuffer,
+                                cur_ereward_sum=cur_ereward_sum,
+                                cur_ireward_sum=cur_ireward_sum,
+                                erewbuffer=erewbuffer,
+                                irewbuffer=irewbuffer,
+                            )
+                        else:
+                            self._update_completed_episode_logging(
+                                dones,
+                                natural_env_mask,
+                                cur_reward_sum,
+                                cur_episode_length,
+                                rewbuffer,
+                                lenbuffer,
+                            )
 
                 if hasattr(self.env, "update_depth_noise_curriculum_once"):
                     self.env.update_depth_noise_curriculum_once()
@@ -657,18 +807,38 @@ class RENetAmpOnPolicyRunner:
 
         # -- Training
         if len(locs["rewbuffer"]) > 0:
+            # Both deques contain the latest completed Natural episodes only:
+            # locomotion-owned PPO return and whole wall-clock length in steps.
+            natural_mean_reward = statistics.mean(locs["rewbuffer"])
+            natural_mean_episode_length = statistics.mean(locs["lenbuffer"])
             # separate logging for intrinsic and extrinsic rewards
             if self.alg.rnd:
                 self.writer.add_scalar("Rnd/mean_extrinsic_reward", statistics.mean(locs["erewbuffer"]), locs["it"])
                 self.writer.add_scalar("Rnd/mean_intrinsic_reward", statistics.mean(locs["irewbuffer"]), locs["it"])
                 self.writer.add_scalar("Rnd/weight", self.alg.rnd.weight, locs["it"])
             # everything else
-            self.writer.add_scalar("Train/mean_reward", statistics.mean(locs["rewbuffer"]), locs["it"])
-            self.writer.add_scalar("Train/mean_episode_length", statistics.mean(locs["lenbuffer"]), locs["it"])
+            self.writer.add_scalar("Train/mean_reward", natural_mean_reward, locs["it"])
+            self.writer.add_scalar(
+                "Train/NaturalMeanLocomotionPpoReturn",
+                natural_mean_reward,
+                locs["it"],
+            )
+            self.writer.add_scalar(
+                "Train/mean_episode_length",
+                natural_mean_episode_length,
+                locs["it"],
+            )
+            self.writer.add_scalar(
+                "Train/NaturalMeanWallEpisodeLength",
+                natural_mean_episode_length,
+                locs["it"],
+            )
             if self.logger_type != "wandb":  # wandb does not support non-integer x-axis logging
-                self.writer.add_scalar("Train/mean_reward/time", statistics.mean(locs["rewbuffer"]), self.tot_time)
+                self.writer.add_scalar("Train/mean_reward/time", natural_mean_reward, self.tot_time)
                 self.writer.add_scalar(
-                    "Train/mean_episode_length/time", statistics.mean(locs["lenbuffer"]), self.tot_time
+                    "Train/mean_episode_length/time",
+                    natural_mean_episode_length,
+                    self.tot_time,
                 )
 
         str = f" \033[1m Learning iteration {locs['it']}/{locs['tot_iter']} \033[0m "
@@ -690,9 +860,15 @@ class RENetAmpOnPolicyRunner:
                     f"""{'Mean extrinsic reward:':>{pad}} {statistics.mean(locs['erewbuffer']):.2f}\n"""
                     f"""{'Mean intrinsic reward:':>{pad}} {statistics.mean(locs['irewbuffer']):.2f}\n"""
                 )
-            log_string += f"""{'Mean reward:':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
+            log_string += (
+                f"""{'Mean natural locomotion return:':>{pad}} """
+                f"""{statistics.mean(locs['rewbuffer']):.2f}\n"""
+            )
             # -- episode info
-            log_string += f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n"""
+            log_string += (
+                f"""{'Mean natural episode length:':>{pad}} """
+                f"""{statistics.mean(locs['lenbuffer']):.2f}\n"""
+            )
         else:
             log_string = (
                 f"""{'#' * width}\n"""

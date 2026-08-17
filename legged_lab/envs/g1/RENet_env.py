@@ -315,10 +315,7 @@ class G1RENetEnv(VecEnv):
         recovery_positive_params = {
             "max_duration_s": self.cfg.recovery.max_duration_s,
             "absolute_episode_timeout_s": self.cfg.recovery.absolute_episode_timeout_s,
-            "ready_hold_s": self.cfg.recovery.ready_hold_s,
             "upright_threshold": self.cfg.recovery.upright_threshold,
-            "max_ang_vel": self.cfg.recovery.max_ang_vel,
-            "max_vertical_vel": self.cfg.recovery.max_vertical_vel,
             "torso_force_threshold": self.cfg.recovery.torso_force_threshold,
             "foot_force_threshold": self.cfg.recovery.foot_force_threshold,
             "curriculum_success_ratio": self.cfg.recovery.curriculum_success_ratio,
@@ -335,9 +332,12 @@ class G1RENetEnv(VecEnv):
             raise ValueError("The control step_dt must be positive and finite.")
         if float(self.cfg.recovery.upright_threshold) > 1.0:
             raise ValueError("recovery.upright_threshold cannot exceed 1.0.")
-        if not 0.0 < float(self.cfg.recovery.height_ratio) <= 1.0:
-            raise ValueError("recovery.height_ratio must be in (0, 1].")
-        for name in ("task_height_ratio", "curriculum_height_ratio"):
+        for name in (
+            "success_height_ratio",
+            "task_height_ratio",
+            "task_height_margin_ratio",
+            "curriculum_height_ratio",
+        ):
             value = float(getattr(self.cfg.recovery, name))
             if not 0.0 < value <= 1.0:
                 raise ValueError(f"recovery.{name} must be in (0, 1], got {value}.")
@@ -362,17 +362,6 @@ class G1RENetEnv(VecEnv):
             self.baseline_max_episode_length_s / self.step_dt
         )
         self.recovery_max_steps = math.ceil(float(self.cfg.recovery.max_duration_s) / self.step_dt)
-        self.recovery_ready_hold_steps = math.ceil(float(self.cfg.recovery.ready_hold_s) / self.step_dt)
-
-        # G1_23CFG's default root z is the nominal base height relative to the
-        # terrain origin. Unlike a guessed constant, it follows robot config changes.
-        nominal_root_pos = getattr(self.cfg.scene.robot.init_state, "pos", None)
-        if nominal_root_pos is None or len(nominal_root_pos) < 3 or not math.isfinite(float(nominal_root_pos[2])):
-            raise ValueError("Recovery state machine requires a finite default robot root height.")
-        self.nominal_base_height = float(nominal_root_pos[2])
-        if self.nominal_base_height <= 0.0:
-            raise ValueError(f"Nominal robot root height must be positive, got {self.nominal_base_height}.")
-        self.recovery_ready_height_threshold = float(self.cfg.recovery.height_ratio) * self.nominal_base_height
 
         self.num_actions = self.robot.data.default_joint_pos.shape[1]  # 获取机器人的动作维度（关节数量），这是策略网络输出层的维度。
         self.clip_actions = self.cfg.normalization.clip_actions   # 读取 “动作裁剪阈值”，限制策略网络输出的动作范围，避免动作过大导致机器人关节损坏 / 物理仿真崩溃。
@@ -437,6 +426,12 @@ class G1RENetEnv(VecEnv):
         self.recovery_task_height_threshold = (
             float(self.cfg.recovery.task_height_ratio) * self.nominal_torso_height
         )
+        self.recovery_task_height_margin = (
+            float(self.cfg.recovery.task_height_margin_ratio) * self.nominal_torso_height
+        )
+        self.recovery_success_height_threshold = (
+            float(self.cfg.recovery.success_height_ratio) * self.nominal_torso_height
+        )
         self.recovery_curriculum_height_threshold = (
             float(self.cfg.recovery.curriculum_height_ratio) * self.nominal_torso_height
         )
@@ -473,7 +468,6 @@ class G1RENetEnv(VecEnv):
         # only recovery/absolute timeouts do so in the enabled state machine.
         self.recovery_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.recovery_timer = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
-        self.recovery_ready_counter = torch.zeros(self.num_envs, device=self.device, dtype=torch.long)
         self.recovery_trigger_armed = torch.ones(self.num_envs, device=self.device, dtype=torch.bool)
         self.enter_recovery_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
         self.exit_recovery_buf = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
@@ -1084,7 +1078,7 @@ class G1RENetEnv(VecEnv):
         upright_value = -self.robot.data.projected_gravity_b[:, 2]
         upright_reward = self._gaussian_lower_bound_tolerance(
             upright_value,
-            lower_bound=0.93,
+            lower_bound=float(self.cfg.recovery.upright_threshold),
             margin=1.0,
             value_at_margin=0.05,
         )
@@ -1092,7 +1086,7 @@ class G1RENetEnv(VecEnv):
         height_reward = self._gaussian_lower_bound_tolerance(
             torso_height,
             lower_bound=self.recovery_task_height_threshold,
-            margin=self.recovery_task_height_threshold,
+            margin=self.recovery_task_height_margin,
             value_at_margin=0.1,
         )
         height_reward = torch.where(height_valid, height_reward, torch.zeros_like(height_reward))
@@ -1494,26 +1488,18 @@ class G1RENetEnv(VecEnv):
     def compute_recovery_ready_now(self):
         """Evaluate the instantaneous V1 Recovery Ready conditions."""
         left_support, right_support = self._get_current_foot_support()
-        support_height, support_height_valid, _, _ = self.compute_local_support_height(
-            left_support,
-            right_support,
-        )
-        terrain_relative_base_height = self.robot.data.root_pos_w[:, 2] - support_height
-
-        upright = -self.robot.data.projected_gravity_b[:, 2] > float(self.cfg.recovery.upright_threshold)
-        height_ok = support_height_valid & (
-            terrain_relative_base_height > self.recovery_ready_height_threshold
-        )
-        low_ang_vel = torch.linalg.vector_norm(self.robot.data.root_ang_vel_b, dim=1) < float(
-            self.cfg.recovery.max_ang_vel
-        )
-        low_vertical_vel = torch.abs(self.robot.data.root_lin_vel_b[:, 2]) < float(
-            self.cfg.recovery.max_vertical_vel
+        torso_height, height_valid, _ = self.compute_local_torso_height()
+        upright_value = -self.robot.data.projected_gravity_b[:, 2]
+        upright = upright_value >= float(self.cfg.recovery.upright_threshold)
+        height_ok = height_valid & (
+            torso_height >= self.recovery_success_height_threshold
         )
         foot_support = left_support | right_support
         torso_clear = self._compute_current_torso_clear()
 
         active = self.recovery_mask
+        self.recovery_torso_height_buf.copy_(torso_height)
+        self.recovery_torso_height_valid_buf.copy_(height_valid)
         self.recovery_upright_buf = active & upright
         self.recovery_height_ok_buf = active & height_ok
         self.recovery_foot_support_buf = active & foot_support
@@ -1522,26 +1508,17 @@ class G1RENetEnv(VecEnv):
             active
             & upright
             & height_ok
-            & low_ang_vel
-            & low_vertical_vel
-            & foot_support
-            & torso_clear
         )
         return self.recovery_ready_now_buf
 
     @staticmethod
-    def _advance_recovery_ready_counter(
-        was_recovery: torch.Tensor,
-        ready_now: torch.Tensor,
-        ready_counter: torch.Tensor,
-        hold_steps: int,
+    def _compute_recovery_curriculum_success(
+        torso_height_valid: torch.Tensor,
+        torso_height: torch.Tensor,
+        height_threshold: float,
     ):
-        next_counter = torch.where(
-            was_recovery & ready_now,
-            ready_counter + 1,
-            torch.zeros_like(ready_counter),
-        )
-        return next_counter, was_recovery & (next_counter >= hold_steps)
+        """Evaluate completion-step height mastery for Natural and Dedicated attempts."""
+        return torso_height_valid & (torso_height >= height_threshold)
 
     @staticmethod
     def _build_dedicated_recovery_env_mask(
@@ -1551,7 +1528,7 @@ class G1RENetEnv(VecEnv):
         stratify_by_terrain_type: bool = True,
         generator: torch.Generator | None = None,
     ):
-        """Choose one persistent Dedicated subset, optionally within every terrain type."""
+        """Choose one persistent Dedicated subset, proportionally across terrain types."""
         if not isinstance(terrain_types, torch.Tensor):
             raise TypeError("terrain_types must be a torch.Tensor.")
         if terrain_types.ndim != 1 or terrain_types.numel() == 0:
@@ -1573,36 +1550,58 @@ class G1RENetEnv(VecEnv):
         if not enabled:
             return dedicated_mask
 
-        if stratify_by_terrain_type:
-            group_values = torch.unique(terrain_types, sorted=True)
-        else:
-            group_values = torch.tensor(
-                [terrain_types[0]], dtype=terrain_types.dtype, device=terrain_types.device
-            )
-
         all_env_ids = torch.arange(terrain_types.numel(), device=terrain_types.device)
-        for group_value in group_values:
-            if stratify_by_terrain_type:
-                group_env_ids = all_env_ids[terrain_types == group_value]
-            else:
-                group_env_ids = all_env_ids
-            group_size = int(group_env_ids.numel())
-            dedicated_count = round(group_size * ratio)
-            if dedicated_count <= 0 or dedicated_count >= group_size:
-                label = int(group_value.item()) if stratify_by_terrain_type else "all"
-                raise RuntimeError(
-                    "Dedicated Recovery stratification cannot retain both groups for "
-                    f"terrain type {label}: size={group_size}, ratio={ratio}, "
-                    f"dedicated={dedicated_count}."
-                )
+        total_envs = int(terrain_types.numel())
+        total_dedicated = round(total_envs * ratio)
+        if total_envs > 1:
+            total_dedicated = min(max(total_dedicated, 1), total_envs - 1)
+        else:
+            # A single environment cannot represent both identities. Keep it
+            # Natural so one-env debug/visualization runs remain usable.
+            total_dedicated = 0
+
+        if not stratify_by_terrain_type:
             permutation = torch.randperm(
-                group_size,
+                total_envs,
+                device=terrain_types.device,
+                generator=generator,
+            )
+            dedicated_mask[permutation[:total_dedicated]] = True
+            return dedicated_mask
+
+        group_values = torch.unique(terrain_types, sorted=True)
+        group_sizes = torch.stack(
+            [(terrain_types == group_value).sum() for group_value in group_values]
+        )
+        ideal_counts = group_sizes.to(dtype=torch.float) * ratio
+        dedicated_counts = torch.floor(ideal_counts).to(dtype=torch.long)
+        remaining = total_dedicated - int(dedicated_counts.sum().item())
+        if remaining > 0:
+            # Largest-remainder allocation preserves the global target ratio.
+            # Randomizing before sorting prevents a persistent bias toward
+            # lower terrain-type indices when multiple remainders are equal.
+            tie_break_order = torch.randperm(
+                group_values.numel(),
+                device=terrain_types.device,
+                generator=generator,
+            )
+            remainders = ideal_counts - dedicated_counts.to(dtype=ideal_counts.dtype)
+            priority = tie_break_order[
+                torch.argsort(remainders[tie_break_order], descending=True, stable=True)
+            ]
+            dedicated_counts[priority[:remaining]] += 1
+
+        for group_index, group_value in enumerate(group_values):
+            group_env_ids = all_env_ids[terrain_types == group_value]
+            dedicated_count = int(dedicated_counts[group_index].item())
+            if dedicated_count == 0:
+                continue
+            permutation = torch.randperm(
+                group_env_ids.numel(),
                 device=terrain_types.device,
                 generator=generator,
             )
             dedicated_mask[group_env_ids[permutation[:dedicated_count]]] = True
-            if not stratify_by_terrain_type:
-                break
         return dedicated_mask
 
     def _initialize_dedicated_recovery_training(self):
@@ -1673,9 +1672,6 @@ class G1RENetEnv(VecEnv):
         self.dedicated_recovery_joint_clamp_total = scalar_long()
         self.dedicated_recovery_joint_sample_total = scalar_long()
         self.dedicated_recovery_absolute_timeout_total = scalar_long()
-        self.dedicated_recovery_sample_crop_counts = torch.zeros(
-            8, dtype=torch.long, device=self.device
-        )
         self.natural_recovery_attempt_total = scalar_long()
         self.natural_recovery_success_total = scalar_long()
         self._dedicated_joint_clamp_warning_emitted = False
@@ -1754,7 +1750,6 @@ class G1RENetEnv(VecEnv):
                 f"  reset frame size: {RECOVERY_RESET_FRAME_SIZE}\n"
                 "  reset motion count: 8\n"
                 f"  max recovery duration: {float(recovery_cfg.max_duration_s):.1f} s\n"
-                f"  Ready hold: {float(recovery_cfg.ready_hold_s):.1f} s\n"
                 "Natural timing:\n"
                 f"  locomotion budget: {self.baseline_max_episode_length_s:.1f} s\n"
                 f"  absolute cap: {self.max_episode_length_s:.1f} s\n"
@@ -1774,7 +1769,6 @@ class G1RENetEnv(VecEnv):
         self.recovery_mask[dedicated_ids] = True
         self.recovery_mask_t[dedicated_ids] = True
         self.recovery_timer[dedicated_ids] = 0
-        self.recovery_ready_counter[dedicated_ids] = 0
         self.recovery_attempt_active[dedicated_ids] = True
         self.recovery_trigger_armed[dedicated_ids] = False
         self.enter_recovery_buf[dedicated_ids] = False
@@ -1845,9 +1839,6 @@ class G1RENetEnv(VecEnv):
         )
         self.dedicated_last_sample_motion_id[dedicated_ids] = motion_ids
         self.dedicated_last_sample_frame_id[dedicated_ids] = frame_ids
-        self.dedicated_recovery_sample_crop_counts += torch.bincount(
-            motion_ids, minlength=8
-        )
         self.dedicated_recovery_reset_total += dedicated_ids.numel()
         self._activate_dedicated_recovery_mode(dedicated_ids)
 
@@ -2039,6 +2030,11 @@ class G1RENetEnv(VecEnv):
             "RecoveryReward/upright": zero.clone(),
             "RecoveryReward/height": zero.clone(),
             "RecoveryReward/task_product": zero.clone(),
+            "RecoveryTask/torso_height_ratio": zero.clone(),
+            "RecoveryTask/height_reward": zero.clone(),
+            "RecoveryTask/upright_value": zero.clone(),
+            "RecoveryTask/upright_reward": zero.clone(),
+            "RecoveryAssist/active_ratio": zero.clone(),
             "RecoveryReward/reg_total": zero.clone(),
             "RecoveryReward/reg_joint_acc": zero.clone(),
             "RecoveryReward/reg_action_rate": zero.clone(),
@@ -2062,9 +2058,6 @@ class G1RENetEnv(VecEnv):
             "Actor/recovery_beta": zero.clone(),
             "RewardRouting/locomotion_ratio": zero.clone(),
             "RewardRouting/recovery_ratio": zero.clone(),
-            "RewardRouting/loco_reward_on_recovery_mean": zero.clone(),
-            "RewardRouting/recovery_task_on_loco_mean": zero.clone(),
-            "RewardRouting/recovery_reg_on_loco_mean": zero.clone(),
         }
 
     def _update_recovery_diagnostics(self, evaluated_recovery_mask):
@@ -2092,6 +2085,8 @@ class G1RENetEnv(VecEnv):
 
     def _update_recovery_reward_diagnostics(self, recovery_mask_t: torch.Tensor):
         diagnostics = self._recovery_diagnostics
+        valid_recovery_mask = recovery_mask_t & self.recovery_torso_height_valid_buf
+        upright_value = -self.robot.data.projected_gravity_b[:, 2]
         diagnostics["RecoveryReward/upright"] = self._safe_masked_mean(
             self.recovery_upright_reward_buf,
             recovery_mask_t,
@@ -2102,6 +2097,29 @@ class G1RENetEnv(VecEnv):
         )
         diagnostics["RecoveryReward/task_product"] = self._safe_masked_mean(
             self.recovery_task_reward_buf,
+            recovery_mask_t,
+        )
+        diagnostics["RecoveryTask/torso_height_ratio"] = self._safe_masked_mean(
+            self.recovery_torso_height_buf / self.nominal_torso_height,
+            valid_recovery_mask,
+        )
+        diagnostics["RecoveryTask/height_reward"] = self._safe_masked_mean(
+            self.recovery_height_reward_buf,
+            valid_recovery_mask,
+        )
+        diagnostics["RecoveryTask/upright_value"] = self._safe_masked_mean(
+            upright_value,
+            recovery_mask_t,
+        )
+        diagnostics["RecoveryTask/upright_reward"] = self._safe_masked_mean(
+            self.recovery_upright_reward_buf,
+            recovery_mask_t,
+        )
+        assist_active = recovery_mask_t & (
+            upright_value > float(self.cfg.recovery.force_upright_gate)
+        )
+        diagnostics["RecoveryAssist/active_ratio"] = self._safe_masked_mean(
+            assist_active.float(),
             recovery_mask_t,
         )
         diagnostics["RecoveryReward/reg_total"] = self._safe_masked_mean(
@@ -2168,31 +2186,12 @@ class G1RENetEnv(VecEnv):
     def _update_reward_routing_diagnostics(
         self,
         recovery_mask_t: torch.Tensor,
-        locomotion_reward: torch.Tensor,
-        recovery_task_reward: torch.Tensor,
-        recovery_reg_reward: torch.Tensor,
     ):
-        """Log routed-stream leakage magnitudes using the action-time owner mask."""
+        """Log action-time reward ownership ratios."""
         locomotion_mask_t = ~recovery_mask_t
         diagnostics = self._recovery_diagnostics
-        diagnostics["RewardRouting/locomotion_ratio"] = locomotion_mask_t.to(
-            dtype=locomotion_reward.dtype
-        ).mean()
-        diagnostics["RewardRouting/recovery_ratio"] = recovery_mask_t.to(
-            dtype=locomotion_reward.dtype
-        ).mean()
-        diagnostics["RewardRouting/loco_reward_on_recovery_mean"] = self._safe_masked_mean(
-            locomotion_reward.abs(),
-            recovery_mask_t,
-        )
-        diagnostics["RewardRouting/recovery_task_on_loco_mean"] = self._safe_masked_mean(
-            recovery_task_reward.abs(),
-            locomotion_mask_t,
-        )
-        diagnostics["RewardRouting/recovery_reg_on_loco_mean"] = self._safe_masked_mean(
-            recovery_reg_reward.abs(),
-            locomotion_mask_t,
-        )
+        diagnostics["RewardRouting/locomotion_ratio"] = locomotion_mask_t.float().mean()
+        diagnostics["RewardRouting/recovery_ratio"] = recovery_mask_t.float().mean()
 
     def get_recovery_diagnostics(self):
         """Expose the most recent pre-reset Recovery diagnostics."""
@@ -2222,7 +2221,6 @@ class G1RENetEnv(VecEnv):
             self.dedicated_recovery_joint_clamp_total.float()
             / self.dedicated_recovery_joint_sample_total.float().clamp(min=1.0)
         )
-        sample_total = self.dedicated_recovery_sample_crop_counts.sum().float().clamp(min=1.0)
         natural_success_ratio = (
             self.natural_recovery_success_total.float()
             / self.natural_recovery_attempt_total.float().clamp(min=1.0)
@@ -2248,16 +2246,11 @@ class G1RENetEnv(VecEnv):
             "RecoveryDedicated/attempt_count": dedicated_attempts.float(),
             "RecoveryDedicated/success_ratio": dedicated_success_ratio,
         }
-        for crop_index in range(8):
-            diagnostics[
-                f"DedicatedRecovery/sample_crop_{crop_index + 1:02d}_ratio"
-            ] = self.dedicated_recovery_sample_crop_counts[crop_index].float() / sample_total
         return diagnostics
 
     def _reset_recovery_buffers(self, env_ids):
         self.recovery_mask[env_ids] = False
         self.recovery_timer[env_ids] = 0
-        self.recovery_ready_counter[env_ids] = 0
         self.recovery_trigger_armed[env_ids] = True
         self.enter_recovery_buf[env_ids] = False
         self.exit_recovery_buf[env_ids] = False
@@ -2506,12 +2499,7 @@ class G1RENetEnv(VecEnv):
         )
         self.recovery_reg_reward_buf.copy_(recovery_reg_reward)
         self._update_recovery_reward_diagnostics(recovery_mask_t)
-        self._update_reward_routing_diagnostics(
-            recovery_mask_t,
-            locomotion_reward,
-            recovery_task_reward,
-            recovery_reg_reward,
-        )
+        self._update_reward_routing_diagnostics(recovery_mask_t)
         # Snapshot before true reset clears per-environment Recovery buffers.
         recovery_diagnostics = self.get_recovery_diagnostics()
 
@@ -2566,7 +2554,7 @@ class G1RENetEnv(VecEnv):
         step_log = dict(self.extras.get("log", {})) if self.reset_env_ids.numel() > 0 else {}
         step_log.update(recovery_diagnostics)
         # Reset sampling occurs after the pre-reset transition snapshot, so
-        # refresh cumulative Dedicated reset/crop/clamp counters here.
+        # refresh cumulative Dedicated reset/clamp counters here.
         step_log.update(self._get_dedicated_recovery_diagnostics())
         step_log.update(self.get_depth_noise_diagnostics())
         self.extras["log"] = step_log
@@ -2606,7 +2594,6 @@ class G1RENetEnv(VecEnv):
             # configured 20-second scene horizon both remain true resets.
             self.recovery_mask.zero_()
             self.recovery_timer.zero_()
-            self.recovery_ready_counter.zero_()
             self.recovery_trigger_armed.fill_(True)
             self.recovery_attempt_active.zero_()
             time_out_buf = self.episode_length_buf >= self.max_episode_length
@@ -2628,12 +2615,7 @@ class G1RENetEnv(VecEnv):
             torch.zeros_like(self.recovery_timer),
         )
         ready_now = self.compute_recovery_ready_now()
-        self.recovery_ready_counter, exit_recovery = self._advance_recovery_ready_counter(
-            was_recovery,
-            ready_now,
-            self.recovery_ready_counter,
-            self.recovery_ready_hold_steps,
-        )
+        exit_recovery = ready_now
         recovery_failed = self._compute_recovery_attempt_failure(
             was_recovery,
             self.recovery_timer,
@@ -2663,17 +2645,10 @@ class G1RENetEnv(VecEnv):
         completed_attempt = self.recovery_attempt_active & was_recovery & (
             exit_recovery | recovery_failed | absolute_timeout
         )
-        curriculum_success = (
-            self.recovery_torso_height_valid_buf
-            & (self.recovery_torso_height_buf >= self.recovery_curriculum_height_threshold)
-        )
-        # Preserve the existing Natural curriculum criterion. Dedicated V1
-        # has an explicit terminal success/failure outcome, so a timed-out
-        # attempt can never be counted as successful merely due to height.
-        curriculum_success = torch.where(
-            self.dedicated_recovery_env_mask,
-            exit_recovery,
-            curriculum_success,
+        curriculum_success = self._compute_recovery_curriculum_success(
+            self.recovery_torso_height_valid_buf,
+            self.recovery_torso_height_buf,
+            self.recovery_curriculum_height_threshold,
         )
         self._record_recovery_curriculum_attempts(completed_attempt, curriculum_success)
 
@@ -2699,14 +2674,12 @@ class G1RENetEnv(VecEnv):
 
         self.recovery_mask[enter_recovery] = True
         self.recovery_timer[enter_recovery] = 0
-        self.recovery_ready_counter[enter_recovery] = 0
         self.recovery_trigger_armed[enter_recovery] = False
         self.recovery_attempt_active[enter_recovery] = True
 
         natural_exit_to_locomotion = boundaries["natural_exit_to_locomotion"]
         self.recovery_mask[natural_exit_to_locomotion] = False
         self.recovery_timer[natural_exit_to_locomotion] = 0
-        self.recovery_ready_counter[natural_exit_to_locomotion] = 0
         # Deliberately keep recovery_trigger_armed=False on success. A later
         # NORMAL step with locomotion_failure=False performs the re-arm.
 

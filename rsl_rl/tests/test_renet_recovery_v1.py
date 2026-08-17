@@ -455,30 +455,21 @@ def test_action_time_reward_routing_is_mutually_exclusive_and_preserves_tensor_c
         route_rewards(raw_loco, raw_task, raw_reg, recovery_mask_t[:-1])
 
 
-def test_reward_routing_debug_metrics_report_owner_ratios_and_zero_leakage():
-    safe_mean, update_diagnostics = _load_methods(
+def test_reward_routing_debug_metrics_report_only_owner_ratios():
+    (update_diagnostics,) = _load_methods(
         ENV_PATH,
         "G1RENetEnv",
-        "_safe_masked_mean",
         "_update_reward_routing_diagnostics",
     )
-    env = SimpleNamespace(_recovery_diagnostics={}, _safe_masked_mean=safe_mean)
+    env = SimpleNamespace(_recovery_diagnostics={})
     recovery_mask_t = torch.tensor([False, True, False, True])
-    update_diagnostics(
-        env,
-        recovery_mask_t,
-        torch.tensor([1.0, 0.0, 3.0, 0.0]),
-        torch.tensor([0.0, 2.0, 0.0, 4.0]),
-        torch.tensor([0.0, -2.0, 0.0, -4.0]),
-    )
+    update_diagnostics(env, recovery_mask_t)
+    assert set(env._recovery_diagnostics) == {
+        "RewardRouting/locomotion_ratio",
+        "RewardRouting/recovery_ratio",
+    }
     assert env._recovery_diagnostics["RewardRouting/locomotion_ratio"].item() == 0.5
     assert env._recovery_diagnostics["RewardRouting/recovery_ratio"].item() == 0.5
-    for key in (
-        "RewardRouting/loco_reward_on_recovery_mean",
-        "RewardRouting/recovery_task_on_loco_mean",
-        "RewardRouting/recovery_reg_on_loco_mean",
-    ):
-        assert env._recovery_diagnostics[key].item() == 0.0
 
 
 def test_recovery_action_rate_has_no_cross_mode_boundary():
@@ -519,14 +510,16 @@ def test_task_is_raw_upright_height_product_and_invalid_height_is_zero():
     )
     env = SimpleNamespace(
         robot=SimpleNamespace(data=SimpleNamespace(projected_gravity_b=torch.tensor([[0.0, 0.0, -1.0]] * 3))),
+        cfg=SimpleNamespace(recovery=SimpleNamespace(upright_threshold=0.93)),
         recovery_task_height_threshold=1.0,
+        recovery_task_height_margin=0.4,
         recovery_upright_reward_buf=torch.zeros(3),
         recovery_height_reward_buf=torch.zeros(3),
         recovery_task_reward_buf=torch.zeros(3),
         recovery_torso_height_buf=torch.zeros(3),
         recovery_torso_height_valid_buf=torch.zeros(3, dtype=torch.bool),
         compute_local_torso_height=lambda: (
-            torch.tensor([1.0, 0.0, 1.0]),
+            torch.tensor([1.0, 0.6, 1.0]),
             torch.tensor([True, True, False]),
             torch.zeros(3),
         ),
@@ -537,6 +530,68 @@ def test_task_is_raw_upright_height_product_and_invalid_height_is_zero():
     assert torch.all((reward >= 0.0) & (reward <= 1.0))
     # No dt exists in the computation: the exact target product stays one.
     assert reward[0] == 1.0
+
+
+def test_ready_uses_only_torso_height_and_upright_while_preserving_diagnostics():
+    (compute_ready,) = _load_methods(
+        ENV_PATH,
+        "G1RENetEnv",
+        "compute_recovery_ready_now",
+    )
+    projected_gravity = torch.tensor(
+        [
+            [0.0, 0.0, -0.93],
+            [0.0, 0.0, -0.92],
+            [0.0, 0.0, -0.95],
+            [0.0, 0.0, -0.95],
+            [0.0, 0.0, -0.95],
+        ]
+    )
+    env = SimpleNamespace(
+        robot=SimpleNamespace(data=SimpleNamespace(projected_gravity_b=projected_gravity)),
+        cfg=SimpleNamespace(recovery=SimpleNamespace(upright_threshold=0.93)),
+        recovery_mask=torch.ones(5, dtype=torch.bool),
+        recovery_success_height_threshold=0.8,
+        recovery_torso_height_buf=torch.zeros(5),
+        recovery_torso_height_valid_buf=torch.zeros(5, dtype=torch.bool),
+        compute_local_torso_height=lambda: (
+            torch.tensor([0.8, 0.8, 0.79, 0.8, 0.8]),
+            torch.tensor([True, True, True, False, True]),
+            torch.zeros(5),
+        ),
+        _get_current_foot_support=lambda: (
+            torch.tensor([True, True, True, True, False]),
+            torch.zeros(5, dtype=torch.bool),
+        ),
+        # Torso clearance remains a diagnostic but is deliberately false to
+        # prove that it is no longer part of the Ready hard gate.
+        _compute_current_torso_clear=lambda: torch.zeros(5, dtype=torch.bool),
+    )
+
+    ready = compute_ready(env)
+
+    # The last row has no foot support but succeeds immediately because foot
+    # support and torso clearance are diagnostic-only.
+    assert torch.equal(ready, torch.tensor([True, False, False, False, True]))
+    assert torch.equal(
+        env.recovery_foot_support_buf,
+        torch.tensor([True, True, True, True, False]),
+    )
+    assert not torch.any(env.recovery_torso_clear_buf)
+
+
+def test_natural_and_dedicated_curriculum_share_completion_height_only():
+    (compute_success,) = _load_methods(
+        ENV_PATH,
+        "G1RENetEnv",
+        "_compute_recovery_curriculum_success",
+    )
+    successful = compute_success(
+        torch.tensor([True, True, True, False]),
+        torch.tensor([0.70, 0.69, 0.90, 0.90]),
+        0.70,
+    )
+    assert torch.equal(successful, torch.tensor([True, False, True, False]))
 
 
 def test_central_height_crop_ignores_periphery_and_nonfinite_hits():
@@ -688,21 +743,9 @@ def test_force_writer_overwrites_inactive_rows_to_prevent_stale_force():
     assert not torch.any(composer.last_force)
 
 
-def test_ready_requires_50_consecutive_steps_at_002_seconds():
-    (advance_ready,) = _load_methods(ENV_PATH, "G1RENetEnv", "_advance_recovery_ready_counter")
-    counter = torch.zeros(1, dtype=torch.long)
-    was_recovery = torch.ones(1, dtype=torch.bool)
-    ready = torch.ones(1, dtype=torch.bool)
-    for _ in range(49):
-        counter, exit_recovery = advance_ready(was_recovery, ready, counter, 50)
-    assert counter.item() == 49
-    assert not exit_recovery.item()
-    counter, exit_recovery = advance_ready(was_recovery, ready, counter, 50)
-    assert counter.item() == 50
-    assert exit_recovery.item()
-    counter, exit_recovery = advance_ready(was_recovery, torch.zeros(1, dtype=torch.bool), counter, 50)
-    assert counter.item() == 0
-    assert not exit_recovery.item()
+def test_ready_exits_recovery_on_the_current_control_step_without_hold_state():
+    source = ENV_PATH.read_text(encoding="utf-8")
+    assert "exit_recovery = ready_now" in source
 
 
 def test_recovery_advantage_weights_are_applied_once_without_renormalization():
@@ -846,7 +889,6 @@ def test_fixed_cfg_contracts_and_exact_five_reg_terms():
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             recovery_values[node.target.id] = ast.literal_eval(node.value)
     assert recovery_values["enable"] is True
-    assert recovery_values["ready_hold_s"] == 1.0
     assert recovery_values["absolute_episode_timeout_s"] == 27.0
     assert recovery_values["max_duration_s"] == 6.0
     assert recovery_values["curriculum_min_attempts"] == 1024
@@ -887,7 +929,6 @@ def test_fixed_cfg_contracts_and_exact_five_reg_terms():
     assert "amp_reward_coef = 0.3" in source
     assert "amp_task_reward_lerp = 0.7" in source
     assert "self.baseline_max_episode_length_s" in ENV_PATH.read_text(encoding="utf-8")
-    assert math.ceil(recovery_values["ready_hold_s"] / 0.02) == 50
     assert math.ceil(recovery_values["absolute_episode_timeout_s"] / 0.02) == 1350
     assert math.ceil(recovery_values["max_duration_s"] / 0.02) == 300
 

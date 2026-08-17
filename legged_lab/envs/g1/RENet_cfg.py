@@ -85,15 +85,13 @@ class RecoveryStateMachineCfg:
     enable: bool = True
     max_duration_s: float = 6.0
     absolute_episode_timeout_s: float = 27.0
-    ready_hold_s: float = 1.0
     upright_threshold: float = 0.93
-    max_ang_vel: float = 0.8
-    max_vertical_vel: float = 0.25
     torso_force_threshold: float = 1.0
     foot_force_threshold: float = 5.0
-    height_ratio: float = 0.80
+    success_height_ratio: float = 0.80
     enable_curriculum: bool = True
     task_height_ratio: float = 0.80
+    task_height_margin_ratio: float = 0.40
     curriculum_height_ratio: float = 0.70
     curriculum_success_ratio: float = 0.60
     curriculum_min_attempts: int = 1024
