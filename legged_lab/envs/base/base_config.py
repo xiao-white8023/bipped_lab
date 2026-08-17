@@ -228,6 +228,60 @@ class EventCfg:
         )
         }
     )
+    right_arm_shoulder_pitch_roll_gains = EventTerm(
+                func=mdp.randomize_actuator_gains,
+                mode="startup",
+                params={
+                    "asset_cfg": SceneEntityCfg(
+                        "robot",
+                        joint_names=[
+                            "right_shoulder_pitch_joint",
+                            "right_shoulder_roll_joint",
+                        ],
+                    ),
+                    "stiffness_distribution_params": (0.4, 1.2),
+                    "damping_distribution_params": (0.5, 1.2),
+                    "operation": "scale",
+                    "distribution": "uniform",
+                },
+            ),
+
+    right_arm_shoulder_yaw_elbow_gains = EventTerm(
+                func=mdp.randomize_actuator_gains,
+                mode="startup",
+                params={
+                    "asset_cfg": SceneEntityCfg(
+                        "robot",
+                        joint_names=[
+                            "right_shoulder_yaw_joint",
+                            "right_elbow_joint",
+                        ],
+                    ),
+                    "stiffness_distribution_params": (0.8, 1.2),
+                    "damping_distribution_params": (0.5, 1.2),
+                    "operation": "scale",
+                    "distribution": "uniform",
+                },
+            ),
+
+    right_arm_wrist_gains = EventTerm(
+                func=mdp.randomize_actuator_gains,
+                mode="startup",
+                params={
+                    "asset_cfg": SceneEntityCfg(
+                        "robot",
+                        joint_names=[
+                            "right_wrist_roll_joint",
+                            "right_wrist_pitch_joint",
+                            "right_wrist_yaw_joint",
+                        ],
+                    ),
+                    "stiffness_distribution_params": (0.8, 1.2),
+                    "damping_distribution_params": (0.5, 1.2),
+                    "operation": "scale",
+                    "distribution": "uniform",
+                },
+            ),
  
  
 @configclass

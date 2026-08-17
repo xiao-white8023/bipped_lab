@@ -234,6 +234,10 @@ class SquatStandEnv(VecEnv):
             ],
             preserve_order=True,
         )
+        self.left_arm_ids = torch.as_tensor(
+            self.left_arm_ids, device=self.device, dtype=torch.long
+        )
+
         # 右胳膊关节索引
         self.right_arm_ids, _ = self.robot.find_joints(
             name_keys=[
@@ -484,66 +488,255 @@ class SquatStandEnv(VecEnv):
         }
 
     def compute_current_observations(self):
+        """Compute one-frame actor and critic observations.
+
+        Actor observation stays deployment-friendly:
+            root angular velocity                  3
+            projected gravity                     3
+            height command                        1
+            joint position error                 29
+            joint velocity error                 29
+            previous lower-body action           15
+                                                  --
+                                                  80
+
+        Critic receives additional privileged information:
+            root linear velocity                  3
+            left/right foot contact               2
+            root height above support plane       1
+            whole-body COM in support frame       3
+            whole-body COM velocity               3
+            right-arm desired joint position      7
+            right-arm desired joint velocity      7
+
+        Therefore critic single-frame dimension is 106.
+        """
         robot = self.robot
         net_contact_forces = self.contact_sensor.data.net_forces_w_history
 
-        ang_vel = robot.data.root_ang_vel_b    # 获取根节点自身坐标系下的角速度
-        projected_gravity = robot.data.projected_gravity_b  # 获取机器人自身坐标系的重力投影
-        command = self.command_generator.command # 速度命令
-        joint_pos = robot.data.joint_pos - robot.data.default_joint_pos  # 关节的位相对默认角度的位置
-        joint_vel = robot.data.joint_vel - robot.data.default_joint_vel  # 关节速度相对于默认关节速度的速度
-        '''
-        self.action_buffer：类实例中保存的动作缓冲区实例，用于缓存智能体之前输出的动作（强化学习中，智能体通常需要参考近期的动作来做决策，保持动作的连续性）。
-        _circular_buffer：循环缓冲区（环形缓冲        # self.num_actions = self.robot.data.default_joint_pos.shape[1]  # 获取机器人的动作维度（关节数量），这是策略网络输出层的维度。
-        self.num_actions = 15  # 获取机器人的动作维度（关节数量），这是策略网络输出层的维度。 包括两条腿，一个腰部
-        
-        self.clip_actions = self.cfg.normalization.clip_actions   # 读取 “动作裁剪阈值”，限制策略网络输出的动作范围，避免动作过大导致机器人关节损坏 / 物理仿真崩溃。
-        self.clip_obs = self.cfg.normalization.clip_observations  # 读取 “观测裁剪阈值”，限制机器人观测数据的范围，避免异常值（如传感器故障、物理抖动）导致网络训练不稳定
+        # =========================================================
+        # Actor observations
+        # =========================================================
+        ang_vel = robot.data.root_ang_vel_b
+        projected_gravity = robot.data.projected_gravity_b
+        command = self.command_generator.command
 
-        self.action_scale = self.cfg.robot.action_scale  # 把策略网络输出的 “归一化动作” 映射到机器人实际能执行的控制范围；
-        self.action_buffer = DelayBuffer(
-            self.cfg.domain_rand.action_delay.params["max_delay"], self.num_envs, device=self.device
+        joint_pos = (
+            robot.data.joint_pos
+            - robot.data.default_joint_pos
         )
-        self.action_buffer.compute(
-            torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
-        )区），一种高效的缓存数据结构，当缓冲区满时，新数据会覆盖最旧的数据，无需频繁移动数据。
-        buffer[:, -1, :]：对循环缓冲区的张量进行索引：
-        第一个维度:：取所有并行环境（num_envs）。
-        第二个维度-1：取最后一个（最新的）时刻的动作（循环缓冲区保存了近期多个时刻的动作，-1表示当前时刻的前一个动作，即上一步输出的动作）。
-        第三个维度:：取动作的所有维度（形状为(num_envs, action_dim)，action_dim是动作空间维度，通常和关节数一致）。
-        整体作用：提取智能体上一步输出的最新动作，作为观测的一部分，让智能体知道自己之前做了什么动作，保持决策的连续性。
-        '''
-        action = self.action_buffer._circular_buffer.buffer[:, -1, :] # 前一帧的动作
-        '''
-        当前的ACTOR观测
-            角速度 
-            投影重力 
-            速度命令 
-            关节位置 
-            关节速度 
-            上一步的动作 
-            步态的 
-            步态相位比率，描述当前步态周期内的进度比例
-        当前的CRITIC:
-            当前的观测   根节点的自身坐标系下的线速度(3维)   脚接触力(4维)
-        '''
+        joint_vel = (
+            robot.data.joint_vel
+            - robot.data.default_joint_vel
+        )
+
+        action = (
+            self.action_buffer
+            ._circular_buffer
+            .buffer[:, -1, :]
+        )
+
         current_actor_obs = torch.cat(
             [
-                ang_vel * self.obs_scales.ang_vel,  # 3
-                projected_gravity * self.obs_scales.projected_gravity,  # 3
-                command * self.obs_scales.commands,  # 1
-                joint_pos * self.obs_scales.joint_pos,  # 29
-                joint_vel * self.obs_scales.joint_vel,  # 29
-                action * self.obs_scales.actions,  # 15
-            ], 
+                ang_vel * self.obs_scales.ang_vel,                       # 3
+                projected_gravity * self.obs_scales.projected_gravity, # 3
+                command * self.obs_scales.commands,                     # 1
+                joint_pos * self.obs_scales.joint_pos,                  # 29
+                joint_vel * self.obs_scales.joint_vel,                  # 29
+                action * self.obs_scales.actions,                       # 15
+            ],
             dim=-1,
         )
-        
-        root_lin_vel = robot.data.root_lin_vel_b # 根节点的线速度
-        feet_contact = torch.max(torch.norm(net_contact_forces[:, :, self.feet_cfg.body_ids], dim=-1), dim=1)[0] > 0.5
-        current_critic_obs = torch.cat([current_actor_obs, root_lin_vel * self.obs_scales.lin_vel, feet_contact,self.robot.data.root_pose_w[:,2]], dim=-1)
+
+        # =========================================================
+        # Critic privileged observations
+        # =========================================================
+        root_lin_vel = robot.data.root_lin_vel_b
+
+        feet_contact = (
+            torch.max(
+                torch.norm(
+                    net_contact_forces[
+                        :,
+                        :,
+                        self.feet_cfg.body_ids,
+                    ],
+                    dim=-1,
+                ),
+                dim=1,
+            )[0]
+            > 0.5
+        ).float()
+
+        # Whole-body COM position and velocity expressed in the
+        # current double-support frame.
+        com_pos_support, com_vel_support = (
+            self.get_com_state_in_support_frame()
+        )
+
+        # Root height relative to the current support plane rather than
+        # an absolute world-z coordinate.
+        support_height = (
+            self.foot_support_corners_w[..., 2]
+            .mean(dim=(1, 2))
+        )
+        root_height_support = (
+            robot.data.root_pose_w[:, 2]
+            - support_height
+        ).unsqueeze(-1)
+
+        # Give the critic the upcoming right-arm disturbance command.
+        # Keep these quantities out of the actor for now.
+        right_arm_default_q = robot.data.default_joint_pos[
+            :,
+            self.right_arm_ids,
+        ]
+        right_arm_q_des_rel = (
+            self.arm_q_des - right_arm_default_q
+        ) * self.obs_scales.joint_pos
+        right_arm_dq_des = (
+            self.arm_dq_des * self.obs_scales.joint_vel
+        )
+
+        current_critic_obs = torch.cat(
+            [
+                current_actor_obs,                         # 80
+                root_lin_vel * self.obs_scales.lin_vel,   # 3
+                feet_contact,                             # 2
+                root_height_support,                      # 1
+                com_pos_support,                          # 3
+                com_vel_support,                          # 3
+                right_arm_q_des_rel,                      # 7
+                right_arm_dq_des,                         # 7
+            ],
+            dim=-1,
+        )
+
+        if self.cfg.right_arm_motion.debug_checks:
+            assert current_actor_obs.shape[-1] == 80, (
+                f"Expected actor single-frame dim 80, got "
+                f"{current_actor_obs.shape[-1]}."
+            )
+            assert current_critic_obs.shape[-1] == 106, (
+                f"Expected critic single-frame dim 106, got "
+                f"{current_critic_obs.shape[-1]}."
+            )
+
         return current_actor_obs, current_critic_obs
-    
+
+    def get_com_state_in_support_frame(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return whole-body COM position/velocity in the support frame.
+
+        The support frame is defined from the current two foot support
+        rectangles:
+            x: average forward direction of the two feet
+            y: horizontal axis perpendicular to x
+            z: world vertical
+
+        Returns:
+            com_pos_support:
+                shape = (num_envs, 3)
+                [com_x, com_y, com_z]
+
+            com_vel_support:
+                shape = (num_envs, 3)
+                [com_vx, com_vy, com_vz]
+        """
+
+        # shape: (num_envs, 2, 4, 3)
+        foot_support_points_w = self.foot_support_corners_w
+        foot_support_xy = foot_support_points_w[..., :2]
+
+        # Each foot's front/rear center in world XY.
+        foot_front_center_xy = (
+            foot_support_xy[:, :, 0:2, :]
+            .mean(dim=2)
+        )
+        foot_rear_center_xy = (
+            foot_support_xy[:, :, 2:4, :]
+            .mean(dim=2)
+        )
+
+        # Average foot-forward direction.
+        support_x_axis_xy = (
+            foot_front_center_xy
+            - foot_rear_center_xy
+        ).mean(dim=1)
+        support_x_axis_xy = (
+            support_x_axis_xy
+            / torch.linalg.vector_norm(
+                support_x_axis_xy,
+                dim=-1,
+                keepdim=True,
+            ).clamp_min(1.0e-6)
+        )
+
+        # Horizontal lateral axis.
+        support_y_axis_xy = torch.stack(
+            [
+                -support_x_axis_xy[:, 1],
+                support_x_axis_xy[:, 0],
+            ],
+            dim=-1,
+        )
+
+        # Support origin: mean of all eight foot support points.
+        support_origin_xy = foot_support_xy.mean(dim=(1, 2))
+        support_origin_z = (
+            foot_support_points_w[..., 2]
+            .mean(dim=(1, 2))
+        )
+
+        # =========================================================
+        # COM position
+        # =========================================================
+        com_xy_relative = (
+            self.whole_body_com_pos_w[:, :2]
+            - support_origin_xy
+        )
+
+        com_x = torch.sum(
+            com_xy_relative * support_x_axis_xy,
+            dim=-1,
+        )
+        com_y = torch.sum(
+            com_xy_relative * support_y_axis_xy,
+            dim=-1,
+        )
+        com_z = (
+            self.whole_body_com_pos_w[:, 2]
+            - support_origin_z
+        )
+
+        com_pos_support = torch.stack(
+            [com_x, com_y, com_z],
+            dim=-1,
+        )
+
+        # =========================================================
+        # COM velocity
+        # =========================================================
+        com_vel_xy_w = self.whole_body_com_vel_w[:, :2]
+
+        com_vx = torch.sum(
+            com_vel_xy_w * support_x_axis_xy,
+            dim=-1,
+        )
+        com_vy = torch.sum(
+            com_vel_xy_w * support_y_axis_xy,
+            dim=-1,
+        )
+        com_vz = self.whole_body_com_vel_w[:, 2]
+
+        com_vel_support = torch.stack(
+            [com_vx, com_vy, com_vz],
+            dim=-1,
+        )
+
+        return com_pos_support, com_vel_support
+
     def obs_noisy_vec_and_buffer(self):
         if self.add_noise:
             current_actor_obs, _ = self.compute_current_observations()
@@ -551,59 +744,79 @@ class SquatStandEnv(VecEnv):
             noise_obs_vec = torch.zeros_like(current_actor_obs[0])
 
             num_joints = self.robot.data.default_joint_pos.shape[1]  # 29
-            num_actions = self.num_actions                          # 15
+            num_actions = self.num_actions                           # 15
 
             idx = 0
 
             # ang_vel: 3
-            noise_obs_vec[idx:idx + 3] = self.obs_scales.ang_vel * self.noisy.ang_vel
+            noise_obs_vec[idx:idx + 3] = (
+                self.obs_scales.ang_vel
+                * self.noisy.ang_vel
+            )
             idx += 3
 
             # projected_gravity: 3
-            noise_obs_vec[idx:idx + 3] = self.obs_scales.projected_gravity * self.noisy.projected_gravity
+            noise_obs_vec[idx:idx + 3] = (
+                self.obs_scales.projected_gravity
+                * self.noisy.projected_gravity
+            )
             idx += 3
 
-            # height command: 1，不加噪声
+            # height command: 1, no noise
             noise_obs_vec[idx:idx + 1] = 0.0
             idx += 1
 
             # joint_pos: 29
-            noise_obs_vec[idx:idx + num_joints] = self.obs_scales.joint_pos * self.noisy.joint_pos
+            noise_obs_vec[idx:idx + num_joints] = (
+                self.obs_scales.joint_pos
+                * self.noisy.joint_pos
+            )
             idx += num_joints
 
             # joint_vel: 29
-            noise_obs_vec[idx:idx + num_joints] = self.obs_scales.joint_vel * self.noisy.joint_vel
+            noise_obs_vec[idx:idx + num_joints] = (
+                self.obs_scales.joint_vel
+                * self.noisy.joint_vel
+            )
             idx += num_joints
 
-            # last_action: 15，不加噪声
+            # last_action: 15, no noise
             noise_obs_vec[idx:idx + num_actions] = 0.0
             idx += num_actions
 
-            # root_height: 1，先不加噪声
-            noise_obs_vec[idx:idx + 1] = 0.0
-            idx += 1
+            if idx != current_actor_obs.shape[-1]:
+                raise RuntimeError(
+                    "Actor observation/noise dimension mismatch: "
+                    f"noise layout={idx}, "
+                    f"actor dim={current_actor_obs.shape[-1]}."
+                )
 
             self.noise_obs_vec = noise_obs_vec
-            
+
             if self.cfg.scene.height_scanner.enable_height_scan:
                 height_scan = (
-                        self.height_scanner.data.pos_w[:, 2].unsqueeze(1)
-                        - self.height_scanner.data.ray_hits_w[..., 2]
-                        - self.cfg.normalization.height_scan_offset
-                    )
+                    self.height_scanner.data.pos_w[:, 2].unsqueeze(1)
+                    - self.height_scanner.data.ray_hits_w[..., 2]
+                    - self.cfg.normalization.height_scan_offset
+                )
                 height_scan_noise_vec = torch.zeros_like(height_scan[0])
-                height_scan_noise_vec[:] = self.noisy.height_scan * self.obs_scales.height_scan
+                height_scan_noise_vec[:] = (
+                    self.noisy.height_scan
+                    * self.obs_scales.height_scan
+                )
                 self.height_scan_noise_vec = height_scan_noise_vec
-            
-            # 定义actor缓存区 存入单帧观测数据后，self.actor_obs_buffer 的核心存储张量（buffer）是一个 3 维张量，维度为 [num_envs, max_len, single_actor_obs_dim]
+
         self.actor_obs_buffer = CircularBuffer(
-                max_len=self.cfg.robot.actor_obs_history_length, batch_size=self.num_envs, device=self.device
-            )
-            # 定义critic缓存区
+            max_len=self.cfg.robot.actor_obs_history_length,
+            batch_size=self.num_envs,
+            device=self.device,
+        )
         self.critic_obs_buffer = CircularBuffer(
-                max_len=self.cfg.robot.critic_obs_history_length, batch_size=self.num_envs, device=self.device
-            )
-    
+            max_len=self.cfg.robot.critic_obs_history_length,
+            batch_size=self.num_envs,
+            device=self.device,
+        )
+
     def compute_observations(self):
         current_actor_obs, current_critic_obs = self.compute_current_observations()
         '''
@@ -686,39 +899,103 @@ class SquatStandEnv(VecEnv):
         self.whole_body_com_vel_w[env_ids] = current_com_vel_w
     def step(self, actions: torch.Tensor):
         delayed_actions = self.action_buffer.compute(actions)
-        self.action = torch.clip(delayed_actions, -self.clip_actions, self.clip_actions).to(self.device)
+        self.action = torch.clip(
+            delayed_actions,
+            -self.clip_actions,
+            self.clip_actions,
+        ).to(self.device)
 
-        
+        # RL controls only 15 joints: two legs + waist.
         processed_actions = (
             self.action * self.action_scale
-            + self.robot.data.default_joint_pos[:, self.control_joint_ids]
+            + self.robot.data.default_joint_pos[
+                :,
+                self.control_joint_ids,
+            ]
         )
+
+        # Right-arm planner runs once per RL/control step.
         self.update_right_arm_motion()
 
+        # Keep the left arm explicitly fixed at the nominal pose so the
+        # right arm remains the only arm-side disturbance in this stage.
+        left_arm_q_des = self.robot.data.default_joint_pos[
+            :,
+            self.left_arm_ids,
+        ]
+        left_arm_dq_des = torch.zeros_like(left_arm_q_des)
+
         self.avg_feet_force_per_step = torch.zeros(
-            self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
+            self.num_envs,
+            len(self.feet_cfg.body_ids),
+            dtype=torch.float,
+            device=self.device,
+            requires_grad=False,
         )
         self.avg_feet_speed_per_step = torch.zeros(
-            self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
+            self.num_envs,
+            len(self.feet_cfg.body_ids),
+            dtype=torch.float,
+            device=self.device,
+            requires_grad=False,
         )
+
         for _ in range(self.cfg.sim.decimation):
             self.sim_step_counter += 1
-            self.robot.set_joint_position_target(processed_actions,joint_ids=self.control_joint_ids,)
+
+            # -----------------------------------------------------
+            # Legs + waist: lower-body policy
+            # -----------------------------------------------------
+            self.robot.set_joint_position_target(
+                processed_actions,
+                joint_ids=self.control_joint_ids,
+            )
+
+            # -----------------------------------------------------
+            # Left arm: fixed nominal pose
+            # -----------------------------------------------------
+            self.robot.set_joint_position_target(
+                left_arm_q_des,
+                joint_ids=self.left_arm_ids,
+            )
+            self.robot.set_joint_velocity_target(
+                left_arm_dq_des,
+                joint_ids=self.left_arm_ids,
+            )
+
+            # -----------------------------------------------------
+            # Right arm: procedural dynamic trajectory
+            # -----------------------------------------------------
             if self.cfg.right_arm_motion.enable:
                 self.robot.set_joint_position_target(
-                    self.arm_q_des, joint_ids=self.right_arm_ids
+                    self.arm_q_des,
+                    joint_ids=self.right_arm_ids,
                 )
                 self.robot.set_joint_velocity_target(
-                    self.arm_dq_des, joint_ids=self.right_arm_ids
+                    self.arm_dq_des,
+                    joint_ids=self.right_arm_ids,
                 )
+
             self.scene.write_data_to_sim()
             self.sim.step(render=False)
             self.scene.update(dt=self.physics_dt)
 
             self.avg_feet_force_per_step += torch.norm(
-                self.contact_sensor.data.net_forces_w[:, self.feet_cfg.body_ids, :3], dim=-1
+                self.contact_sensor.data.net_forces_w[
+                    :,
+                    self.feet_cfg.body_ids,
+                    :3,
+                ],
+                dim=-1,
             )
-            self.avg_feet_speed_per_step += torch.norm(self.robot.data.body_lin_vel_w[:, self.ankle_link_ids, :], dim=-1)
+            self.avg_feet_speed_per_step += torch.norm(
+                self.robot.data.body_lin_vel_w[
+                    :,
+                    self.ankle_link_ids,
+                    :,
+                ],
+                dim=-1,
+            )
 
         self.avg_feet_force_per_step /= self.cfg.sim.decimation
         self.avg_feet_speed_per_step /= self.cfg.sim.decimation
@@ -728,34 +1005,55 @@ class SquatStandEnv(VecEnv):
 
         self.episode_length_buf += 1
 
-
         self.command_generator.compute(self.step_dt)
+
         if "interval" in self.event_manager.available_modes:
-            self.event_manager.apply(mode="interval", dt=self.step_dt)
+            self.event_manager.apply(
+                mode="interval",
+                dt=self.step_dt,
+            )
 
         self.reset_buf, self.time_out_buf = self.check_reset()
-        # 物理状态已经更新，此时计算世界坐标
-        self.foot_support_corners_w = (
-            self.get_foot_support_corners_w()
-        )
+
+        # =========================================================
+        # Refresh support geometry and COM state BEFORE rewards and
+        # observations consume them.
+        # =========================================================
+        current_corners_w = self.get_foot_support_corners_w()
+        self.foot_support_corners_w.copy_(current_corners_w)
+
         current_com_pos_w, current_com_vel_w = (
             self.get_whole_body_com_state_w()
         )
-
         self.whole_body_com_pos_w.copy_(current_com_pos_w)
         self.whole_body_com_vel_w.copy_(current_com_vel_w)
 
-
         right_arm_statistics = self._get_right_arm_statistics()
+
         reward_buf = self.reward_manager.compute(self.step_dt)
-        self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+
+        self.reset_env_ids = (
+            self.reset_buf
+            .nonzero(as_tuple=False)
+            .flatten()
+        )
         self.reset(self.reset_env_ids)
-        self.extras.setdefault("log", {}).update(right_arm_statistics)
+
+        self.extras.setdefault("log", {}).update(
+            right_arm_statistics
+        )
 
         actor_obs, critic_obs = self.compute_observations()
-        
+
+        self.extras.setdefault("observations", {})
         self.extras["observations"]["critic"] = critic_obs
-        return actor_obs, reward_buf, self.reset_buf, self.extras
+
+        return (
+            actor_obs,
+            reward_buf,
+            self.reset_buf,
+            self.extras,
+        )
 
     def check_reset(self):
         net_contact_forces = self.contact_sensor.data.net_forces_w_history
@@ -952,15 +1250,12 @@ class SquatStandEnv(VecEnv):
 
     def get_observations(self):
         actor_obs, critic_obs = self.compute_observations()
-        # 核心修复：确保 extras 中存在 "observations" 这个嵌套字典
-        if "observations" not in self.extras:
-            self.extras["observations"] = {}
 
-            critic_obs = torch.cat([critic_obs], dim=-1)
-            
+        self.extras.setdefault("observations", {})
         self.extras["observations"]["critic"] = critic_obs
+
         return actor_obs, self.extras
-    
+
     @staticmethod
     def seed(seed: int = -1) -> int:
         try:

@@ -147,13 +147,13 @@ class RightArmMotionCfg:
     """Dynamic right-arm trajectory settings for the squat-stand task."""
 
     enable: bool = True
-    range_fraction: float = 0.6
+    range_fraction: float = 0.6 # 关节位置[-0.6 0.6]之间随机
     # shoulder_pitch, shoulder_roll, shoulder_yaw, elbow,
     # wrist_roll, wrist_pitch, wrist_yaw
-    max_vel: list[float] = [0.25] * 7
-    speed_scale_range: tuple[float, float] = (0.4, 1.0)
+    max_vel: list[float] = [0.25] * 7 # 表示七个右臂关节各自的最大规划速度
+    speed_scale_range: tuple[float, float] = (0.4, 1.0) # 手臂这条轨迹最多允许有多快 0.10 ~ 0.25 rad/s
     hold_time_range: tuple[float, float] = (0.2, 1.0)
-    min_duration: float = 0.5
+    min_duration: float = 0.5 # 至少停0.5秒
     debug_checks: bool = False
 
 
@@ -262,6 +262,60 @@ class SaquatStandENVCFG:
                         "pitch": (-0, 0),
                         "yaw": (-0, 0),
                     },
+                },
+            ),
+            right_arm_shoulder_pitch_roll_gains = EventTerm(
+                func=mdp.randomize_actuator_gains,
+                mode="startup",
+                params={
+                    "asset_cfg": SceneEntityCfg(
+                        "robot",
+                        joint_names=[
+                            "right_shoulder_pitch_joint",
+                            "right_shoulder_roll_joint",
+                        ],
+                    ),
+                    "stiffness_distribution_params": (0.4, 1.2),
+                    "damping_distribution_params": (0.5, 1.2),
+                    "operation": "scale",
+                    "distribution": "uniform",
+                },
+            ),
+
+            right_arm_shoulder_yaw_elbow_gains = EventTerm(
+                func=mdp.randomize_actuator_gains,
+                mode="startup",
+                params={
+                    "asset_cfg": SceneEntityCfg(
+                        "robot",
+                        joint_names=[
+                            "right_shoulder_yaw_joint",
+                            "right_elbow_joint",
+                        ],
+                    ),
+                    "stiffness_distribution_params": (0.8, 1.2),
+                    "damping_distribution_params": (0.5, 1.2),
+                    "operation": "scale",
+                    "distribution": "uniform",
+                },
+            ),
+
+            right_arm_wrist_gains = EventTerm(
+                func=mdp.randomize_actuator_gains,
+                mode="startup",
+                params={
+                    "asset_cfg": SceneEntityCfg(
+                        "robot",
+                        joint_names=[
+                            "right_wrist_roll_joint",
+                            "right_wrist_pitch_joint",
+                            "right_wrist_yaw_joint",
+                        ],
+                    ),
+                    "stiffness_distribution_params": (0.8, 1.2),
+                    "damping_distribution_params": (0.5, 1.2),
+                    "operation": "scale",
+                    "distribution": "uniform",
                 },
             ),
             # reset_robot_joints=EventTerm(
