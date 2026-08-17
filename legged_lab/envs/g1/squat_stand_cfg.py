@@ -142,8 +142,19 @@ class Reward:
     )
 
 
+@configclass
+class RightArmMotionCfg:
+    """Dynamic right-arm trajectory settings for the squat-stand task."""
 
-
+    enable: bool = True
+    range_fraction: float = 0.6
+    # shoulder_pitch, shoulder_roll, shoulder_yaw, elbow,
+    # wrist_roll, wrist_pitch, wrist_yaw
+    max_vel: list[float] = [0.25] * 7
+    speed_scale_range: tuple[float, float] = (0.4, 1.0)
+    hold_time_range: tuple[float, float] = (0.2, 1.0)
+    min_duration: float = 0.5
+    debug_checks: bool = False
 
 
 @configclass
@@ -214,6 +225,8 @@ class SaquatStandENVCFG:
         ),
     )
 
+    right_arm_motion: RightArmMotionCfg = RightArmMotionCfg()
+
     domain_rand: DomainRandCfg = DomainRandCfg(
         events=EventCfg(
             physics_material=EventTerm(
@@ -242,12 +255,12 @@ class SaquatStandENVCFG:
                 params={
                     "pose_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5), "yaw": (-3.14, 3.14)},
                     "velocity_range": {
-                        "x": (-0.5, 0.5),
-                        "y": (-0.5, 0.5),
-                        "z": (-0.5, 0.5),
-                        "roll": (-0.5, 0.5),
-                        "pitch": (-0.5, 0.5),
-                        "yaw": (-0.5, 0.5),
+                        "x": (-0, 0),
+                        "y": (-0, 0),
+                        "z": (-0, 0),
+                        "roll": (-0, 0),
+                        "pitch": (-0, 0),
+                        "yaw": (-0, 0),
                     },
                 },
             ),
@@ -267,29 +280,10 @@ class SaquatStandENVCFG:
             #     params={"velocity_range": {"x": (-0.5, 1.0), "y": (-0.5, 1.0)}},
             # ),  
 
-            reset_arm_pose_and_hold=EventTerm(
-            func=mdp.reset_arm_pose_and_hold,
-            mode="reset",
-            params={        
-                "position_ranges": {
-                            "right_shoulder_pitch_joint": (-0.75, 0.8),
-                            "right_shoulder_roll_joint": (-0.78, 0.22),
-                            "right_shoulder_yaw_joint":(-1,1),
-                            "right_elbow_joint": (-0.23, 1.57),
-                },
-                "asset_cfg": SceneEntityCfg(
-                            "robot",
-                            joint_names=[
-                                "right_shoulder_pitch_joint",
-                                "right_shoulder_roll_joint",
-                                "right_shoulder_yaw_joint",
-                                "right_elbow_joint",
-                            ],
-                            preserve_order=True,
-            )
-            }
-        )
-    ),
+            # The shared EventCfg enables the legacy static arm hold by
+            # default. Disable it only for g1_squart; other tasks are unchanged.
+            reset_arm_pose_and_hold=None,
+        ),
         action_delay=ActionDelayCfg(enable=False, params={"max_delay": 5, "min_delay": 0}),
     )
     sim: SimCfg = SimCfg(dt=0.005, decimation=4, physx=PhysxCfg(  

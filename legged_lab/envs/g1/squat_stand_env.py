@@ -247,6 +247,37 @@ class SquatStandEnv(VecEnv):
             ],
             preserve_order=True,
         )
+        self.right_arm_ids = torch.as_tensor(
+            self.right_arm_ids, device=self.device, dtype=torch.long
+        )
+        self.num_right_arm_joints = len(self.right_arm_ids)
+        arm_buffer_shape = (self.num_envs, self.num_right_arm_joints)
+        self.arm_motion_start_q = torch.zeros(
+            arm_buffer_shape, dtype=torch.float, device=self.device
+        )
+        self.arm_motion_target_q = torch.zeros(
+            arm_buffer_shape, dtype=torch.float, device=self.device
+        )
+        self.arm_q_des = torch.zeros(
+            arm_buffer_shape, dtype=torch.float, device=self.device
+        )
+        self.arm_dq_des = torch.zeros(
+            arm_buffer_shape, dtype=torch.float, device=self.device
+        )
+        self.arm_motion_elapsed = torch.zeros(
+            self.num_envs, dtype=torch.float, device=self.device
+        )
+        self.arm_motion_duration = torch.zeros(
+            self.num_envs, dtype=torch.float, device=self.device
+        )
+        self.arm_motion_hold_duration = torch.zeros(
+            self.num_envs, dtype=torch.float, device=self.device
+        )
+        self._right_arm_max_vel = torch.tensor(
+            self.cfg.right_arm_motion.max_vel,
+            dtype=torch.float,
+            device=self.device,
+        )
         # 腰部关节索引
         self.waist_ids, _ = self.robot.find_joints(
             name_keys=[
@@ -269,6 +300,7 @@ class SquatStandEnv(VecEnv):
 
         # self.num_actions = self.robot.data.default_joint_pos.shape[1]  # 获取机器人的动作维度（关节数量），这是策略网络输出层的维度。
         self.num_actions = len(self.control_joint_ids)  # 获取机器人的动作维度（关节数量），这是策略网络输出层的维度。 包括两条腿，一个腰部
+        self._validate_right_arm_motion_setup()
         
         self.clip_actions = self.cfg.normalization.clip_actions   # 读取 “动作裁剪阈值”，限制策略网络输出的动作范围，避免动作过大导致机器人关节损坏 / 物理仿真崩溃。
         self.clip_obs = self.cfg.normalization.clip_observations  # 读取 “观测裁剪阈值”，限制机器人观测数据的范围，避免异常值（如传感器故障、物理抖动）导致网络训练不稳定
@@ -296,6 +328,160 @@ class SquatStandEnv(VecEnv):
             self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
         )
         self.obs_noisy_vec_and_buffer()
+
+    def _validate_right_arm_motion_setup(self):
+        """Validate task-local action partitioning and trajectory settings."""
+        if self.num_actions != 15:
+            raise RuntimeError(
+                f"g1_squart policy must control exactly 15 joints, got {self.num_actions}."
+            )
+        if self.num_right_arm_joints != 7:
+            raise RuntimeError(
+                "g1_squart dynamic right arm requires exactly 7 joints, "
+                f"got {self.num_right_arm_joints}."
+            )
+        if torch.isin(self.control_joint_ids, self.right_arm_ids).any().item():
+            raise RuntimeError(
+                "g1_squart control_joint_ids and right_arm_ids must not overlap."
+            )
+
+        arm_cfg = self.cfg.right_arm_motion
+        if self._right_arm_max_vel.shape != (self.num_right_arm_joints,):
+            raise ValueError(
+                "right_arm_motion.max_vel must contain one value for each of "
+                f"the 7 right-arm joints, got {len(arm_cfg.max_vel)}."
+            )
+        if not torch.all(self._right_arm_max_vel > 0.0).item():
+            raise ValueError("right_arm_motion.max_vel values must be positive.")
+        if not 0.0 <= arm_cfg.range_fraction <= 1.0:
+            raise ValueError("right_arm_motion.range_fraction must be in [0, 1].")
+
+        speed_lower, speed_upper = arm_cfg.speed_scale_range
+        if speed_lower <= 0.0 or speed_lower > speed_upper:
+            raise ValueError(
+                "right_arm_motion.speed_scale_range must be positive and ordered."
+            )
+        hold_lower, hold_upper = arm_cfg.hold_time_range
+        if hold_lower < 0.0 or hold_lower > hold_upper:
+            raise ValueError(
+                "right_arm_motion.hold_time_range must be non-negative and ordered."
+            )
+        if arm_cfg.min_duration <= 0.0:
+            raise ValueError("right_arm_motion.min_duration must be positive.")
+
+    def sample_new_right_arm_motion(self, env_ids: torch.Tensor):
+        """Sample independent, velocity-limited right-arm motions for env_ids."""
+        if env_ids.numel() == 0:
+            return
+        if not self.cfg.right_arm_motion.enable:
+            return
+
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        current_q = self.robot.data.joint_pos[env_ids[:, None], self.right_arm_ids]
+        default_q = self.robot.data.default_joint_pos[
+            env_ids[:, None], self.right_arm_ids
+        ]
+        soft_limits = self.robot.data.soft_joint_pos_limits[
+            env_ids[:, None], self.right_arm_ids
+        ]
+
+        fraction = self.cfg.right_arm_motion.range_fraction
+        sample_lower = default_q + fraction * (soft_limits[..., 0] - default_q)
+        sample_upper = default_q + fraction * (soft_limits[..., 1] - default_q)
+        random_values = torch.rand(
+            (env_ids.numel(), self.num_right_arm_joints),
+            dtype=torch.float,
+            device=self.device,
+        )
+        target_q = sample_lower + random_values * (sample_upper - sample_lower)
+
+        speed_lower, speed_upper = self.cfg.right_arm_motion.speed_scale_range
+        speed_scale = speed_lower + torch.rand(
+            (env_ids.numel(), 1), dtype=torch.float, device=self.device
+        ) * (speed_upper - speed_lower)
+        effective_max_vel = self._right_arm_max_vel.unsqueeze(0) * speed_scale
+
+        delta_q = torch.abs(target_q - current_q)
+        required_duration_per_joint = 1.875 * delta_q / effective_max_vel
+        duration = required_duration_per_joint.max(dim=1).values.clamp_min(
+            self.cfg.right_arm_motion.min_duration
+        )
+
+        hold_lower, hold_upper = self.cfg.right_arm_motion.hold_time_range
+        hold_duration = hold_lower + torch.rand(
+            env_ids.numel(), dtype=torch.float, device=self.device
+        ) * (hold_upper - hold_lower)
+
+        self.arm_motion_start_q[env_ids] = current_q
+        self.arm_motion_target_q[env_ids] = target_q
+        self.arm_q_des[env_ids] = current_q
+        self.arm_dq_des[env_ids] = 0.0
+        self.arm_motion_elapsed[env_ids] = 0.0
+        self.arm_motion_duration[env_ids] = duration
+        self.arm_motion_hold_duration[env_ids] = hold_duration
+
+        if self.cfg.right_arm_motion.debug_checks:
+            peak_velocity = 1.875 * delta_q / duration.unsqueeze(1)
+            tolerance = 1.0e-6
+            assert torch.all(peak_velocity <= effective_max_vel + tolerance), (
+                "Minimum-jerk right-arm duration violates configured max velocity."
+            )
+
+    def update_right_arm_motion(self):
+        """Advance right-arm minimum-jerk commands at the RL control rate."""
+        if not self.cfg.right_arm_motion.enable:
+            return
+
+        finished = self.arm_motion_elapsed >= (
+            self.arm_motion_duration + self.arm_motion_hold_duration
+        )
+        finished_env_ids = finished.nonzero(as_tuple=False).flatten()
+        self.sample_new_right_arm_motion(finished_env_ids)
+
+        moving = self.arm_motion_elapsed < self.arm_motion_duration
+        duration = self.arm_motion_duration.clamp_min(
+            self.cfg.right_arm_motion.min_duration
+        )
+        u = torch.clamp(self.arm_motion_elapsed / duration, 0.0, 1.0)
+        u2 = u * u
+        u3 = u2 * u
+        u4 = u3 * u
+        u5 = u4 * u
+        s = 10.0 * u3 - 15.0 * u4 + 6.0 * u5
+        ds_du = 30.0 * u2 - 60.0 * u3 + 30.0 * u4
+        delta_q = self.arm_motion_target_q - self.arm_motion_start_q
+        moving_q_des = self.arm_motion_start_q + s.unsqueeze(1) * delta_q
+        moving_dq_des = ds_du.unsqueeze(1) * delta_q / duration.unsqueeze(1)
+
+        self.arm_q_des.copy_(
+            torch.where(moving.unsqueeze(1), moving_q_des, self.arm_motion_target_q)
+        )
+        self.arm_dq_des.copy_(
+            torch.where(
+                moving.unsqueeze(1),
+                moving_dq_des,
+                torch.zeros_like(moving_dq_des),
+            )
+        )
+        self.arm_motion_elapsed.add_(self.step_dt)
+
+        if self.cfg.right_arm_motion.debug_checks:
+            assert torch.isfinite(self.arm_q_des).all(), (
+                "arm_q_des contains NaN or Inf."
+            )
+            assert torch.isfinite(self.arm_dq_des).all(), (
+                "arm_dq_des contains NaN or Inf."
+            )
+
+    def _get_right_arm_statistics(self) -> dict[str, torch.Tensor]:
+        """Compute lightweight step statistics without changing rewards."""
+        actual_qd = self.robot.data.joint_vel[:, self.right_arm_ids]
+        return {
+            "right_arm/mean_abs_qd": actual_qd.abs().mean(),
+            "right_arm/max_abs_qd": actual_qd.abs().max(),
+            "right_arm/mean_command_qd": self.arm_dq_des.abs().mean(),
+            "right_arm/max_command_qd": self.arm_dq_des.abs().max(),
+        }
 
     def compute_current_observations(self):
         robot = self.robot
@@ -355,7 +541,7 @@ class SquatStandEnv(VecEnv):
         
         root_lin_vel = robot.data.root_lin_vel_b # 根节点的线速度
         feet_contact = torch.max(torch.norm(net_contact_forces[:, :, self.feet_cfg.body_ids], dim=-1), dim=1)[0] > 0.5
-        current_critic_obs = torch.cat([current_actor_obs, root_lin_vel * self.obs_scales.lin_vel, feet_contact,robot.data.root_pose_w[:,2]], dim=-1)
+        current_critic_obs = torch.cat([current_actor_obs, root_lin_vel * self.obs_scales.lin_vel, feet_contact,self.robot.data.root_pose_w[:,2]], dim=-1)
         return current_actor_obs, current_critic_obs
     
     def obs_noisy_vec_and_buffer(self):
@@ -482,6 +668,7 @@ class SquatStandEnv(VecEnv):
 
         self.scene.write_data_to_sim()
         self.sim.forward()
+        self.sample_new_right_arm_motion(env_ids)
         current_corners_w = self.get_foot_support_corners_w()
         self.foot_support_corners_w[env_ids] = current_corners_w[env_ids]
         
@@ -506,6 +693,7 @@ class SquatStandEnv(VecEnv):
             self.action * self.action_scale
             + self.robot.data.default_joint_pos[:, self.control_joint_ids]
         )
+        self.update_right_arm_motion()
 
         self.avg_feet_force_per_step = torch.zeros(
             self.num_envs, len(self.feet_cfg.body_ids), dtype=torch.float, device=self.device, requires_grad=False
@@ -516,6 +704,13 @@ class SquatStandEnv(VecEnv):
         for _ in range(self.cfg.sim.decimation):
             self.sim_step_counter += 1
             self.robot.set_joint_position_target(processed_actions,joint_ids=self.control_joint_ids,)
+            if self.cfg.right_arm_motion.enable:
+                self.robot.set_joint_position_target(
+                    self.arm_q_des, joint_ids=self.right_arm_ids
+                )
+                self.robot.set_joint_velocity_target(
+                    self.arm_dq_des, joint_ids=self.right_arm_ids
+                )
             self.scene.write_data_to_sim()
             self.sim.step(render=False)
             self.scene.update(dt=self.physics_dt)
@@ -551,9 +746,11 @@ class SquatStandEnv(VecEnv):
         self.whole_body_com_vel_w.copy_(current_com_vel_w)
 
 
+        right_arm_statistics = self._get_right_arm_statistics()
         reward_buf = self.reward_manager.compute(self.step_dt)
         self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         self.reset(self.reset_env_ids)
+        self.extras.setdefault("log", {}).update(right_arm_statistics)
 
         actor_obs, critic_obs = self.compute_observations()
         
