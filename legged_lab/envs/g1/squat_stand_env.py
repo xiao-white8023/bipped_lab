@@ -161,7 +161,13 @@ class SquatStandEnv(VecEnv):
             dtype=torch.float,
             device=self.device,
         )
-        
+
+        self.whole_body_com_vel_w = torch.zeros(
+            self.num_envs,
+            3,
+            dtype=torch.float,
+            device=self.device,
+        )
         # 连杆坐标系下的脚的4个角点
         self.foot_support_corners_b = torch.tensor(
             [
@@ -343,14 +349,13 @@ class SquatStandEnv(VecEnv):
                 joint_pos * self.obs_scales.joint_pos,  # 29
                 joint_vel * self.obs_scales.joint_vel,  # 29
                 action * self.obs_scales.actions,  # 15
-                robot.data.root_pos_w[:, 2].unsqueeze(-1) # 1
             ], 
             dim=-1,
         )
         
         root_lin_vel = robot.data.root_lin_vel_b # 根节点的线速度
         feet_contact = torch.max(torch.norm(net_contact_forces[:, :, self.feet_cfg.body_ids], dim=-1), dim=1)[0] > 0.5
-        current_critic_obs = torch.cat([current_actor_obs, root_lin_vel * self.obs_scales.lin_vel, feet_contact], dim=-1)
+        current_critic_obs = torch.cat([current_actor_obs, root_lin_vel * self.obs_scales.lin_vel, feet_contact,robot.data.root_pose_w[:,2]], dim=-1)
         return current_actor_obs, current_critic_obs
     
     def obs_noisy_vec_and_buffer(self):
@@ -480,11 +485,18 @@ class SquatStandEnv(VecEnv):
         current_corners_w = self.get_foot_support_corners_w()
         self.foot_support_corners_w[env_ids] = current_corners_w[env_ids]
         
-        # 计算 reset 后整机质心
-        current_com_w = self.get_whole_body_com_pos_w(
-            env_ids=env_ids,
+        # 如果 reset event 会随机质量，这一步非常重要：
+        # 重新读取当前 PhysX 中的实际刚体质量
+        self.update_body_mass_cache(env_ids)
+
+        current_com_pos_w, current_com_vel_w = (
+            self.get_whole_body_com_state_w(
+                env_ids=env_ids,
+            )
         )
-        self.whole_body_com_pos_w[env_ids] = current_com_w
+
+        self.whole_body_com_pos_w[env_ids] = current_com_pos_w
+        self.whole_body_com_vel_w[env_ids] = current_com_vel_w
     def step(self, actions: torch.Tensor):
         delayed_actions = self.action_buffer.compute(actions)
         self.action = torch.clip(delayed_actions, -self.clip_actions, self.clip_actions).to(self.device)
@@ -531,9 +543,13 @@ class SquatStandEnv(VecEnv):
         self.foot_support_corners_w = (
             self.get_foot_support_corners_w()
         )
-        self.whole_body_com_pos_w = (
-            self.get_whole_body_com_pos_w()
+        current_com_pos_w, current_com_vel_w = (
+            self.get_whole_body_com_state_w()
         )
+
+        self.whole_body_com_pos_w.copy_(current_com_pos_w)
+        self.whole_body_com_vel_w.copy_(current_com_vel_w)
+
 
         reward_buf = self.reward_manager.compute(self.step_dt)
         self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
@@ -659,59 +675,83 @@ class SquatStandEnv(VecEnv):
             dim=1,
             keepdim=True,
         ).clamp_min(1.0e-6)
-    def get_whole_body_com_pos_w(
+    def get_whole_body_com_state_w(
         self,
         env_ids: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """计算整台机器人质心在世界坐标系中的位置。
-
-        Args:
-            env_ids:
-                None 时计算所有环境；
-                否则只计算指定环境。
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """计算整机质心的位置和线速度（世界坐标系）。
 
         Returns:
             whole_body_com_pos_w:
-                env_ids is None:
-                    shape = (num_envs, 3)
+                shape = (N, 3)
 
-                env_ids is not None:
-                    shape = (len(env_ids), 3)
+            whole_body_com_vel_w:
+                shape = (N, 3)
+
+            N = num_envs，当 env_ids is None
+            N = len(env_ids)，当指定 env_ids
         """
 
-        # 每个刚体自身质心的世界坐标
+        # ---------------------------------------------------------
+        # 1. 每个刚体自身质心的位置
         # shape: (num_envs, num_bodies, 3)
+        # ---------------------------------------------------------
         body_com_pos_w = self.robot.data.body_com_pos_w
 
-        if env_ids is None:
-            body_masses = self.body_masses
-        else:
+        # ---------------------------------------------------------
+        # 2. 每个刚体自身质心的线速度
+        #
+        # body_com_vel_w:
+        # shape = (num_envs, num_bodies, 6)
+        #
+        # [:, :, :3] 为线速度 xyz
+        # ---------------------------------------------------------
+        body_com_lin_vel_w = self.robot.data.body_com_vel_w[..., :3]
+
+        # ---------------------------------------------------------
+        # 3. 质量
+        # shape: (num_envs, num_bodies)
+        # ---------------------------------------------------------
+        body_masses = self.body_masses
+
+        # ---------------------------------------------------------
+        # 4. 如果只计算部分环境，则全部一起索引
+        # ---------------------------------------------------------
+        if env_ids is not None:
             body_com_pos_w = body_com_pos_w[env_ids]
-            body_masses = self.body_masses[env_ids]
+            body_com_lin_vel_w = body_com_lin_vel_w[env_ids]
+            body_masses = body_masses[env_ids]
 
-        # shape:
-        # body_masses.unsqueeze(-1)
-        # = (num_envs, num_bodies, 1)
-        weighted_body_com = (
-            body_com_pos_w
-            * body_masses.unsqueeze(-1)
-        )
-
-        # 所有刚体的一阶质量矩
-        # shape: (num_envs, 3)
-        weighted_sum = weighted_body_com.sum(dim=1)
-
-        # 总质量
-        # shape: (num_envs, 1)
+        # ---------------------------------------------------------
+        # 5. 总质量
+        # shape: (N, 1)
+        # ---------------------------------------------------------
         total_mass = body_masses.sum(
             dim=1,
             keepdim=True,
         ).clamp_min(1.0e-6)
 
-        # 整机质心世界坐标
-        whole_body_com_pos_w = weighted_sum / total_mass
+        # ---------------------------------------------------------
+        # 6. 整机 COM position
+        #
+        # p_com = sum(m_i * p_i) / sum(m_i)
+        # ---------------------------------------------------------
+        whole_body_com_pos_w = (
+            body_com_pos_w
+            * body_masses.unsqueeze(-1)
+        ).sum(dim=1) / total_mass
 
-        return whole_body_com_pos_w
+        # ---------------------------------------------------------
+        # 7. 整机 COM velocity
+        #
+        # v_com = sum(m_i * v_i) / sum(m_i)
+        # ---------------------------------------------------------
+        whole_body_com_vel_w = (
+            body_com_lin_vel_w
+            * body_masses.unsqueeze(-1)
+        ).sum(dim=1) / total_mass
+
+        return whole_body_com_pos_w, whole_body_com_vel_w
 
     def get_observations(self):
         actor_obs, critic_obs = self.compute_observations()

@@ -1196,4 +1196,30 @@ def torse_penalty(env:BaseEnv,asset_cfg:SceneEntityCfg=SceneEntityCfg("robot")):
     asset:Articulation=env.scene[asset_cfg.name]
     waist_pitch_pos=torch.relu(-asset.data.joint_pos[:,asset_cfg.joint_ids])
     return torch.sum(torch.square(waist_pitch_pos), dim=1)
-    
+def com_xy_velocity_l2(
+    env: BaseEnv,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """惩罚整机质心的水平速度。
+
+    只惩罚世界坐标系 x/y 方向的 COM velocity。
+
+    不惩罚 z 方向，因为 squat / stand 过程中
+    COM 的竖直运动是任务本身需要的。
+
+    Returns:
+        penalty:
+            shape = (num_envs,)
+            正惩罚值，配置中使用负 weight。
+    """
+
+    del asset_cfg
+
+    # shape: (num_envs, 2)
+    com_vel_xy_w = env.whole_body_com_vel_w[:, :2]
+
+    # vx^2 + vy^2
+    return torch.sum(
+        torch.square(com_vel_xy_w),
+        dim=-1,
+    )

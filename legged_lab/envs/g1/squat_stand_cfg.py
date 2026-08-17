@@ -66,24 +66,23 @@ class Reward:
 
     action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
 
-    undesired_contacts = RewTerm(
-        func=mdp.undesired_contacts,
-        weight=-2.0,
-        params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names="(?!.*ankle.*).*"), "threshold": 1.0},
-    )
+    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
+
     body_orientation_l2 = RewTerm(
         func=mdp.body_orientation_l2, 
         params={"asset_cfg": SceneEntityCfg("robot", body_names=".*torso.*")}, 
-        weight=-1.0
+        weight=-2.0
     )
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.0)
-    
-    # feet_no_contacts=RewTerm(func=mdp.feet_no_contact,
-    #                          weight=-0.05,
-    #                          params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names="(.*ankle_roll.*).*"), "threshold": 1.0})
+    base_ang_vel_xy = RewTerm(
+        func=mdp.ang_vel_xy_l2,
+        weight=-1.0,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+        },
+    )
     
     feet_xy_velocity=RewTerm(func=mdp.feet_xy_velocity,
-                             weight=-0.2,
+                             weight=-1,
                              params={                           
                                 "threshold": 0.02,
                                 "asset_cfg": SceneEntityCfg("robot",body_names="(.*ankle_roll.*).*"),
@@ -97,49 +96,54 @@ class Reward:
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_ankle_roll.*"),
         },
     )
-    
-    # joint_deviation_waist_roll = RewTerm(
-    #     func=mdp.joint_deviation_l1_always,
-    #     weight=-0.2,
-    #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*waist_roll.*"])},
-    # )  
-
+    feet_no_contact = RewTerm(
+        func=mdp.feet_no_contact,
+        weight=-5.0,
+        params={
+            "sensor_cfg": SceneEntityCfg(
+                "contact_sensor",
+                body_names=".*ankle_roll.*",
+            ),
+            "threshold": 5.0,
+        },
+    )
     joint_deviation_waist_yaw = RewTerm(
         func=mdp.joint_deviation_l1_always,
-        weight=-0.2,
+        weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*waist_yaw.*"])},
     )
 
     joint_deviation_hip = RewTerm(
         func=mdp.joint_deviation_l1_always,
-        weight=-0.3,
+        weight=-0.15,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw.*", ".*_hip_roll.*"])},
     )
-    dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
+
     joint_deviation_ankle = RewTerm(
         func=mdp.joint_deviation_l1_always,
-        weight=-0.2,
+        weight=-0.1,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ankle.*"])},
     )
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
 
     alive = RewTerm(func=mdp.alive, weight=0.15)
-    com_to_ankle_center = RewTerm(
-        func=mdp.com_projection_to_ankle_center,
-        weight=1.0,
+    com_support_margin = RewTerm(
+        func=mdp.com_support_margin_penalty,
+        weight=-2.0,
         params={
-            "std": 0.08,
+            "std": 0.03,
+            "outside_scale": 10.0,
+            "rear_scale": 1.0,
         },
     )
-
-    waist_pitch = RewTerm(
-        func=mdp.torse_penalty,
-        weight=-0.05,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*waist_pitch.*"])
-        }
+    com_xy_velocity = RewTerm(
+    func=mdp.com_xy_velocity_l2,
+    weight=-1.0,
     )
-     
+
+
+
+
 
 
 @configclass
@@ -256,12 +260,12 @@ class SaquatStandENVCFG:
             #     },
             # ),
 
-            push_robot=EventTerm(
-                func=mdp.push_by_setting_velocity,
-                mode="interval",
-                interval_range_s=(10.0, 15.0),
-                params={"velocity_range": {"x": (-0.5, 1.0), "y": (-0.5, 1.0)}},
-            ),  
+            # push_robot=EventTerm(
+            #     func=mdp.push_by_setting_velocity,
+            #     mode="interval",
+            #     interval_range_s=(10.0, 15.0),
+            #     params={"velocity_range": {"x": (-0.5, 1.0), "y": (-0.5, 1.0)}},
+            # ),  
 
             reset_arm_pose_and_hold=EventTerm(
             func=mdp.reset_arm_pose_and_hold,
