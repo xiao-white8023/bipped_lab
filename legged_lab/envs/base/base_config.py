@@ -244,7 +244,7 @@ class EventCfg:
                     "operation": "scale",
                     "distribution": "uniform",
                 },
-            ),
+            )
 
     right_arm_shoulder_yaw_elbow_gains = EventTerm(
                 func=mdp.randomize_actuator_gains,
@@ -262,7 +262,7 @@ class EventCfg:
                     "operation": "scale",
                     "distribution": "uniform",
                 },
-            ),
+            )
 
     right_arm_wrist_gains = EventTerm(
                 func=mdp.randomize_actuator_gains,
@@ -270,18 +270,16 @@ class EventCfg:
                 params={
                     "asset_cfg": SceneEntityCfg(
                         "robot",
-                        joint_names=[
-                            "right_wrist_roll_joint",
-                            "right_wrist_pitch_joint",
-                            "right_wrist_yaw_joint",
-                        ],
+                        # Match the one wrist DoF on G1-23 and all wrist DoFs
+                        # on G1-29 without requiring absent exact names.
+                        joint_names=["right_wrist_.*_joint"],
                     ),
                     "stiffness_distribution_params": (0.8, 1.2),
                     "damping_distribution_params": (0.5, 1.2),
                     "operation": "scale",
                     "distribution": "uniform",
                 },
-            ),
+            )
  
  
 @configclass
