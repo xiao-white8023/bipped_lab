@@ -147,10 +147,27 @@ class RightArmMotionCfg:
     """Dynamic right-arm trajectory settings for the squat-stand task."""
 
     enable: bool = True
+    curriculum_enable: bool = True
+    curriculum_end_iteration: int = 8000
+
+    min_range_fraction: float = 0.05
+    max_range_fraction: float = 0.6
+
+    # Velocity envelope of the fastest joints; max_vel below supplies the
+    # relative per-joint profile.
+    min_max_vel: float = 0.1
+    max_max_vel: float = 0.5
+
+    min_hold_time: float = 0.3
+    max_hold_time: float = 1.5
+
+    # Settings used when the arm curriculum is disabled.
     range_fraction: float = 0.6 # 关节位置[-0.6 0.6]之间随机
+    # Full-difficulty per-joint velocity profile:
     # shoulder_pitch, shoulder_roll, shoulder_yaw, elbow,
-    # wrist_roll, wrist_pitch, wrist_yaw
-    max_vel: list[float] = [0.25] * 7 # 表示七个右臂关节各自的最大规划速度
+    # wrist_roll, wrist_pitch, wrist_yaw. During curriculum this profile is
+    # normalized and scaled by the interpolated min/max velocity envelope.
+    max_vel: list[float] = [0.5, 0.4, 0.4, 0.5, 0.3, 0.25, 0.25]
     speed_scale_range: tuple[float, float] = (0.4, 1.0) # 手臂这条轨迹最多允许有多快 0.10 ~ 0.25 rad/s
     hold_time_range: tuple[float, float] = (0.2, 1.0)
     min_duration: float = 0.5 # 至少停0.5秒
@@ -185,7 +202,7 @@ class SaquatStandENVCFG:
         action_scale=0.25,
         terminate_contacts_body_names=[".*torso.*"],
         feet_body_names=["left_ankle_roll.*", "right_ankle_roll.*"],
-        limit_angle=0.8
+        limit_angle=0.9
     )
 
     normalization: NormalizationCfg = NormalizationCfg(
@@ -275,8 +292,8 @@ class SaquatStandENVCFG:
                             "right_shoulder_roll_joint",
                         ],
                     ),
-                    "stiffness_distribution_params": (0.4, 1.2),
-                    "damping_distribution_params": (0.5, 1.2),
+                    "stiffness_distribution_params": (0.8, 1.1),
+                    "damping_distribution_params": (0.8, 1.1),
                     "operation": "scale",
                     "distribution": "uniform",
                 },
@@ -293,8 +310,8 @@ class SaquatStandENVCFG:
                             "right_elbow_joint",
                         ],
                     ),
-                    "stiffness_distribution_params": (0.8, 1.2),
-                    "damping_distribution_params": (0.5, 1.2),
+                    "stiffness_distribution_params": (0.8, 1.1),
+                    "damping_distribution_params": (0.8, 1.1),
                     "operation": "scale",
                     "distribution": "uniform",
                 },
@@ -312,8 +329,8 @@ class SaquatStandENVCFG:
                             "right_wrist_yaw_joint",
                         ],
                     ),
-                    "stiffness_distribution_params": (0.8, 1.2),
-                    "damping_distribution_params": (0.5, 1.2),
+                    "stiffness_distribution_params": (0.8, 1.1),
+                    "damping_distribution_params": (0.8, 1.1),
                     "operation": "scale",
                     "distribution": "uniform",
                 },

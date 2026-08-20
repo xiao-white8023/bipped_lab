@@ -115,57 +115,109 @@ G1_CFG = ArticulationCfg(
             damping=2.0,
             armature=0.01,
         ),
-        "shoulders": ImplicitActuatorCfg(
+        "right_shoulders": ImplicitActuatorCfg(
             joint_names_expr=[
-                ".*_shoulder_pitch_joint",
-                ".*_shoulder_roll_joint",
+                "right_shoulder_pitch_joint",
+                "right_shoulder_roll_joint",
             ],
             effort_limit_sim={
-                ".*_shoulder_pitch_joint": 25.0,
-                ".*_shoulder_roll_joint": 25.0,
+                "right_shoulder_pitch_joint": 25.0,
+                "right_shoulder_roll_joint": 25.0,
             },
             velocity_limit_sim={
-                ".*_shoulder_pitch_joint": 37.0,
-                ".*_shoulder_roll_joint": 37.0,
+                "right_shoulder_pitch_joint": 37.0,
+                "right_shoulder_roll_joint": 37.0,
+            },
+            stiffness=50,
+            damping=5.0,
+            armature=0.01,
+        ),
+        "right_arms": ImplicitActuatorCfg(
+            joint_names_expr=[
+                "right_shoulder_yaw_joint",
+                "right_elbow_joint",
+            ],
+            effort_limit_sim={
+                "right_shoulder_yaw_joint": 25.0,
+                "right_elbow_joint": 25.0,
+            },
+            velocity_limit_sim={
+                "right_shoulder_yaw_joint": 37.0,
+                "right_elbow_joint": 37.0,
+            },
+            stiffness=30.0,
+            damping=4.0,
+            armature=0.01,
+        ),
+        "right_wrist": ImplicitActuatorCfg(
+            joint_names_expr=[
+                "right_wrist_.*",
+            ],
+            effort_limit_sim={
+                "right_wrist_yaw_joint": 5.0,
+                "right_wrist_roll_joint": 25.0,
+                "right_wrist_pitch_joint": 5.0,
+            },
+            velocity_limit_sim={
+                "right_wrist_yaw_joint": 22.0,
+                "right_wrist_roll_joint": 37.0,
+                "right_wrist_pitch_joint": 22.0,
+            },
+            stiffness=20.0,
+            damping=3.0,
+            armature=0.01,
+        ),
+        "left_shoulders": ImplicitActuatorCfg(
+            joint_names_expr=[
+                "left_shoulder_pitch_joint",
+                "left_shoulder_roll_joint",
+            ],
+            effort_limit_sim={
+                "left_shoulder_pitch_joint": 25.0,
+                "left_shoulder_roll_joint": 25.0,
+            },
+            velocity_limit_sim={
+                "left_shoulder_pitch_joint": 37.0,
+                "left_shoulder_roll_joint": 37.0,
             },
             stiffness=100.0,
             damping=2.0,
             armature=0.01,
         ),
-        "arms": ImplicitActuatorCfg(
+        "left_arms": ImplicitActuatorCfg(
             joint_names_expr=[
-                ".*_shoulder_yaw_joint",
-                ".*_elbow_joint",
+                "left_shoulder_yaw_joint",
+                "left_elbow_joint",
             ],
             effort_limit_sim={
-                ".*_shoulder_yaw_joint": 25.0,
-                ".*_elbow_joint": 25.0,
+                "left_shoulder_yaw_joint": 25.0,
+                "left_elbow_joint": 25.0,
             },
             velocity_limit_sim={
-                ".*_shoulder_yaw_joint": 37.0,
-                ".*_elbow_joint": 37.0,
+                "left_shoulder_yaw_joint": 37.0,
+                "left_elbow_joint": 37.0,
             },
             stiffness=50.0,
             damping=2.0,
             armature=0.01,
         ),
-        "wrist": ImplicitActuatorCfg(
+        "left_wrist": ImplicitActuatorCfg(
             joint_names_expr=[
-                ".*_wrist_.*",
+                "left_wrist_.*",
             ],
             effort_limit_sim={
-                ".*_wrist_yaw_joint": 5.0,
-                ".*_wrist_roll_joint": 25.0,
-                ".*_wrist_pitch_joint": 5.0,
+                "left_wrist_yaw_joint": 5.0,
+                "left_wrist_roll_joint": 25.0,
+                "left_wrist_pitch_joint": 5.0,
             },
             velocity_limit_sim={
-                ".*_wrist_yaw_joint": 22.0,
-                ".*_wrist_roll_joint": 37.0,
-                ".*_wrist_pitch_joint": 22.0,
+                "left_wrist_yaw_joint": 22.0,
+                "left_wrist_roll_joint": 37.0,
+                "left_wrist_pitch_joint": 22.0,
             },
             stiffness=40.0,
             damping=2.0,
             armature=0.01,
-        ),
+        )
     },
 )

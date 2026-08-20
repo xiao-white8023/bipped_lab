@@ -184,6 +184,10 @@ class OnPolicyRunner:
         start_iter = self.current_learning_iteration
         tot_iter = start_iter + num_learning_iterations
         for it in range(start_iter, tot_iter):
+            # Task-local curricula can opt in to the true training iteration.
+            # Environments without this hook are unaffected.
+            if hasattr(self.env, "set_training_iteration"):
+                self.env.set_training_iteration(it)
             start = time.time()
             # Rollout
             with torch.inference_mode():

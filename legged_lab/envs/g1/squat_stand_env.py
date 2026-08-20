@@ -93,6 +93,12 @@ class SquatStandEnv(VecEnv):
         # 设置了 速度命令生成器 奖励管理器
         self.command_generator = UniformHeightCommand(cfg=command_cfg, env=self)
         self.reward_manager = RewardManager(self.cfg.reward, self)
+        self.current_iteration = 0
+        self.com_margin_factor = 0.0
+        self._com_support_margin_weight = float(
+            self.reward_manager.get_term_cfg("com_support_margin").weight
+        )
+        self._apply_com_support_margin_curriculum()
         
         self.init_buffers()
 
@@ -255,33 +261,46 @@ class SquatStandEnv(VecEnv):
             self.right_arm_ids, device=self.device, dtype=torch.long
         )
         self.num_right_arm_joints = len(self.right_arm_ids)
-        arm_buffer_shape = (self.num_envs, self.num_right_arm_joints)
+        arm_buffer_shape = (self.num_envs, self.num_right_arm_joints) # (4096,7) 4096个机器人，每一个的右手臂都是7个关节
         self.arm_motion_start_q = torch.zeros(
             arm_buffer_shape, dtype=torch.float, device=self.device
-        )
+        ) # 这一次右臂运动开始时的关节角度
+        '''
+        这次右臂随机运动的目标姿态,例如当前：肩pitch=0  随机采样：肩pitch=0.8rad  那么：arm_motion_target_q保存[0.8, ...] 之后：minimum jerk：从start_q移动到：target_q
+        '''
         self.arm_motion_target_q = torch.zeros(
             arm_buffer_shape, dtype=torch.float, device=self.device
         )
+        # 当前时刻，右臂控制器希望机器人达到的目标关节位置
         self.arm_q_des = torch.zeros(
             arm_buffer_shape, dtype=torch.float, device=self.device
         )
+        # 当前期望速度。
         self.arm_dq_des = torch.zeros(
             arm_buffer_shape, dtype=torch.float, device=self.device
         )
+        # 当前这一次右臂动作已经执行了多久。
         self.arm_motion_elapsed = torch.zeros(
             self.num_envs, dtype=torch.float, device=self.device
         )
+        # 从 start 到 target 需要移动多久
         self.arm_motion_duration = torch.zeros(
             self.num_envs, dtype=torch.float, device=self.device
         )
+        # 到达目标后要保持多久
         self.arm_motion_hold_duration = torch.zeros(
             self.num_envs, dtype=torch.float, device=self.device
         )
+        # 每一个关节的最大运动速度
         self._right_arm_max_vel = torch.tensor(
             self.cfg.right_arm_motion.max_vel,
             dtype=torch.float,
             device=self.device,
         )
+        # The runner updates this scalar once per training iteration. Keeping
+        # it as a Python scalar avoids introducing a CPU tensor into the
+        # batched CUDA trajectory calculations below.
+        self.arm_curriculum_factor = 0.0
         # 腰部关节索引
         self.waist_ids, _ = self.robot.find_joints(
             name_keys=[
@@ -305,6 +324,10 @@ class SquatStandEnv(VecEnv):
         # self.num_actions = self.robot.data.default_joint_pos.shape[1]  # 获取机器人的动作维度（关节数量），这是策略网络输出层的维度。
         self.num_actions = len(self.control_joint_ids)  # 获取机器人的动作维度（关节数量），这是策略网络输出层的维度。 包括两条腿，一个腰部
         self._validate_right_arm_motion_setup()
+        self._right_arm_velocity_scale = (
+            self._right_arm_max_vel / self._right_arm_max_vel.max()
+        )
+        self.update_arm_curriculum()
         
         self.clip_actions = self.cfg.normalization.clip_actions   # 读取 “动作裁剪阈值”，限制策略网络输出的动作范围，避免动作过大导致机器人关节损坏 / 物理仿真崩溃。
         self.clip_obs = self.cfg.normalization.clip_observations  # 读取 “观测裁剪阈值”，限制机器人观测数据的范围，避免异常值（如传感器故障、物理抖动）导致网络训练不稳定
@@ -320,8 +343,6 @@ class SquatStandEnv(VecEnv):
         self.action = torch.zeros(
             self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False
         )
-
-
 
         # 脚的平均接触力
         self.avg_feet_force_per_step = torch.zeros(
@@ -357,8 +378,44 @@ class SquatStandEnv(VecEnv):
             )
         if not torch.all(self._right_arm_max_vel > 0.0).item():
             raise ValueError("right_arm_motion.max_vel values must be positive.")
+        if torch.unique(self._right_arm_max_vel).numel() == 1:
+            raise ValueError(
+                "right_arm_motion.max_vel must define different velocities "
+                "for the right-arm joints."
+            )
         if not 0.0 <= arm_cfg.range_fraction <= 1.0:
             raise ValueError("right_arm_motion.range_fraction must be in [0, 1].")
+
+        if arm_cfg.curriculum_end_iteration <= 0:
+            raise ValueError(
+                "right_arm_motion.curriculum_end_iteration must be positive."
+            )
+        if not (
+            0.0
+            <= arm_cfg.min_range_fraction
+            <= arm_cfg.max_range_fraction
+            <= 1.0
+        ):
+            raise ValueError(
+                "right_arm_motion curriculum range fractions must be ordered "
+                "within [0, 1]."
+            )
+        if (
+            arm_cfg.min_max_vel <= 0.0
+            or arm_cfg.min_max_vel > arm_cfg.max_max_vel
+        ):
+            raise ValueError(
+                "right_arm_motion curriculum max velocities must be positive "
+                "and ordered."
+            )
+        if (
+            arm_cfg.min_hold_time < 0.0
+            or arm_cfg.min_hold_time > arm_cfg.max_hold_time
+        ):
+            raise ValueError(
+                "right_arm_motion curriculum hold times must be non-negative "
+                "and ordered."
+            )
 
         speed_lower, speed_upper = arm_cfg.speed_scale_range
         if speed_lower <= 0.0 or speed_lower > speed_upper:
@@ -372,6 +429,31 @@ class SquatStandEnv(VecEnv):
             )
         if arm_cfg.min_duration <= 0.0:
             raise ValueError("right_arm_motion.min_duration must be positive.")
+
+    def set_training_iteration(self, iteration: int):
+        """Receive the current PPO iteration from the task's runner."""
+        self.current_iteration = int(iteration)
+        self.com_margin_factor = 0.0 if self.current_iteration < 1000 else 1.0
+        self._apply_com_support_margin_curriculum()
+        self.update_arm_curriculum()
+
+    def _apply_com_support_margin_curriculum(self):
+        """Update the RewardManager-cached COM-margin term weight."""
+        term_cfg = self.reward_manager.get_term_cfg("com_support_margin")
+        term_cfg.weight = self._com_support_margin_weight * self.com_margin_factor
+        self.reward_manager.set_term_cfg("com_support_margin", term_cfg)
+
+    def update_arm_curriculum(self):
+        """Update the task-local right-arm difficulty from training progress."""
+        arm_cfg = self.cfg.right_arm_motion
+        if not arm_cfg.curriculum_enable:
+            self.arm_curriculum_factor = 1.0
+            return
+
+        difficulty = float(self.current_iteration) / float(
+            arm_cfg.curriculum_end_iteration
+        )
+        self.arm_curriculum_factor = max(0.0, min(difficulty, 1.0))
 
     def sample_new_right_arm_motion(self, env_ids: torch.Tensor):
         """Sample independent, velocity-limited right-arm motions for env_ids."""
@@ -389,9 +471,23 @@ class SquatStandEnv(VecEnv):
             env_ids[:, None], self.right_arm_ids
         ]
 
-        fraction = self.cfg.right_arm_motion.range_fraction
-        sample_lower = default_q + fraction * (soft_limits[..., 0] - default_q)
-        sample_upper = default_q + fraction * (soft_limits[..., 1] - default_q)
+        arm_cfg = self.cfg.right_arm_motion
+        difficulty = self.arm_curriculum_factor
+        if arm_cfg.curriculum_enable:
+            range_fraction = (
+                arm_cfg.min_range_fraction
+                + difficulty
+                * (arm_cfg.max_range_fraction - arm_cfg.min_range_fraction)
+            )
+        else:
+            range_fraction = arm_cfg.range_fraction
+
+        sample_lower = default_q + range_fraction * (
+            soft_limits[..., 0] - default_q
+        )
+        sample_upper = default_q + range_fraction * (
+            soft_limits[..., 1] - default_q
+        )
         random_values = torch.rand(
             (env_ids.numel(), self.num_right_arm_joints),
             dtype=torch.float,
@@ -399,22 +495,44 @@ class SquatStandEnv(VecEnv):
         )
         target_q = sample_lower + random_values * (sample_upper - sample_lower)
 
-        speed_lower, speed_upper = self.cfg.right_arm_motion.speed_scale_range
+        speed_lower, speed_upper = arm_cfg.speed_scale_range
         speed_scale = speed_lower + torch.rand(
             (env_ids.numel(), 1), dtype=torch.float, device=self.device
         ) * (speed_upper - speed_lower)
-        effective_max_vel = self._right_arm_max_vel.unsqueeze(0) * speed_scale
+        if arm_cfg.curriculum_enable:
+            max_vel = (
+                arm_cfg.min_max_vel
+                + difficulty * (arm_cfg.max_max_vel - arm_cfg.min_max_vel)
+            )
+            scheduled_max_vel = (
+                max_vel * self._right_arm_velocity_scale.unsqueeze(0)
+            )
+        else:
+            scheduled_max_vel = self._right_arm_max_vel.unsqueeze(0)
+        effective_max_vel = scheduled_max_vel * speed_scale
 
         delta_q = torch.abs(target_q - current_q)
         required_duration_per_joint = 1.875 * delta_q / effective_max_vel
         duration = required_duration_per_joint.max(dim=1).values.clamp_min(
-            self.cfg.right_arm_motion.min_duration
+            arm_cfg.min_duration
         )
 
-        hold_lower, hold_upper = self.cfg.right_arm_motion.hold_time_range
-        hold_duration = hold_lower + torch.rand(
-            env_ids.numel(), dtype=torch.float, device=self.device
-        ) * (hold_upper - hold_lower)
+        if arm_cfg.curriculum_enable:
+            hold_time = (
+                arm_cfg.max_hold_time
+                - difficulty * (arm_cfg.max_hold_time - arm_cfg.min_hold_time)
+            )
+            hold_duration = torch.full(
+                (env_ids.numel(),),
+                hold_time,
+                dtype=torch.float,
+                device=self.device,
+            )
+        else:
+            hold_lower, hold_upper = arm_cfg.hold_time_range
+            hold_duration = hold_lower + torch.rand(
+                env_ids.numel(), dtype=torch.float, device=self.device
+            ) * (hold_upper - hold_lower)
 
         self.arm_motion_start_q[env_ids] = current_q
         self.arm_motion_target_q[env_ids] = target_q
