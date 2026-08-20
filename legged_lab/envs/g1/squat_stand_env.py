@@ -387,9 +387,14 @@ class SquatStandEnv(VecEnv):
         if not 0.0 <= arm_cfg.range_fraction <= 1.0:
             raise ValueError("right_arm_motion.range_fraction must be in [0, 1].")
 
-        if arm_cfg.curriculum_end_iteration <= 0:
+        if arm_cfg.curriculum_start_iteration < 0:
             raise ValueError(
-                "right_arm_motion.curriculum_end_iteration must be positive."
+                "right_arm_motion.curriculum_start_iteration must be non-negative."
+            )
+        if arm_cfg.curriculum_end_iteration <= arm_cfg.curriculum_start_iteration:
+            raise ValueError(
+                "right_arm_motion.curriculum_end_iteration must be greater "
+                "than curriculum_start_iteration."
             )
         if not (
             0.0
@@ -463,18 +468,41 @@ class SquatStandEnv(VecEnv):
         term_cfg = self.reward_manager.get_term_cfg("com_support_margin")
         term_cfg.weight = self._com_support_margin_weight * self.com_margin_factor
         self.reward_manager.set_term_cfg("com_support_margin", term_cfg)
+        self.extras.setdefault("log", {})[
+            "curriculum/com_support_margin_factor"
+        ] = self.com_margin_factor
 
     def update_arm_curriculum(self):
         """Update the task-local right-arm difficulty from training progress."""
         arm_cfg = self.cfg.right_arm_motion
         if not arm_cfg.curriculum_enable:
-            self.arm_curriculum_factor = 1.0
-            return
+            factor = 1.0
+        else:
+            # Arm disturbance starts only after the legs have had time to
+            # establish stable squat/stand control.
+            factor = (
+                self.current_iteration - arm_cfg.curriculum_start_iteration
+            ) / (
+                arm_cfg.curriculum_end_iteration
+                - arm_cfg.curriculum_start_iteration
+            )
+        self.arm_curriculum_factor = max(0.0, min(float(factor), 1.0))
+        self.extras.setdefault("log", {})[
+            "curriculum/right_arm_factor"
+        ] = self.arm_curriculum_factor
 
-        difficulty = float(self.current_iteration) / float(
-            arm_cfg.curriculum_end_iteration
-        )
-        self.arm_curriculum_factor = max(0.0, min(difficulty, 1.0))
+    def _hold_right_arm_at_default(self, env_ids):
+        """Clear trajectory state and hold selected right arms at nominal pose."""
+        default_q = self.robot.data.default_joint_pos[env_ids][
+            :, self.right_arm_ids
+        ]
+        self.arm_motion_start_q[env_ids] = default_q
+        self.arm_motion_target_q[env_ids] = default_q
+        self.arm_q_des[env_ids] = default_q
+        self.arm_dq_des[env_ids] = 0.0
+        self.arm_motion_elapsed[env_ids] = 0.0
+        self.arm_motion_duration[env_ids] = 0.0
+        self.arm_motion_hold_duration[env_ids] = 0.0
 
     def sample_new_right_arm_motion(self, env_ids: torch.Tensor):
         """Sample independent, velocity-limited right-arm motions for env_ids."""
@@ -484,6 +512,11 @@ class SquatStandEnv(VecEnv):
             return
 
         env_ids = env_ids.to(device=self.device, dtype=torch.long)
+        arm_cfg = self.cfg.right_arm_motion
+        if arm_cfg.curriculum_enable and self.arm_curriculum_factor <= 0.0:
+            self._hold_right_arm_at_default(env_ids)
+            return
+
         current_q = self.robot.data.joint_pos[env_ids[:, None], self.right_arm_ids]
         default_q = self.robot.data.default_joint_pos[
             env_ids[:, None], self.right_arm_ids
@@ -492,7 +525,6 @@ class SquatStandEnv(VecEnv):
             env_ids[:, None], self.right_arm_ids
         ]
 
-        arm_cfg = self.cfg.right_arm_motion
         difficulty = self.arm_curriculum_factor
         if arm_cfg.curriculum_enable:
             range_fraction = (
@@ -540,8 +572,8 @@ class SquatStandEnv(VecEnv):
 
         if arm_cfg.curriculum_enable:
             hold_time = (
-                arm_cfg.max_hold_time
-                - difficulty * (arm_cfg.max_hold_time - arm_cfg.min_hold_time)
+                arm_cfg.min_hold_time
+                + difficulty * (arm_cfg.max_hold_time - arm_cfg.min_hold_time)
             )
             hold_duration = torch.full(
                 (env_ids.numel(),),
@@ -573,6 +605,12 @@ class SquatStandEnv(VecEnv):
     def update_right_arm_motion(self):
         """Advance right-arm minimum-jerk commands at the RL control rate."""
         if not self.cfg.right_arm_motion.enable:
+            return
+        if (
+            self.cfg.right_arm_motion.curriculum_enable
+            and self.arm_curriculum_factor <= 0.0
+        ):
+            self._hold_right_arm_at_default(slice(None))
             return
 
         finished = self.arm_motion_elapsed >= (
@@ -1180,6 +1218,12 @@ class SquatStandEnv(VecEnv):
 
         self.extras.setdefault("log", {}).update(
             right_arm_statistics
+        )
+        self.extras["log"].update(
+            {
+                "curriculum/right_arm_factor": self.arm_curriculum_factor,
+                "curriculum/com_support_margin_factor": self.com_margin_factor,
+            }
         )
 
         actor_obs, critic_obs = self.compute_observations()

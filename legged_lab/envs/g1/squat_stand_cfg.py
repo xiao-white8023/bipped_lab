@@ -132,7 +132,7 @@ class Reward:
         weight=-2.0,
         params={
             "std": 0.03,
-            "outside_scale": 10.0,
+            "outside_scale": 2,
         },
     )
 
@@ -143,7 +143,9 @@ class RightArmMotionCfg:
 
     enable: bool = True
     curriculum_enable: bool = True
-    curriculum_end_iteration: int = 10000
+    # Delay arm disturbance until lower-body squat control is established.
+    curriculum_start_iteration: int = 2500
+    curriculum_end_iteration: int = 12500
 
     min_range_fraction: float = 0.05
     max_range_fraction: float = 0.6
@@ -172,7 +174,9 @@ class RightArmMotionCfg:
 @configclass
 class SaquatStandENVCFG:
     device: str = "cuda:0"
-    com_support_margin_start_iteration: int = 2000
+    # Add the COM constraint later so early learning is not forced into an
+    # overly conservative squat before a natural lower-body motion emerges.
+    com_support_margin_start_iteration: int = 3500
     com_support_margin_ramp_duration: int = 1000
     scene: BaseSceneCfg = BaseSceneCfg(
         max_episode_length_s=20.0,

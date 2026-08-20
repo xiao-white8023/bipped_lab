@@ -61,7 +61,8 @@ def _arm_cfg(curriculum_enable=True):
     return SimpleNamespace(
         enable=True,
         curriculum_enable=curriculum_enable,
-        curriculum_end_iteration=10000,
+        curriculum_start_iteration=2500,
+        curriculum_end_iteration=12500,
         min_range_fraction=0.05,
         max_range_fraction=0.6,
         min_max_vel=0.1,
@@ -78,11 +79,13 @@ def _arm_cfg(curriculum_enable=True):
 
 
 def _curriculum_env(num_envs=4096):
-    update, apply_com_margin, set_iteration, sample = _load_env_methods(
+    update, apply_com_margin, hold_default, set_iteration, sample, advance = _load_env_methods(
         "update_arm_curriculum",
         "_apply_com_support_margin_curriculum",
+        "_hold_right_arm_at_default",
         "set_training_iteration",
         "sample_new_right_arm_motion",
+        "update_right_arm_motion",
     )
     num_joints = 7
     data = SimpleNamespace(
@@ -105,7 +108,7 @@ def _curriculum_env(num_envs=4096):
     env = SimpleNamespace(
         cfg=SimpleNamespace(
             right_arm_motion=_arm_cfg(),
-            com_support_margin_start_iteration=2000,
+            com_support_margin_start_iteration=3500,
             com_support_margin_ramp_duration=1000,
         ),
         device="cpu",
@@ -113,7 +116,10 @@ def _curriculum_env(num_envs=4096):
         com_margin_factor=0.0,
         _com_support_margin_weight=-2.0,
         reward_manager=RewardManagerStub(),
+        extras={"log": {}},
         arm_curriculum_factor=0.0,
+        num_envs=num_envs,
+        step_dt=0.02,
         robot=SimpleNamespace(data=data),
         right_arm_ids=torch.arange(num_joints, dtype=torch.long),
         num_right_arm_joints=num_joints,
@@ -129,8 +135,10 @@ def _curriculum_env(num_envs=4096):
     )
     env.update_arm_curriculum = MethodType(update, env)
     env._apply_com_support_margin_curriculum = MethodType(apply_com_margin, env)
+    env._hold_right_arm_at_default = MethodType(hold_default, env)
     env.set_training_iteration = MethodType(set_iteration, env)
     env.sample_new_right_arm_motion = MethodType(sample, env)
+    env.update_right_arm_motion = MethodType(advance, env)
     env._apply_com_support_margin_curriculum()
     return env
 
@@ -150,6 +158,7 @@ def test_right_arm_curriculum_config_defaults():
         and node.target.id
         in {
             "curriculum_enable",
+            "curriculum_start_iteration",
             "curriculum_end_iteration",
             "min_range_fraction",
             "max_range_fraction",
@@ -161,7 +170,8 @@ def test_right_arm_curriculum_config_defaults():
     }
     assert values == {
         "curriculum_enable": True,
-        "curriculum_end_iteration": 10000,
+        "curriculum_start_iteration": 2500,
+        "curriculum_end_iteration": 12500,
         "min_range_fraction": 0.05,
         "max_range_fraction": 0.6,
         "min_max_vel": 0.1,
@@ -190,32 +200,44 @@ def test_com_support_margin_curriculum_config_defaults():
         }
     }
     assert values == {
-        "com_support_margin_start_iteration": 2000,
+        "com_support_margin_start_iteration": 3500,
         "com_support_margin_ramp_duration": 1000,
     }
 
 
 @pytest.mark.parametrize(
     ("iteration", "expected"),
-    [(-1, 0.0), (0, 0.0), (5000, 0.5), (10000, 1.0), (11000, 1.0)],
+    [
+        (0, 0.0),
+        (1000, 0.0),
+        (2500, 0.0),
+        (5000, 0.25),
+        (7500, 0.5),
+        (12500, 1.0),
+        (15000, 1.0),
+    ],
 )
 def test_curriculum_factor_is_clamped_linear_training_progress(iteration, expected):
     env = _curriculum_env(num_envs=1)
     env.set_training_iteration(iteration)
     assert env.current_iteration == iteration
     assert env.arm_curriculum_factor == pytest.approx(expected)
+    assert env.extras["log"]["curriculum/right_arm_factor"] == pytest.approx(
+        expected
+    )
 
 
 @pytest.mark.parametrize(
     ("iteration", "factor", "weight"),
     [
         (0, 0.0, 0.0),
-        (1999, 0.0, 0.0),
-        (2000, 0.0, 0.0),
-        (2500, 0.5, -1.0),
-        (2999, 0.999, -1.998),
-        (3000, 1.0, -2.0),
-        (8000, 1.0, -2.0),
+        (1000, 0.0, 0.0),
+        (3499, 0.0, 0.0),
+        (3500, 0.0, 0.0),
+        (4000, 0.5, -1.0),
+        (4499, 0.999, -1.998),
+        (4500, 1.0, -2.0),
+        (5000, 1.0, -2.0),
     ],
 )
 def test_com_support_margin_curriculum_updates_cached_reward_term(
@@ -228,6 +250,34 @@ def test_com_support_margin_curriculum_updates_cached_reward_term(
     assert env.reward_manager.get_term_cfg("com_support_margin").weight == pytest.approx(
         weight
     )
+    assert env.extras["log"][
+        "curriculum/com_support_margin_factor"
+    ] == pytest.approx(factor)
+
+
+def test_right_arm_is_held_at_default_before_curriculum_start():
+    env = _curriculum_env(num_envs=4096)
+    env.robot.data.default_joint_pos.fill_(0.2)
+    env.arm_motion_start_q.fill_(1.0)
+    env.arm_motion_target_q.fill_(1.0)
+    env.arm_q_des.fill_(1.0)
+    env.arm_dq_des.fill_(1.0)
+    env.arm_motion_elapsed.fill_(1.0)
+    env.arm_motion_duration.fill_(1.0)
+    env.arm_motion_hold_duration.fill_(1.0)
+    env.set_training_iteration(1000)
+
+    env.sample_new_right_arm_motion(torch.arange(4096))
+    env.update_right_arm_motion()
+
+    expected_q = torch.full((4096, 7), 0.2)
+    assert torch.allclose(env.arm_motion_start_q, expected_q)
+    assert torch.allclose(env.arm_motion_target_q, expected_q)
+    assert torch.allclose(env.arm_q_des, expected_q)
+    assert torch.count_nonzero(env.arm_dq_des) == 0
+    assert torch.count_nonzero(env.arm_motion_elapsed) == 0
+    assert torch.count_nonzero(env.arm_motion_duration) == 0
+    assert torch.count_nonzero(env.arm_motion_hold_duration) == 0
 
 
 def test_com_support_margin_penalty_only_activates_outside_support_domain():
@@ -275,11 +325,17 @@ def test_removed_com_reward_and_margin_shaping_are_absent_from_task_sources():
     assert "edge_penalty" not in function_source
     assert "rear_edge_penalty" not in function_source
     assert "inside_distance" not in function_source
+    assert '"curriculum/right_arm_factor"' in env_source
+    assert '"curriculum/com_support_margin_factor"' in env_source
 
 
 @pytest.mark.parametrize(
     ("iteration", "range_fraction", "max_vel", "hold_time"),
-    [(0, 0.05, 0.1, 1.5), (5000, 0.325, 0.3, 0.9), (10000, 0.6, 0.5, 0.3)],
+    [
+        (5000, 0.1875, 0.2, 0.6),
+        (7500, 0.325, 0.3, 0.9),
+        (12500, 0.6, 0.5, 1.5),
+    ],
 )
 def test_sampling_scales_only_arm_motion_parameters_for_4096_envs(
     iteration, range_fraction, max_vel, hold_time
