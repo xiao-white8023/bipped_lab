@@ -887,9 +887,8 @@ def com_support_margin_penalty(
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
     std: float = 0.03,
     outside_scale: float = 10.0,
-    rear_scale: float = 1.5,
 ) -> torch.Tensor:
-    """惩罚整机质心接近或越过双脚支撑域边界。
+    """仅惩罚整机质心水平投影越过双脚支撑域。
 
     Args:
         env:
@@ -900,14 +899,10 @@ def com_support_margin_penalty(
             因此此参数主要用于保持奖励函数接口统一。
 
         std:
-            边界惩罚的作用距离，单位为米。
-            例如 0.03 表示距离边界约 3 cm 时开始明显惩罚。
+            越界距离归一化尺度，单位为米。
 
         outside_scale:
-            质心投影越过支撑域后的额外惩罚系数。
-
-        rear_scale:
-            后边界惩罚倍率。大于 1 时，更强地抑制重心后移。
+            质心投影越过支撑域后的惩罚系数。
 
     Returns:
         penalty:
@@ -1058,66 +1053,11 @@ def com_support_margin_penalty(
     # 离质心最近的支撑域边界
     min_signed_distance = all_distances.amin(dim=-1)
 
-    # ---------------------------------------------------------
-    # 6. 支撑域边缘惩罚
-    #
-    # 在中心区域接近 0；
-    # 靠近边界时接近 1。
-    # ---------------------------------------------------------
-
-    inside_distance = torch.clamp(
-        min_signed_distance,
-        min=0.0,
-    )
-
-    edge_penalty = torch.exp(
-        -inside_distance / std
-    )
-
-    # ---------------------------------------------------------
-    # 7. 越界惩罚
-    # ---------------------------------------------------------
-
+    # 支撑域内和边界上的距离均为 0，仅保留越界部分。
     outside_distance = torch.relu(
         -min_signed_distance
     )
-
-    outside_penalty = (
-        outside_distance / std
-    ).square()
-
-    # ---------------------------------------------------------
-    # 8. 单独加强脚跟方向惩罚
-    # ---------------------------------------------------------
-
-    rear_inside_distance = torch.clamp(
-        rear_distance,
-        min=0.0,
-    )
-
-    rear_edge_penalty = torch.exp(
-        -rear_inside_distance / std
-    )
-
-    rear_outside_distance = torch.relu(
-        -rear_distance
-    )
-
-    rear_outside_penalty = (
-        rear_outside_distance / std
-    ).square()
-
-    rear_penalty = (
-        rear_edge_penalty
-        + outside_scale * rear_outside_penalty
-    )
-    # rear_scale=1 时，不添加额外后侧惩罚
-    penalty = (
-        edge_penalty
-        + outside_scale * outside_penalty
-        + (rear_scale - 1.0) * rear_penalty
-    )
-    return penalty
+    return (outside_distance / std).square() * outside_scale
 
 def feet_no_contact(env: BaseEnv  | G1ROUGHEnv |G1Env, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]

@@ -98,9 +98,10 @@ class SquatStandEnv(VecEnv):
         self._com_support_margin_weight = float(
             self.reward_manager.get_term_cfg("com_support_margin").weight
         )
-        self._apply_com_support_margin_curriculum()
+        self._validate_com_support_margin_curriculum()
         
         self.init_buffers()
+        self._apply_com_support_margin_curriculum()
 
         env_ids = torch.arange(self.num_envs, device=self.device)
         
@@ -433,12 +434,32 @@ class SquatStandEnv(VecEnv):
     def set_training_iteration(self, iteration: int):
         """Receive the current PPO iteration from the task's runner."""
         self.current_iteration = int(iteration)
-        self.com_margin_factor = 0.0 if self.current_iteration < 1000 else 1.0
         self._apply_com_support_margin_curriculum()
         self.update_arm_curriculum()
 
+    def _validate_com_support_margin_curriculum(self):
+        """Validate the task-local COM support-margin curriculum settings."""
+        if self.cfg.com_support_margin_start_iteration < 0:
+            raise ValueError(
+                "com_support_margin_start_iteration must be non-negative."
+            )
+        if self.cfg.com_support_margin_ramp_duration <= 0:
+            raise ValueError(
+                "com_support_margin_ramp_duration must be positive."
+            )
+
     def _apply_com_support_margin_curriculum(self):
         """Update the RewardManager-cached COM-margin term weight."""
+        start_iteration = self.cfg.com_support_margin_start_iteration
+        ramp_duration = self.cfg.com_support_margin_ramp_duration
+        if self.current_iteration < start_iteration:
+            factor = 0.0
+        elif self.current_iteration < start_iteration + ramp_duration:
+            factor = (self.current_iteration - start_iteration) / ramp_duration
+        else:
+            factor = 1.0
+
+        self.com_margin_factor = float(factor)
         term_cfg = self.reward_manager.get_term_cfg("com_support_margin")
         term_cfg.weight = self._com_support_margin_weight * self.com_margin_factor
         self.reward_manager.set_term_cfg("com_support_margin", term_cfg)

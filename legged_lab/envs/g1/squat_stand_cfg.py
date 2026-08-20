@@ -73,13 +73,13 @@ class Reward:
         params={"asset_cfg": SceneEntityCfg("robot", body_names=".*torso.*")}, 
         weight=-2.0
     )
-    base_ang_vel_xy = RewTerm(
-        func=mdp.ang_vel_xy_l2,
-        weight=-1.0,
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-        },
-    )
+    # base_ang_vel_xy = RewTerm(
+    #     func=mdp.ang_vel_xy_l2,
+    #     weight=-1.0,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot"),
+    #     },
+    # )
     
     feet_xy_velocity=RewTerm(func=mdp.feet_xy_velocity,
                              weight=-1,
@@ -98,7 +98,7 @@ class Reward:
     )
     feet_no_contact = RewTerm(
         func=mdp.feet_no_contact,
-        weight=-5.0,
+        weight=-2.0,
         params={
             "sensor_cfg": SceneEntityCfg(
                 "contact_sensor",
@@ -133,12 +133,7 @@ class Reward:
         params={
             "std": 0.03,
             "outside_scale": 10.0,
-            "rear_scale": 1.0,
         },
-    )
-    com_xy_velocity = RewTerm(
-    func=mdp.com_xy_velocity_l2,
-    weight=-1.0,
     )
 
 
@@ -148,7 +143,7 @@ class RightArmMotionCfg:
 
     enable: bool = True
     curriculum_enable: bool = True
-    curriculum_end_iteration: int = 8000
+    curriculum_end_iteration: int = 10000
 
     min_range_fraction: float = 0.05
     max_range_fraction: float = 0.6
@@ -177,6 +172,8 @@ class RightArmMotionCfg:
 @configclass
 class SaquatStandENVCFG:
     device: str = "cuda:0"
+    com_support_margin_start_iteration: int = 2000
+    com_support_margin_ramp_duration: int = 1000
     scene: BaseSceneCfg = BaseSceneCfg(
         max_episode_length_s=20.0,
         num_envs=4096,
