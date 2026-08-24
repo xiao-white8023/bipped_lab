@@ -85,7 +85,7 @@ class G1FlatSim2SimCfg:
         sim_duration = 100.0
         num_dofs=29
         num_actions = 15
-        num_obs_per_step = 81 
+        num_obs_per_step = 80
         actor_obs_history_length = 10
         dt = 0.005
         decimation = 4
@@ -310,7 +310,6 @@ class G1FlatMujocoRunner:
                 joint_pos_isaac.astype(np.float32),       # 29
                 joint_vel_isaac.astype(np.float32),       # 29
                 last_action.astype(np.float32),           # 15
-                root_height,                              # 1
             ],
             axis=0,
         ).astype(np.float32)
