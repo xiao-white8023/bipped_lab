@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 
@@ -32,7 +33,7 @@ def _load_env_methods(*method_names):
         method.decorator_list = []
         selected.append(method)
     module = ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[]))
-    namespace = {"torch": torch}
+    namespace = {"torch": torch, "np": np}
     exec(compile(module, str(ENV_PATH), "exec"), namespace)
     return tuple(namespace[name] for name in method_names)
 
@@ -47,7 +48,20 @@ def _load_reward_function(function_name):
         if isinstance(node, ast.FunctionDef) and node.name == function_name
     )
     function.decorator_list = []
-    module = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    selected = []
+    if function_name == "track_com_forward_in_support_frame":
+        selected.append(
+            next(
+                node
+                for node in tree.body
+                if isinstance(node, ast.FunctionDef)
+                and node.name == "com_forward_target_from_height"
+            )
+        )
+    selected.append(function)
+    module = ast.fix_missing_locations(
+        ast.Module(body=selected, type_ignores=[])
+    )
     namespace = {
         "torch": torch,
         "BaseEnv": object,
@@ -79,8 +93,23 @@ def _arm_cfg(curriculum_enable=True):
 
 
 def _curriculum_env(num_envs=4096):
-    update, apply_com_margin, hold_default, set_iteration, sample, advance = _load_env_methods(
+    (
+        update,
+        linear_factor,
+        validate_height,
+        validate_com_forward,
+        apply_height,
+        apply_com_margin,
+        hold_default,
+        set_iteration,
+        sample,
+        advance,
+    ) = _load_env_methods(
         "update_arm_curriculum",
+        "_linear_curriculum_factor",
+        "_validate_height_curriculum",
+        "_validate_com_forward_reward",
+        "_apply_height_curriculum",
         "_apply_com_support_margin_curriculum",
         "_hold_right_arm_at_default",
         "set_training_iteration",
@@ -96,7 +125,20 @@ def _curriculum_env(num_envs=4096):
         .expand(num_envs, num_joints, 2)
         .clone(),
     )
-    term_cfgs = {"com_support_margin": SimpleNamespace(weight=-2.0)}
+    term_cfgs = {
+        "track_height_cmd": SimpleNamespace(weight=5.0, params={"std": 0.05}),
+        "track_com_forward": SimpleNamespace(
+            weight=0.5,
+            params={
+                "stand_target_x": 0.0,
+                "squat_target_x": 0.02,
+                "tracking_start_height": 0.65,
+                "squat_height": 0.36,
+                "std": 0.04,
+            },
+        ),
+        "com_support_margin": SimpleNamespace(weight=-2.0),
+    }
 
     class RewardManagerStub:
         def get_term_cfg(self, term_name):
@@ -108,13 +150,27 @@ def _curriculum_env(num_envs=4096):
     env = SimpleNamespace(
         cfg=SimpleNamespace(
             right_arm_motion=_arm_cfg(),
+            height_curriculum_start_iteration=0,
+            height_curriculum_end_iteration=2500,
+            height_curriculum_start_min=0.65,
+            height_curriculum_final_min=0.36,
+            height_tracking_start_std=0.08,
+            height_tracking_final_std=0.05,
             com_support_margin_start_iteration=3500,
             com_support_margin_ramp_duration=1000,
         ),
         device="cpu",
         current_iteration=0,
+        height_curriculum_factor=0.0,
         com_margin_factor=0.0,
+        _height_command_final_range=(0.36, 0.77),
         _com_support_margin_weight=-2.0,
+        command_generator=SimpleNamespace(
+            command=torch.full((num_envs, 1), 0.7),
+            cfg=SimpleNamespace(
+                ranges=SimpleNamespace(height=(0.36, 0.77))
+            )
+        ),
         reward_manager=RewardManagerStub(),
         extras={"log": {}},
         arm_curriculum_factor=0.0,
@@ -134,11 +190,20 @@ def _curriculum_env(num_envs=4096):
         arm_motion_hold_duration=torch.zeros(num_envs),
     )
     env.update_arm_curriculum = MethodType(update, env)
+    env._linear_curriculum_factor = linear_factor
+    env._validate_height_curriculum = MethodType(validate_height, env)
+    env._validate_com_forward_reward = MethodType(
+        validate_com_forward, env
+    )
+    env._apply_height_curriculum = MethodType(apply_height, env)
     env._apply_com_support_margin_curriculum = MethodType(apply_com_margin, env)
     env._hold_right_arm_at_default = MethodType(hold_default, env)
     env.set_training_iteration = MethodType(set_iteration, env)
     env.sample_new_right_arm_motion = MethodType(sample, env)
     env.update_right_arm_motion = MethodType(advance, env)
+    env._validate_height_curriculum()
+    env._validate_com_forward_reward()
+    env._apply_height_curriculum()
     env._apply_com_support_margin_curriculum()
     return env
 
@@ -203,6 +268,141 @@ def test_com_support_margin_curriculum_config_defaults():
         "com_support_margin_start_iteration": 3500,
         "com_support_margin_ramp_duration": 1000,
     }
+
+
+def test_height_curriculum_config_defaults():
+    tree = ast.parse(CFG_PATH.read_text(encoding="utf-8"), filename=str(CFG_PATH))
+    class_body = next(
+        node.body
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SaquatStandENVCFG"
+    )
+    names = {
+        "height_curriculum_start_iteration",
+        "height_curriculum_end_iteration",
+        "height_curriculum_start_min",
+        "height_curriculum_final_min",
+        "height_tracking_start_std",
+        "height_tracking_final_std",
+    }
+    values = {
+        node.target.id: ast.literal_eval(node.value)
+        for node in class_body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id in names
+    }
+    assert values == {
+        "height_curriculum_start_iteration": 0,
+        "height_curriculum_end_iteration": 2500,
+        "height_curriculum_start_min": 0.65,
+        "height_curriculum_final_min": 0.36,
+        "height_tracking_start_std": 0.08,
+        "height_tracking_final_std": 0.05,
+    }
+
+
+def test_com_forward_reward_has_no_iteration_curriculum():
+    cfg_source = CFG_PATH.read_text(encoding="utf-8")
+    env_source = ENV_PATH.read_text(encoding="utf-8")
+
+    assert "com_forward_start_iteration" not in cfg_source
+    assert "com_forward_ramp_duration" not in cfg_source
+    assert "_apply_com_forward_curriculum" not in env_source
+    assert "curriculum/com_forward" not in env_source
+
+
+@pytest.mark.parametrize(
+    ("iteration", "factor", "command_min", "height_std"),
+    [
+        (0, 0.0, 0.65, 0.08),
+        (1250, 0.5, 0.505, 0.065),
+        (2500, 1.0, 0.36, 0.05),
+        (5000, 1.0, 0.36, 0.05),
+    ],
+)
+def test_height_curriculum_updates_future_range_and_reward_std(
+    iteration, factor, command_min, height_std
+):
+    env = _curriculum_env(num_envs=1)
+    active_command_before = env.command_generator.command.clone()
+    env.set_training_iteration(iteration)
+
+    assert env.height_curriculum_factor == pytest.approx(factor)
+    assert env.command_generator.cfg.ranges.height == pytest.approx(
+        (command_min, 0.77)
+    )
+    assert env.reward_manager.get_term_cfg(
+        "track_height_cmd"
+    ).params["std"] == pytest.approx(height_std)
+    torch.testing.assert_close(
+        env.command_generator.command, active_command_before
+    )
+
+
+def test_curriculum_validation_rejects_bad_height_and_com_parameters():
+    env = _curriculum_env(num_envs=1)
+    env.reward_manager.get_term_cfg("track_height_cmd").params["std"] = 0.05
+    env.cfg.height_curriculum_end_iteration = 0
+    with pytest.raises(ValueError, match="height_curriculum_end_iteration"):
+        env._validate_height_curriculum()
+
+    env = _curriculum_env(num_envs=1)
+    env.reward_manager.get_term_cfg("track_com_forward").params["std"] = 0.0
+    with pytest.raises(ValueError, match="std must be positive"):
+        env._validate_com_forward_reward()
+
+
+def test_negative_training_iteration_is_rejected():
+    env = _curriculum_env(num_envs=1)
+    with pytest.raises(ValueError, match="non-negative"):
+        env.set_training_iteration(-1)
+
+
+@pytest.mark.parametrize("iteration", [0, 3000, 4000, 8000])
+def test_com_forward_reward_weight_is_fixed_for_all_iterations(iteration):
+    env = _curriculum_env(num_envs=1)
+    env.set_training_iteration(iteration)
+
+    assert env.reward_manager.get_term_cfg("track_com_forward").weight == pytest.approx(
+        0.5
+    )
+
+
+def test_com_forward_target_interpolates_with_squat_depth():
+    target_fn = _load_reward_function(
+        "com_forward_target_from_height"
+    )
+    heights = torch.tensor(
+        [0.77, 0.70, 0.65, (0.65 + 0.36) / 2.0, 0.36]
+    )
+
+    targets = target_fn(heights)
+
+    torch.testing.assert_close(
+        targets,
+        torch.tensor([0.0, 0.0, 0.0, 0.01, 0.02]),
+    )
+
+
+def test_com_forward_reward_is_maximal_at_interpolated_target():
+    reward_fn = _load_reward_function("track_com_forward_in_support_frame")
+    height_command = torch.tensor(
+        [[0.77], [0.70], [0.65], [0.505], [0.36], [0.36]]
+    )
+    com_x = torch.tensor([0.0, 0.0, 0.0, 0.01, 0.02, -0.02])
+    env = SimpleNamespace(
+        get_root_height_in_support_frame=lambda: height_command[:, 0],
+        get_com_state_in_support_frame=lambda: (
+            torch.stack((com_x, torch.zeros_like(com_x), torch.ones_like(com_x)), dim=-1),
+            torch.zeros(6, 3),
+        ),
+    )
+
+    reward = reward_fn(env, std=0.04)
+
+    torch.testing.assert_close(reward[:5], torch.ones(5))
+    assert reward[5] < reward[4]
 
 
 @pytest.mark.parametrize(

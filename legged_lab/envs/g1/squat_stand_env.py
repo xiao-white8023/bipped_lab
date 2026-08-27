@@ -18,6 +18,10 @@ from scipy.spatial.transform import Rotation
 
 from legged_lab.utils.height_cammand.height_cammand import UniformHeightCommand
 from legged_lab.utils.height_cammand.height_cammand_cfg import UniformHeightCommandCfg
+from legged_lab.mdp.rewards import (
+    com_forward_target_from_height,
+    com_support_margin_penalty,
+)
 
 from legged_lab.envs.g1.squat_stand_cfg import SaquatStandENVCFG
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
@@ -42,6 +46,9 @@ class SquatStandEnv(VecEnv):
         self.cfg = cfg
         self.headless = headless
         self.device = self.cfg.device
+        # The runner toggles this from policy.cenet.enabled. Keeping it false
+        # by default preserves the legacy environment path outside training.
+        self.cenet_training_enabled = False
         self.physics_dt = self.cfg.sim.dt
         self.step_dt = self.cfg.sim.decimation * self.cfg.sim.dt
         self.num_envs = self.cfg.scene.num_envs
@@ -94,13 +101,20 @@ class SquatStandEnv(VecEnv):
         self.command_generator = UniformHeightCommand(cfg=command_cfg, env=self)
         self.reward_manager = RewardManager(self.cfg.reward, self)
         self.current_iteration = 0
+        self.height_curriculum_factor = 0.0
         self.com_margin_factor = 0.0
+        self._height_command_final_range = tuple(
+            self.command_generator.cfg.ranges.height
+        )
         self._com_support_margin_weight = float(
             self.reward_manager.get_term_cfg("com_support_margin").weight
         )
+        self._validate_height_curriculum()
+        self._validate_com_forward_reward()
         self._validate_com_support_margin_curriculum()
         
         self.init_buffers()
+        self._apply_height_curriculum()
         self._apply_com_support_margin_curriculum()
 
         env_ids = torch.arange(self.num_envs, device=self.device)
@@ -438,9 +452,229 @@ class SquatStandEnv(VecEnv):
 
     def set_training_iteration(self, iteration: int):
         """Receive the current PPO iteration from the task's runner."""
+        if int(iteration) < 0:
+            raise ValueError("training iteration must be non-negative.")
         self.current_iteration = int(iteration)
+        self._apply_height_curriculum()
         self._apply_com_support_margin_curriculum()
         self.update_arm_curriculum()
+
+    @staticmethod
+    def _linear_curriculum_factor(
+        iteration: int,
+        start_iteration: int,
+        end_iteration: int,
+    ) -> float:
+        factor = (iteration - start_iteration) / (
+            end_iteration - start_iteration
+        )
+        return max(0.0, min(float(factor), 1.0))
+
+    def _validate_height_curriculum(self):
+        """Validate the height-command and height-reward schedule."""
+        cfg = self.cfg
+        if (
+            not isinstance(cfg.height_curriculum_start_iteration, int)
+            or cfg.height_curriculum_start_iteration < 0
+        ):
+            raise ValueError(
+                "height_curriculum_start_iteration must be a non-negative integer."
+            )
+        if (
+            not isinstance(cfg.height_curriculum_end_iteration, int)
+            or cfg.height_curriculum_end_iteration
+            <= cfg.height_curriculum_start_iteration
+        ):
+            raise ValueError(
+                "height_curriculum_end_iteration must be greater than the "
+                "start iteration."
+            )
+
+        final_min, upper = self._height_command_final_range
+        height_values = (
+            final_min,
+            upper,
+            cfg.height_curriculum_start_min,
+            cfg.height_curriculum_final_min,
+            cfg.height_tracking_start_std,
+            cfg.height_tracking_final_std,
+        )
+        if not all(np.isfinite(value) for value in height_values):
+            raise ValueError("Height curriculum values must be finite.")
+        if not (
+            0.0
+            < cfg.height_curriculum_final_min
+            <= cfg.height_curriculum_start_min
+            < upper
+        ):
+            raise ValueError(
+                "Height curriculum minima must be positive, ordered, and "
+                "strictly below the command upper bound."
+            )
+        if abs(cfg.height_curriculum_final_min - final_min) > 1.0e-9:
+            raise ValueError(
+                "height_curriculum_final_min must match commands.ranges.height[0]."
+            )
+        reward_std = self.reward_manager.get_term_cfg(
+            "track_height_cmd"
+        ).params["std"]
+        if abs(reward_std - cfg.height_tracking_final_std) > 1.0e-9:
+            raise ValueError(
+                "height_tracking_final_std must match track_height_cmd std."
+            )
+        if (
+            cfg.height_tracking_start_std <= 0.0
+            or cfg.height_tracking_final_std <= 0.0
+            or cfg.height_tracking_start_std
+            < cfg.height_tracking_final_std
+        ):
+            raise ValueError(
+                "Height tracking std values must be positive and tighten from "
+                "start to final."
+            )
+
+    def _validate_com_forward_reward(self):
+        """Validate the fixed-weight COM-forward reward parameters."""
+        params = self.reward_manager.get_term_cfg("track_com_forward").params
+        parameter_names = (
+            "std",
+            "tracking_start_height",
+            "squat_height",
+            "stand_target_x",
+            "squat_target_x",
+        )
+        if not all(
+            name in params and np.isfinite(params[name])
+            for name in parameter_names
+        ):
+            raise ValueError(
+                "track_com_forward parameters must be present and finite."
+            )
+        if params["std"] <= 0.0:
+            raise ValueError("track_com_forward std must be positive.")
+        if params["tracking_start_height"] <= params["squat_height"]:
+            raise ValueError(
+                "track_com_forward tracking_start_height must exceed "
+                "squat_height."
+            )
+        if params["squat_target_x"] < params["stand_target_x"]:
+            raise ValueError(
+                "track_com_forward squat target must not be behind stand target."
+            )
+        final_min, upper = self._height_command_final_range
+        if (
+            params["tracking_start_height"] > upper
+            or abs(
+                params["tracking_start_height"]
+                - self.cfg.height_curriculum_start_min
+            )
+            > 1.0e-9
+            or abs(params["squat_height"] - final_min) > 1.0e-9
+        ):
+            raise ValueError(
+                "track_com_forward heights must match the height curriculum "
+                "activation and final minimum."
+            )
+
+    def _apply_height_curriculum(self):
+        """Update future command sampling and the height reward tolerance."""
+        cfg = self.cfg
+        factor = self._linear_curriculum_factor(
+            self.current_iteration,
+            cfg.height_curriculum_start_iteration,
+            cfg.height_curriculum_end_iteration,
+        )
+        self.height_curriculum_factor = factor
+        command_min = cfg.height_curriculum_start_min + factor * (
+            cfg.height_curriculum_final_min
+            - cfg.height_curriculum_start_min
+        )
+        tracking_std = cfg.height_tracking_start_std + factor * (
+            cfg.height_tracking_final_std - cfg.height_tracking_start_std
+        )
+
+        _, command_upper = self._height_command_final_range
+        # Existing commands are intentionally left untouched; this range is
+        # consumed only by subsequent reset/periodic resampling.
+        self.command_generator.cfg.ranges.height = (
+            float(command_min),
+            float(command_upper),
+        )
+        term_cfg = self.reward_manager.get_term_cfg("track_height_cmd")
+        term_cfg.params["std"] = float(tracking_std)
+        self.reward_manager.set_term_cfg("track_height_cmd", term_cfg)
+        self.extras.setdefault("log", {}).update(
+            {
+                "curriculum/height_factor": factor,
+                "curriculum/height_command_min_m": float(command_min),
+                "curriculum/height_tracking_std_m": float(tracking_std),
+            }
+        )
+
+    def _get_com_forward_statistics(self) -> dict[str, torch.Tensor]:
+        """Report support-frame COM-x tracking in physical units."""
+        term_cfg = self.reward_manager.get_term_cfg("track_com_forward")
+        params = term_cfg.params
+        com_position, _ = self.get_com_state_in_support_frame()
+        target_x = com_forward_target_from_height(
+            self.get_root_height_in_support_frame(),
+            stand_target_x=params["stand_target_x"],
+            squat_target_x=params["squat_target_x"],
+            tracking_start_height=params["tracking_start_height"],
+            squat_height=params["squat_height"],
+        )
+        error_x = com_position[:, 0] - target_x
+        return {
+            "com/mean_x_support_m": com_position[:, 0].mean(),
+            "com/mean_target_x_m": target_x.mean(),
+            "com/mean_x_error_m": error_x.mean(),
+            "com/mean_abs_x_error_m": error_x.abs().mean(),
+        }
+
+    def _get_height_tracking_statistics(self) -> dict[str, torch.Tensor]:
+        """Report command tracking in the same coordinates as its reward."""
+        current_height = self.robot.data.root_state_w[:, 2]
+        target_height = self.command_generator.command[:, 0]
+        height_error = current_height - target_height
+        return {
+            "height/mean_current_m": current_height.mean(),
+            "height/mean_target_m": target_height.mean(),
+            "height/mean_error_m": height_error.mean(),
+            "height/mean_abs_error_m": height_error.abs().mean(),
+        }
+
+    def get_root_height_in_support_frame(self) -> torch.Tensor:
+        """Return root height relative to the current foot support plane."""
+        support_height = self.foot_support_corners_w[..., 2].mean(dim=(1, 2))
+        return self.robot.data.root_pose_w[:, 2] - support_height
+
+    def _get_support_statistics(self) -> dict[str, torch.Tensor]:
+        """Report contact availability and COM support-domain violations."""
+        margin_params = self.reward_manager.get_term_cfg(
+            "com_support_margin"
+        ).params
+        outside = com_support_margin_penalty(
+            self,
+            std=margin_params["std"],
+            outside_scale=margin_params["outside_scale"],
+        ) > 0.0
+        net_contact_forces = self.contact_sensor.data.net_forces_w_history
+        feet_contact = (
+            torch.max(
+                torch.linalg.vector_norm(
+                    net_contact_forces[:, :, self.feet_cfg.body_ids, :],
+                    dim=-1,
+                ),
+                dim=1,
+            ).values
+            > 0.5
+        )
+        return {
+            "com/support_outside_rate": outside.float().mean(),
+            "feet/left_contact_rate": feet_contact[:, 0].float().mean(),
+            "feet/right_contact_rate": feet_contact[:, 1].float().mean(),
+            "feet/double_contact_rate": feet_contact.all(dim=1).float().mean(),
+        }
 
     def _validate_com_support_margin_curriculum(self):
         """Validate the task-local COM support-margin curriculum settings."""
@@ -753,14 +987,7 @@ class SquatStandEnv(VecEnv):
 
         # Root height relative to the current support plane rather than
         # an absolute world-z coordinate.
-        support_height = (
-            self.foot_support_corners_w[..., 2]
-            .mean(dim=(1, 2))
-        )
-        root_height_support = (
-            robot.data.root_pose_w[:, 2]
-            - support_height
-        ).unsqueeze(-1)
+        root_height_support = self.get_root_height_in_support_frame().unsqueeze(-1)
 
         # Give the critic the upcoming right-arm disturbance command.
         # Keep these quantities out of the actor for now.
@@ -996,6 +1223,11 @@ class SquatStandEnv(VecEnv):
 
     def compute_observations(self):
         current_actor_obs, current_critic_obs = self.compute_current_observations()
+        clean_reconstruction_target = (
+            current_actor_obs.clone()
+            if self.cenet_training_enabled
+            else None
+        )
         '''
         torch.rand_like(current_actor_obs)：生成一个和current_actor_obs形状完全相同的张量，元素值服从[0, 1]之间的均匀分布。
         `2 * torch.rand_like(...) - 1：将均匀分布从[0, 1]映射到[-1, 1]。
@@ -1024,7 +1256,26 @@ class SquatStandEnv(VecEnv):
         self.actor_obs = torch.clip(self.actor_obs, -self.clip_obs, self.clip_obs)
         self.critic_obs = torch.clip(self.critic_obs, -self.clip_obs, self.clip_obs)
 
+        self.extras.setdefault("observations", {})
+        if clean_reconstruction_target is not None:
+            self.extras["observations"]["cenet_reconstruction_target"] = torch.clip(
+                clean_reconstruction_target,
+                -self.clip_obs,
+                self.clip_obs,
+            )
+        else:
+            self.extras["observations"].pop("cenet_reconstruction_target", None)
+
         return self.actor_obs, self.critic_obs
+
+    def set_cenet_training_enabled(self, enabled: bool):
+        """Enable clean next-observation targets only for CENet training."""
+        self.cenet_training_enabled = bool(enabled)
+        if not self.cenet_training_enabled:
+            self.extras.setdefault("observations", {}).pop(
+                "cenet_reconstruction_target",
+                None,
+            )
     
     def reset(self, env_ids):
         if len(env_ids) == 0:
@@ -1206,6 +1457,9 @@ class SquatStandEnv(VecEnv):
         self.whole_body_com_vel_w.copy_(current_com_vel_w)
 
         right_arm_statistics = self._get_right_arm_statistics()
+        com_forward_statistics = self._get_com_forward_statistics()
+        height_tracking_statistics = self._get_height_tracking_statistics()
+        support_statistics = self._get_support_statistics()
 
         reward_buf = self.reward_manager.compute(self.step_dt)
 
@@ -1219,9 +1473,20 @@ class SquatStandEnv(VecEnv):
         self.extras.setdefault("log", {}).update(
             right_arm_statistics
         )
+        self.extras["log"].update(com_forward_statistics)
+        self.extras["log"].update(height_tracking_statistics)
+        self.extras["log"].update(support_statistics)
         self.extras["log"].update(
             {
                 "curriculum/right_arm_factor": self.arm_curriculum_factor,
+                "curriculum/height_factor": self.height_curriculum_factor,
+                "curriculum/height_command_min_m": (
+                    self.command_generator.cfg.ranges.height[0]
+                ),
+                "curriculum/height_tracking_std_m": (
+                    self.reward_manager.get_term_cfg("track_height_cmd")
+                    .params["std"]
+                ),
                 "curriculum/com_support_margin_factor": self.com_margin_factor,
             }
         )

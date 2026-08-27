@@ -22,6 +22,7 @@ from .constrained_ppo import ConstrainedPPO
 from .moe_ppo import MoePPO
 from .ppo import PPO
 from .renet_amp_ppo import RENetAMPPPO
+from .squat_ppo import SquatPPO
 
 
 class _RemovedAlgorithm:
@@ -34,4 +35,4 @@ class _RemovedAlgorithm:
 
 MoeAmpPpO = _RemovedAlgorithm
 
-__all__ = ["PPO", "ConstrainedPPO", "AMPPPO", "MoeAmpPpO", "MoePPO", "RENetAMPPPO"]
+__all__ = ["PPO", "SquatPPO", "ConstrainedPPO", "AMPPPO", "MoeAmpPpO", "MoePPO", "RENetAMPPPO"]

@@ -8,12 +8,13 @@ from collections import deque
 import torch
 
 import rsl_rl
-from rsl_rl.algorithms import PPO
+from rsl_rl.algorithms import PPO, SquatPPO
 from rsl_rl.env import VecEnv
 from rsl_rl.modules import (
     ActorCritic,
     EmpiricalNormalization,
     MhaActorCritic,
+    SquatActorCritic,
 )
 from rsl_rl.utils import store_code_state
 
@@ -28,12 +29,20 @@ class OnPolicyRunner:
         self.device = device
         self.env = env
 
+        cenet_cfg = self.policy_cfg.get("cenet")
+        if isinstance(cenet_cfg, dict):
+            cenet_enabled = bool(cenet_cfg.get("enabled", False))
+        else:
+            cenet_enabled = bool(getattr(cenet_cfg, "enabled", False))
+        if hasattr(self.env, "set_cenet_training_enabled"):
+            self.env.set_cenet_training_enabled(cenet_enabled)
+
         # check if multi-gpu is enabled
         self._configure_multi_gpu()
 
         # resolve training type depending on the algorithm
         
-        if self.alg_cfg["class_name"] != "PPO":
+        if self.alg_cfg["class_name"] not in {"PPO", "SquatPPO"}:
             raise ValueError(f"Training type not found for algorithm {self.alg_cfg['class_name']}.")
         self.training_type = "rl"
         print("没有使用amp")
@@ -59,7 +68,7 @@ class OnPolicyRunner:
         if "CnnMlp" in self.policy_cfg and isinstance(self.policy_cfg["CnnMlp"], dict):
             self.policy_cfg["CnnMlp"].pop("num_heads", None)
             self.policy_cfg["CnnMlp"].pop("embed_dim", None)
-        policy: ActorCritic | MhaActorCritic = policy_class(
+        policy: ActorCritic | MhaActorCritic | SquatActorCritic = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
 
@@ -188,6 +197,8 @@ class OnPolicyRunner:
             # Environments without this hook are unaffected.
             if hasattr(self.env, "set_training_iteration"):
                 self.env.set_training_iteration(it)
+            if hasattr(self.alg, "set_training_iteration"):
+                self.alg.set_training_iteration(it)
             start = time.time()
             # Rollout
             with torch.inference_mode():
@@ -208,7 +219,15 @@ class OnPolicyRunner:
                         privileged_obs = obs
 
                     # process the step
-                    self.alg.process_env_step(rewards, dones, infos)
+                    if isinstance(self.alg, SquatPPO):
+                        self.alg.process_env_step(
+                            rewards,
+                            dones,
+                            infos,
+                            next_actor_obs=obs,
+                        )
+                    else:
+                        self.alg.process_env_step(rewards, dones, infos)
 
                     # Extract intrinsic rewards (only for logging)
                     intrinsic_rewards = self.alg.intrinsic_rewards if self.alg.rnd else None

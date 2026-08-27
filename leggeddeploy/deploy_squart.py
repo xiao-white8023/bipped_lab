@@ -69,6 +69,8 @@ from common.remote_controller import KeyMap, RemoteController
 from common.rotation_helper import get_gravity_orientation, transform_imu_data
 from config_squart import Config
 from depth.depth_client import DepthClient
+from squat_action_filter import FirstOrderLowPassFilter
+from squat_policy_adapter import resolve_squat_policy_layout
 
 
 RIGHT_ARM_MOTOR_IDS = range(22, 29)
@@ -83,7 +85,29 @@ class Controller:
         self.config = config
         self.remote_controller = RemoteController() # 创建遥控器对象
 
-        self.policy = torch.jit.load(config.policy_path).eval() # eval()的意思是把策略转成推理模式
+        self.policy = torch.jit.load(config.policy_path, map_location="cpu").eval() # eval()的意思是把策略转成推理模式
+        self.policy_layout = resolve_squat_policy_layout(
+            self.policy,
+            history_length=config.history_length,
+            num_actions=config.num_actions,
+            requested_layout=config.policy_obs_layout,
+            configured_single_obs_dim=config.num_obs,
+        )
+        self.single_obs_dim = self.policy_layout.single_obs_dim
+        self.policy_obs_dim = self.policy_layout.policy_obs_dim
+
+        policy_kind = "CENet" if self.policy_layout.has_cenet else "ActorCritic"
+        print(
+            f"[INFO] Squat policy: {policy_kind}, layout={self.policy_layout.name}, "
+            f"input={config.history_length}x{self.single_obs_dim}={self.policy_obs_dim}, "
+            f"output={config.num_actions}."
+        )
+        if config.num_obs != self.single_obs_dim or config.num_policy_obs != self.policy_obs_dim:
+            print(
+                "[WARN] YAML observation dimensions do not match the exported policy; "
+                f"using detected values num_obs={self.single_obs_dim}, "
+                f"num_policy_obs={self.policy_obs_dim}."
+            )
         self.run_thread = RecurrentThread(interval=self.config.control_dt, target=self.run)  # 100Hz/50Hz #创建一个周期线程 每隔 control_dt 秒，执行一次 self.run()  self.run是回调函数  策略每秒钟执行50次
         self.publish_thread = RecurrentThread(interval=1 / 500, target=self.publish)  # self.publish_thread  因为 policy 没必要 500Hz 推理，太耗算力；但是底层命令最好高频持续发送，机器人控制更稳定
         self.cmd_lock = Lock() # 这是线程锁。# 因为现在有两个线程都可能访问 self.low_cmd：
@@ -96,12 +120,29 @@ class Controller:
         self.joint_pos = np.zeros(config.num_joints, dtype=np.float32) # 29
         self.joint_vel = np.zeros(config.num_joints, dtype=np.float32) # 29 
         self.action = np.zeros(config.num_actions, dtype=np.float32) # 动作是15维度
+        self.action_filter = FirstOrderLowPassFilter(
+            size=config.num_actions,
+            control_dt=config.control_dt,
+            cutoff_hz=config.action_filter_cutoff_hz,
+            enabled=config.action_filter_enabled,
+        )
+        if self.action_filter.enabled:
+            print(
+                "[INFO] Squat action low-pass filter enabled: "
+                f"cutoff={self.action_filter.cutoff_hz:g} Hz, "
+                f"alpha={self.action_filter.alpha:.6f}."
+            )
+        else:
+            print("[INFO] Squat action low-pass filter disabled.")
         # 当前高度命令，初始为站立高度
         # 后面按遥控器输入缓慢变化，作为策略的 1 维 command
         self.height_cmd = float(config.stand_height)
 
-        self.current_obs = np.zeros(config.num_obs, dtype=np.float32)  # 本体观测 81
-        self.current_obs_history = np.zeros((config.history_length, config.num_obs), dtype=np.float32) # 本体历史观测810
+        self.current_obs = np.zeros(self.single_obs_dim, dtype=np.float32)
+        self.current_obs_history = np.zeros(
+            (config.history_length, self.single_obs_dim),
+            dtype=np.float32,
+        )
 
         self.clip_max_command = np.array(
             [
@@ -117,20 +158,8 @@ class Controller:
         )
         # ===============================================================
         # 策略预热
-        # 视觉 policy 的输入维度：
-        # proprio_history: history_length * num_obs
-        # depth_history: history_frames * policy_depth_h * policy_depth_w
-        proprio_dim = self.config.history_length * self.config.num_obs  # 本体历史感知维度
-        policy_obs_dim = proprio_dim  # 810
-
-        if hasattr(self.config, "num_policy_obs"):
-            if policy_obs_dim != self.config.num_policy_obs:
-                raise RuntimeError(
-                    f"policy obs dim mismatch: "
-                    f"computed={policy_obs_dim}, config.num_policy_obs={self.config.num_policy_obs}"
-                )
-
-        dummy_policy_obs = np.zeros((1, policy_obs_dim), dtype=np.float32)
+        # 新 CENet 策略仍接收原始 800 维历史观测；v_z 和 latent 在导出策略内部生成。
+        dummy_policy_obs = np.zeros((1, self.policy_obs_dim), dtype=np.float32)
         for _ in range(50):
             with torch.inference_mode():
                 self.policy(torch.from_numpy(dummy_policy_obs))
@@ -417,22 +446,17 @@ class Controller:
         command = command * self.config.command_scale[0]
 
         # ==========================================================
-        # 5. root_height 观测
-        # 真机没有 IsaacLab 的 root_pos_w[:, 2]
-        # 第一版先用当前 height_cmd 近似补齐这一维
-        # ==========================================================
-        root_height_obs = np.array([self.height_cmd], dtype=np.float32)
-
-        # ==========================================================
-        # 6. 拼 81 维单帧观测
+        # 5. 拼当前训练使用的 80 维单帧 Actor 观测
         # ang_vel(3)
         # + gravity(3)
         # + height command(1)
         # + joint_pos(29)
         # + joint_vel(29)
         # + last_action(15)
-        # + root_height(1)
-        # = 81
+        # = 80
+        #
+        # root_height 现在只属于 Critic 特权观测，不送入 Actor。仅当自动检测到
+        # 旧 810 维 TorchScript 时，才保留原先的 height_cmd 近似值作为第 81 维。
         # ==========================================================
         idx = 0
 
@@ -454,21 +478,22 @@ class Controller:
         self.current_obs[idx : idx + self.config.num_actions] = self.action
         idx += self.config.num_actions
 
-        self.current_obs[idx : idx + 1] = root_height_obs
-        idx += 1
+        if self.policy_layout.includes_root_height:
+            self.current_obs[idx : idx + 1] = self.height_cmd
+            idx += 1
 
-        if idx != self.config.num_obs:
+        if idx != self.single_obs_dim:
             raise RuntimeError(
-                f"obs dim error: got {idx}, expected {self.config.num_obs}"
+                f"obs dim error: got {idx}, expected {self.single_obs_dim}"
             )
         
 
         # ==========================================================
         # 7. 维护 10 帧历史观测
         # current_obs_history shape:
-        #   (obs_history_length, num_obs) = (10, 81)
+        #   current policy: (obs_history_length, num_obs) = (10, 80)
         # policy_obs shape:
-        #   (1, num_policy_obs) = (1, 810)
+        #   current policy: (1, num_policy_obs) = (1, 800)
         # ==========================================================
         if self.first_run:
             # 第一次运行时，用当前观测填满整个历史
@@ -491,30 +516,29 @@ class Controller:
         # ==============================
         # 4. 检查维度
         # ==============================
-        if hasattr(self.config, "num_policy_obs"):
-            if policy_obs.shape[1] != self.config.num_policy_obs:
-                raise RuntimeError(
-                    f"policy_obs dim mismatch: "
-                    f"got {policy_obs.shape[1]}, "
-                    f"expected {self.config.num_policy_obs}"
-                )
+        if policy_obs.shape[1] != self.policy_obs_dim:
+            raise RuntimeError(
+                f"policy_obs dim mismatch: got {policy_obs.shape[1]}, "
+                f"expected {self.policy_obs_dim}"
+            )
 
         # ==============================
         # 5. policy 推理
         # ==============================
-        self.action = (
-            self.policy(torch.from_numpy(policy_obs).clip(-100, 100))
-            .clip(-100, 100)
-            .detach()
-            .numpy()
-            .squeeze()
-        )
-        if self.action.shape[0] != self.config.num_actions:
+        with torch.inference_mode():
+            action_tensor = self.policy(
+                torch.from_numpy(policy_obs).clip(-100, 100)
+            ).clip(-100, 100)
+        if tuple(action_tensor.shape) != (1, self.config.num_actions):
             raise RuntimeError(
                 f"action dim mismatch: "
-                f"got {self.action.shape[0]}, "
-                f"expected {self.config.num_actions}"
+                f"got {tuple(action_tensor.shape)}, "
+                f"expected (1, {self.config.num_actions})"
             )
+        raw_action = action_tensor[0].detach().cpu().numpy()
+        # self.action 始终代表真机实际执行的滤波后动作。下一控制周期的
+        # last_action 观测因此与发送给双腿/腰部的目标关节角保持一致。
+        self.action = self.action_filter.update(raw_action)
         # ==========================================================
         # 9. 构造 29 维目标角
         #

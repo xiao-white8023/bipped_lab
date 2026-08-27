@@ -45,12 +45,20 @@ dof_vel_scale: 1.0
 action_scale: 0.25
 command_scale: [1.0]
 
-# 观测维度 (带步态相位版本)
+# 仅平滑策略控制的双腿和腰部 15 维动作；外部右臂 LowCmd 不受影响。
+action_filter:
+  enabled: true
+  cutoff_hz: 5.0
+
+# Actor 观测维度。auto 会以 TorchScript 的实际输入为准：
+# - current: 80 x 10 = 800（当前训练，包括 CENet 开/关）
+# - legacy_root_height: 81 x 10 = 810（旧导出模型）
+policy_obs_layout: "auto"
 
 num_joints: 29
 num_actions: 15
-num_obs: 81  # 单帧本体观测的维度
-num_policy_obs: 810
+num_obs: 80
+num_policy_obs: 800
 
 
 # 速度命令范围

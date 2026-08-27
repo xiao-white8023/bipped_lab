@@ -21,5 +21,6 @@
 from .replay_buffer import ReplayBuffer
 from .rollout_storage import RolloutStorage
 from .constrained_rollout_storage import ConstrainedRolloutStorage
+from .squat_rollout_storage import SquatRolloutStorage
 
-__all__ = ["RolloutStorage", "ConstrainedRolloutStorage", "ReplayBuffer"]
+__all__ = ["RolloutStorage", "ConstrainedRolloutStorage", "SquatRolloutStorage", "ReplayBuffer"]

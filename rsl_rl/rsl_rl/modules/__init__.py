@@ -31,6 +31,7 @@ from .moe_actor_critic import MoeActorCritic
 from .mha_actor_critic import MhaActorCritic
 from .renet_actor_critic import RENetActorCritic
 from .recovery_critic import RecoveryCritic
+from .squat_actor_critic import SquatActorCritic
 
 
 __all__ = [
@@ -47,4 +48,5 @@ __all__ = [
     "MhaActorCritic",
     "RENetActorCritic",
     "RecoveryCritic",
+    "SquatActorCritic",
 ]

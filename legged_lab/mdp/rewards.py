@@ -880,6 +880,52 @@ def track_height_cmd(env:BaseEnv,
     current_height_command=env.command_generator.command[:,0]
     height_error=current_robot_height-current_height_command
     return torch.exp(-torch.square(height_error) / std**2)
+
+
+def com_forward_target_from_height(
+    current_height: torch.Tensor,
+    stand_target_x: float = 0.0,
+    squat_target_x: float = 0.02,
+    tracking_start_height: float = 0.65,
+    squat_height: float = 0.36,
+) -> torch.Tensor:
+    """Smoothly increase desired COM-x only after a sufficiently deep squat."""
+    squat_fraction = torch.clamp(
+        (tracking_start_height - current_height)
+        / (tracking_start_height - squat_height),
+        min=0.0,
+        max=1.0,
+    )
+    # Smoothstep keeps both the target and its slope continuous at the shallow
+    # squat activation point and at the full-squat target.
+    smooth_squat_fraction = squat_fraction.square() * (
+        3.0 - 2.0 * squat_fraction
+    )
+    return stand_target_x + smooth_squat_fraction * (
+        squat_target_x - stand_target_x
+    )
+
+
+def track_com_forward_in_support_frame(
+    env: BaseEnv,
+    stand_target_x: float = 0.0,
+    squat_target_x: float = 0.02,
+    tracking_start_height: float = 0.65,
+    squat_height: float = 0.36,
+    std: float = 0.04,
+) -> torch.Tensor:
+    """Reward front/back COM tracking in the current double-support frame."""
+    com_position, _ = env.get_com_state_in_support_frame()
+    current_height = env.get_root_height_in_support_frame()
+    target_x = com_forward_target_from_height(
+        current_height,
+        stand_target_x=stand_target_x,
+        squat_target_x=squat_target_x,
+        tracking_start_height=tracking_start_height,
+        squat_height=squat_height,
+    )
+    error = com_position[:, 0] - target_x
+    return torch.exp(-torch.square(error) / std**2)
     
 
 def com_support_margin_penalty(

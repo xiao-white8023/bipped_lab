@@ -12,12 +12,31 @@
 import numpy as np
 import yaml
 
+from squat_action_filter import compute_low_pass_alpha
+
 class Config:
     def __init__(self, file_path) -> None:
             with open(file_path) as f:
                 config = yaml.load(f, Loader=yaml.FullLoader)
 
-                self.control_dt = config["control_dt"]
+                self.control_dt = float(config["control_dt"])
+
+                # 策略动作一阶低通滤波。旧 YAML 未配置时保持原始直通行为。
+                action_filter_cfg = config.get("action_filter", {})
+                if not isinstance(action_filter_cfg, dict):
+                    raise ValueError("action_filter must be a mapping.")
+                self.action_filter_enabled = bool(
+                    action_filter_cfg.get("enabled", False)
+                )
+                self.action_filter_cutoff_hz = float(
+                    action_filter_cfg.get("cutoff_hz", 5.0)
+                )
+                if self.action_filter_enabled:
+                    # 在 Controller 建立 DDS 连接之前检查配置并给出明确错误。
+                    compute_low_pass_alpha(
+                        self.control_dt,
+                        self.action_filter_cutoff_hz,
+                    )
 
                 self.msg_type = config["msg_type"]
                 self.imu_type = config["imu_type"]
@@ -56,7 +75,7 @@ class Config:
                 
                 self.num_joints= config["num_joints"]
                 self.num_actions = config["num_actions"] # 15
-                self.num_obs = config["num_obs"] # 单帧观测 81
+                self.num_obs = config["num_obs"] # 当前单帧观测 80；旧模型为 81
 
                 self.history_length = config["obs_history_length"]
                 self.command_range = config["command_range"]
@@ -67,6 +86,8 @@ class Config:
                 self.max_delta_per_s = float(height_cfg["max_delta_per_s"])
                 
                 self.num_policy_obs=config["num_policy_obs"]
+                # auto 会直接试跑 TorchScript，自动兼容当前 800 维输入和旧 810 维输入。
+                self.policy_obs_layout = config.get("policy_obs_layout", "auto")
 
 
 

@@ -60,6 +60,20 @@ class Reward:
                                 "asset_cfg": SceneEntityCfg("robot"),
                             },)
 
+    track_com_forward = RewTerm(
+        func=mdp.track_com_forward_in_support_frame,
+        weight=0.5,
+        params={
+            "stand_target_x": 0.0,
+            "squat_target_x": 0.02,
+            # Shallow squat commands keep COM-x centered. Forward tracking
+            # starts only below this height.
+            "tracking_start_height": 0.65,
+            "squat_height": 0.36,
+            "std": 0.04,
+        },
+    )
+
     energy = RewTerm(func=mdp.energy, weight=-1e-3)
 
     dof_acc_l2 = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
@@ -71,26 +85,13 @@ class Reward:
     body_orientation_l2 = RewTerm(
         func=mdp.body_orientation_l2, 
         params={"asset_cfg": SceneEntityCfg("robot", body_names=".*torso.*")}, 
-        weight=-2.0
+        weight=-1.0
     )
-    # base_ang_vel_xy = RewTerm(
-    #     func=mdp.ang_vel_xy_l2,
-    #     weight=-1.0,
-    #     params={
-    #         "asset_cfg": SceneEntityCfg("robot"),
-    #     },
-    # )
-    
-    feet_xy_velocity=RewTerm(func=mdp.feet_xy_velocity,
-                             weight=-1,
-                             params={                           
-                                "threshold": 0.02,
-                                "asset_cfg": SceneEntityCfg("robot",body_names="(.*ankle_roll.*).*"),
-                            },)
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-1.0)
 
     feet_slide = RewTerm(
         func=mdp.feet_slide,
-        weight=-1,
+        weight=-2,
         params={
             "sensor_cfg": SceneEntityCfg("contact_sensor", body_names=".*ankle_roll.*"),
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_ankle_roll.*"),
@@ -107,21 +108,21 @@ class Reward:
             "threshold": 5.0,
         },
     )
-    joint_deviation_waist_yaw = RewTerm(
+    joint_deviation_waist = RewTerm(
         func=mdp.joint_deviation_l1_always,
-        weight=-0.1,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*waist_yaw.*"])},
+        weight=-0.2,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*waist_yaw.*",".*waist_roll.*"])},
     )
 
     joint_deviation_hip = RewTerm(
         func=mdp.joint_deviation_l1_always,
-        weight=-0.15,
+        weight=-0.3,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw.*", ".*_hip_roll.*"])},
     )
 
     joint_deviation_ankle = RewTerm(
         func=mdp.joint_deviation_l1_always,
-        weight=-0.1,
+        weight=-0.2,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ankle.*"])},
     )
     termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
@@ -135,6 +136,7 @@ class Reward:
             "outside_scale": 2,
         },
     )
+
 
 
 @configclass
@@ -174,6 +176,15 @@ class RightArmMotionCfg:
 @configclass
 class SaquatStandENVCFG:
     device: str = "cuda:0"
+    # First expose shallow squat commands and a forgiving height kernel, then
+    # linearly expand to the full squat range while tightening tracking.
+    height_curriculum_start_iteration: int = 0
+    height_curriculum_end_iteration: int = 2500
+    height_curriculum_start_min: float = 0.65
+    height_curriculum_final_min: float = 0.36
+    height_tracking_start_std: float = 0.08
+    height_tracking_final_std: float = 0.05
+
     # Add the COM constraint later so early learning is not forced into an
     # overly conservative squat before a natural lower-body motion emerges.
     com_support_margin_start_iteration: int = 3500
@@ -228,7 +239,7 @@ class SaquatStandENVCFG:
         stand_height = 0.77,
         debug_vis = False,
         ranges=HeightCommandRangeCfg(
-            height=(0.46,0.77)  # 目标高度范围(0.46,0.76)
+            height=(0.36,0.77)  # 最终目标高度范围
         ),
     )
 
@@ -366,22 +377,63 @@ class SaquatStandENVCFG:
                                                                 ) 
                         )     
 @configclass
+class SquatCENetCfg:
+    """Optional DreamWaQ-style context estimator for squat training."""
+
+    enabled: bool = True
+    single_obs_dim: int = 80
+    history_length: int = 10
+    encoder_hidden_dims: list[int] = [128, 64]
+    com_position_dim: int = 3
+    com_velocity_dim: int = 3
+    # Heads predict these scaled/normalized support-frame quantities. PPO
+    # reports RMSE after converting back to metres and metres per second.
+    com_position_scale: list[float] = [10.0, 10.0, 2.0]
+    com_velocity_scale: list[float] = [2.0, 2.0, 2.0]
+    latent_dim: int = 16
+    decoder_hidden_dims: list[int] = [64, 128]
+    logvar_min: float = -10.0
+    logvar_max: float = 2.0
+
+
+@configclass
+class SquatActorCriticCfg(RslRlPpoActorCriticCfg):
+    cenet: SquatCENetCfg = SquatCENetCfg()
+
+
+@configclass
+class SquatPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
+    com_position_loss_coef: float = 1.0
+    com_velocity_loss_coef: float = 1.0
+    reconstruction_loss_coef: float = 0.5
+    reconstruction_warmup_iters: int = 500
+    kl_loss_coef: float = 0.01
+    kl_delay_iters: int = 500
+    kl_warmup_end_iter: int = 2000
+    critic_single_obs_dim: int = 106
+    critic_history_length: int = 10
+    com_position_target_index: int = 86
+    com_velocity_target_index: int = 89
+
+
+@configclass
 class SaquatStandAGENTENV:
     seed = 42
     device = "cuda:0"
     num_steps_per_env = 24
     max_iterations = 50000
     empirical_normalization = False
-    policy = RslRlPpoActorCriticCfg(
-        class_name="ActorCritic",
+    policy = SquatActorCriticCfg(
+        class_name="SquatActorCritic",
         init_noise_std=1.0,
         noise_std_type="scalar",
         actor_hidden_dims=[512, 256, 128],
         critic_hidden_dims=[512, 256, 128],
         activation="elu",
+        cenet=SquatCENetCfg(enabled=True),
     )
-    algorithm = RslRlPpoAlgorithmCfg(
-        class_name="PPO", # AMPPPO
+    algorithm = SquatPpoAlgorithmCfg(
+        class_name="SquatPPO",
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
@@ -397,6 +449,17 @@ class SaquatStandAGENTENV:
         normalize_advantage_per_mini_batch=False,
         symmetry_cfg=None,  # RslRlSymmetryCfg()
         rnd_cfg=None,  # RslRlRndCfg()
+        com_position_loss_coef=1.0,
+        com_velocity_loss_coef=1.0,
+        reconstruction_loss_coef=0.5,
+        reconstruction_warmup_iters=500,
+        kl_loss_coef=0.01,
+        kl_delay_iters=500,
+        kl_warmup_end_iter=2000,
+        critic_single_obs_dim=106,
+        critic_history_length=10,
+        com_position_target_index=86,
+        com_velocity_target_index=89,
     )
 
     clip_actions = None

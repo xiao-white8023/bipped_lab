@@ -71,7 +71,7 @@ def play():
     env_cfg.scene.num_envs = 50 if args_cli.num_envs is None else args_cli.num_envs
     env_cfg.scene.env_spacing = 2.5
     env_cfg.commands.rel_standing_envs = 0.0
-    env_cfg.commands.ranges.height = (0.46, 0.76)
+    env_cfg.commands.ranges.height = (0.36, 0.77)
     env_cfg.scene.height_scanner.drift_range = (0.0, 0.0)
     if "rough" == args_cli.terrain:
         Terrain=ROUGH_TERRAINS_CFG
@@ -89,6 +89,9 @@ def play():
 
     env_class = task_registry.get_task_class(env_class_name)
     env = env_class(env_cfg, args_cli.headless)
+    # Playback evaluates the final trained task difficulty rather than the
+    # iteration-0 state of any task curriculum.
+    env.set_training_iteration(agent_cfg.max_iterations)
     print("训练时的真实关节顺序:", env.robot.joint_names)
     log_root_path = os.path.join("logs", agent_cfg.experiment_name)
     log_root_path = os.path.abspath(log_root_path)
@@ -123,8 +126,8 @@ def play():
     gamepad = None
 
     # 和训练命令范围保持一致
-    stand_height = float(env_cfg.commands.stand_height)      # 通常 0.76
-    squat_height = float(env_cfg.commands.ranges.height[0])  # 通常 0.46
+    stand_height = float(env_cfg.commands.stand_height)      # 0.77 m
+    squat_height = float(env_cfg.commands.ranges.height[0])  # 0.36 m
 
     if not args_cli.headless:
         import evdev

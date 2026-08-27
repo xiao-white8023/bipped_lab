@@ -11,6 +11,131 @@ from pynput import keyboard
 import torchvision.transforms as T
 from collections import deque
 from joystick import JoyStick, JoystickButton
+
+# 与 g1_squart 训练任务完全一致的脚底支撑点，坐标系为 ankle_roll_link
+# 局部坐标系。角点顺序：前端 +y、前端 -y、后端 -y、后端 +y。
+FOOT_SUPPORT_CORNERS_LOCAL = np.array(
+    [
+        [0.127, 0.030, -0.0354],
+        [0.127, -0.030, -0.0354],
+        [-0.051, -0.030, -0.0354],
+        [-0.051, 0.030, -0.0354],
+    ],
+    dtype=np.float64,
+)
+
+
+def compute_support_geometry(
+    foot_support_corners_w: np.ndarray,
+    com_pos_w: np.ndarray,
+) -> dict:
+    """复现 g1_squart 的双脚支撑域和质心投影计算。
+
+    训练任务以两脚平均前向为支撑坐标系 x 轴，将 8 个脚底角点投影到
+    该坐标系后取 x/y 的最小、最大值，因此实际约束区域是一个矩形。
+
+    Args:
+        foot_support_corners_w: 世界系脚底角点，shape=(2, 4, 3)。
+        com_pos_w: 整机质心世界坐标，shape=(3,)。
+
+    Returns:
+        包含支撑域世界坐标角点、质心投影、是否在域内和有符号裕量的字典。
+        signed_margin > 0 表示域内，< 0 表示越界。
+    """
+    corners_w = np.asarray(foot_support_corners_w, dtype=np.float64)
+    com_w = np.asarray(com_pos_w, dtype=np.float64)
+    if corners_w.shape != (2, 4, 3):
+        raise ValueError(
+            "foot_support_corners_w must have shape (2, 4, 3), "
+            f"got {corners_w.shape}."
+        )
+    if com_w.shape != (3,):
+        raise ValueError(f"com_pos_w must have shape (3,), got {com_w.shape}.")
+
+    support_xy = corners_w[..., :2]
+    foot_front_center_xy = support_xy[:, 0:2, :].mean(axis=1)
+    foot_rear_center_xy = support_xy[:, 2:4, :].mean(axis=1)
+    support_x_axis_xy = (foot_front_center_xy - foot_rear_center_xy).mean(axis=0)
+    axis_norm = np.linalg.norm(support_x_axis_xy)
+    if axis_norm < 1.0e-6:
+        # 正常脚姿下不会退化；保底方向避免可视化产生 NaN。
+        support_x_axis_xy = np.array([1.0, 0.0], dtype=np.float64)
+    else:
+        support_x_axis_xy /= axis_norm
+    support_y_axis_xy = np.array(
+        [-support_x_axis_xy[1], support_x_axis_xy[0]],
+        dtype=np.float64,
+    )
+
+    support_origin_xy = support_xy.mean(axis=(0, 1))
+    relative_points_xy = support_xy - support_origin_xy[None, None, :]
+    point_x = np.sum(
+        relative_points_xy * support_x_axis_xy[None, None, :], axis=-1
+    )
+    point_y = np.sum(
+        relative_points_xy * support_y_axis_xy[None, None, :], axis=-1
+    )
+    x_min, x_max = float(point_x.min()), float(point_x.max())
+    y_min, y_max = float(point_y.min()), float(point_y.max())
+
+    relative_com_xy = com_w[:2] - support_origin_xy
+    com_x = float(np.dot(relative_com_xy, support_x_axis_xy))
+    com_y = float(np.dot(relative_com_xy, support_y_axis_xy))
+    signed_margin = min(
+        com_x - x_min,
+        x_max - com_x,
+        com_y - y_min,
+        y_max - com_y,
+    )
+
+    support_height = float(corners_w[..., 2].mean())
+    rectangle_local_xy = np.array(
+        [
+            [x_min, y_min],
+            [x_max, y_min],
+            [x_max, y_max],
+            [x_min, y_max],
+        ],
+        dtype=np.float64,
+    )
+    rectangle_w = np.empty((4, 3), dtype=np.float64)
+    rectangle_w[:, :2] = (
+        support_origin_xy[None, :]
+        + rectangle_local_xy[:, 0:1] * support_x_axis_xy[None, :]
+        + rectangle_local_xy[:, 1:2] * support_y_axis_xy[None, :]
+    )
+    rectangle_w[:, 2] = support_height
+
+    com_projection_w = np.array(
+        [com_w[0], com_w[1], support_height], dtype=np.float64
+    )
+    rectangle_center_w = np.array(
+        [
+            support_origin_xy[0]
+            + 0.5 * (x_min + x_max) * support_x_axis_xy[0]
+            + 0.5 * (y_min + y_max) * support_y_axis_xy[0],
+            support_origin_xy[1]
+            + 0.5 * (x_min + x_max) * support_x_axis_xy[1]
+            + 0.5 * (y_min + y_max) * support_y_axis_xy[1],
+            support_height,
+        ],
+        dtype=np.float64,
+    )
+
+    return {
+        "support_x_axis_xy": support_x_axis_xy,
+        "support_y_axis_xy": support_y_axis_xy,
+        "rectangle_w": rectangle_w,
+        "rectangle_center_w": rectangle_center_w,
+        "half_size_xy": np.array(
+            [0.5 * (x_max - x_min), 0.5 * (y_max - y_min)],
+            dtype=np.float64,
+        ),
+        "com_projection_w": com_projection_w,
+        "signed_margin": float(signed_margin),
+        "inside": bool(signed_margin >= 0.0),
+    }
+
 # ==================== 关节顺序定义 ====================
 # MuJoCo XML 中的关节顺序 (29 DOF)
 MUJOCO_DOF_NAMES = [
@@ -92,6 +217,7 @@ class G1FlatSim2SimCfg:
         clip_observations = 100.0
         clip_actions = 100.0
         action_scale = 0.25
+        visualize_support = True
 
     class robot:
         # G1 初始高度
@@ -131,6 +257,7 @@ class G1FlatMujocoRunner:
 
         self.build_joint_mappings()
         self.set_initial_pose()
+        self.init_support_visualization()
         
         print(f"[INFO] 控制频率: {1.0 / (cfg.sim.dt * cfg.sim.decimation):.1f} Hz")
         print(f"[INFO] 观测维度: {cfg.sim.num_obs_per_step} x {cfg.sim.actor_obs_history_length} = {cfg.sim.num_obs_per_step * cfg.sim.actor_obs_history_length}")
@@ -230,6 +357,192 @@ class G1FlatMujocoRunner:
 
         mujoco.mj_forward(self.model, self.data)
         print(f"[INFO] 初始高度: {self.data.qpos[2]:.3f}m")
+
+    def init_support_visualization(self) -> None:
+        """解析支撑域所需的机器人刚体，并初始化可视化状态。"""
+        self.foot_support_corners_local = FOOT_SUPPORT_CORNERS_LOCAL.copy()
+        self.support_body_ids = []
+        self.robot_root_body_id = -1
+        self.latest_support_geometry = None
+
+        if not self.cfg.sim.visualize_support:
+            print("[INFO] 质心/脚部支撑域可视化已关闭")
+            return
+
+        foot_body_names = ["left_ankle_roll_link", "right_ankle_roll_link"]
+        for body_name in foot_body_names:
+            body_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, body_name
+            )
+            if body_id < 0:
+                raise ValueError(
+                    f"MuJoCo 模型缺少脚部刚体 '{body_name}'，无法计算支撑域。"
+                )
+            self.support_body_ids.append(body_id)
+
+        self.robot_root_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "pelvis"
+        )
+        if self.robot_root_body_id < 0:
+            raise ValueError("MuJoCo 模型缺少机器人根刚体 'pelvis'，无法计算整机质心。")
+
+        print(
+            "[INFO] 已启用质心/脚部支撑域可视化："
+            "蓝色=支撑域，黄色=整机质心，绿色/红色=域内/越界投影"
+        )
+
+    def get_foot_support_corners_w(self) -> np.ndarray:
+        """将训练任务定义的两脚局部角点变换到 MuJoCo 世界坐标系。"""
+        corners_w = np.empty((2, 4, 3), dtype=np.float64)
+        for foot_index, body_id in enumerate(self.support_body_ids):
+            foot_rotation_w = self.data.xmat[body_id].reshape(3, 3)
+            foot_position_w = self.data.xpos[body_id]
+            corners_w[foot_index] = (
+                self.foot_support_corners_local @ foot_rotation_w.T
+                + foot_position_w
+            )
+        return corners_w
+
+    def get_whole_body_com_w(self) -> np.ndarray:
+        """返回 pelvis 子树（即整台机器人）的质量加权质心世界坐标。"""
+        return self.data.subtree_com[self.robot_root_body_id].copy()
+
+    def _append_visual_geom(
+        self,
+        geom_type,
+        size: np.ndarray,
+        pos: np.ndarray,
+        mat: np.ndarray,
+        rgba: np.ndarray,
+    ):
+        """向 passive viewer 的用户场景追加一个仅用于渲染的几何体。"""
+        scene = self.viewer.user_scn
+        if scene.ngeom >= scene.maxgeom:
+            return None
+        geom = scene.geoms[scene.ngeom]
+        mujoco.mjv_initGeom(
+            geom,
+            type=geom_type,
+            size=np.asarray(size, dtype=np.float64),
+            pos=np.asarray(pos, dtype=np.float64),
+            mat=np.asarray(mat, dtype=np.float64),
+            rgba=np.asarray(rgba, dtype=np.float32),
+        )
+        scene.ngeom += 1
+        return geom
+
+    def _append_visual_line(
+        self,
+        start: np.ndarray,
+        end: np.ndarray,
+        width: float,
+        rgba: np.ndarray,
+    ) -> None:
+        """向用户场景追加一条胶囊线段（线宽单位为米）。"""
+        geom = self._append_visual_geom(
+            mujoco.mjtGeom.mjGEOM_CAPSULE,
+            np.zeros(3),
+            np.zeros(3),
+            np.eye(3).reshape(-1),
+            rgba,
+        )
+        if geom is not None:
+            mujoco.mjv_connector(
+                geom,
+                mujoco.mjtGeom.mjGEOM_CAPSULE,
+                width,
+                np.asarray(start, dtype=np.float64),
+                np.asarray(end, dtype=np.float64),
+            )
+
+    def update_support_visualization(self) -> None:
+        """逐帧重建支撑域、整机质心和质心投影的 viewer 几何体。"""
+        if not self.cfg.sim.visualize_support:
+            return
+
+        foot_corners_w = self.get_foot_support_corners_w()
+        whole_body_com_w = self.get_whole_body_com_w()
+        geometry = compute_support_geometry(foot_corners_w, whole_body_com_w)
+        self.latest_support_geometry = geometry
+
+        scene = self.viewer.user_scn
+        scene.ngeom = 0
+        identity_mat = np.eye(3, dtype=np.float64).reshape(-1)
+
+        # 支撑域使用与奖励相同的平均脚前向坐标系，而不是世界系轴对齐框。
+        support_x = geometry["support_x_axis_xy"]
+        support_y = geometry["support_y_axis_xy"]
+        support_mat = np.array(
+            [
+                [support_x[0], support_y[0], 0.0],
+                [support_x[1], support_y[1], 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        ).reshape(-1)
+        box_center = geometry["rectangle_center_w"].copy()
+        box_center[2] += 0.002
+        half_size = geometry["half_size_xy"]
+        self._append_visual_geom(
+            mujoco.mjtGeom.mjGEOM_BOX,
+            np.array([half_size[0], half_size[1], 0.0015]),
+            box_center,
+            support_mat,
+            np.array([0.05, 0.45, 1.0, 0.22]),
+        )
+
+        # 边界线明确显示训练奖励使用的矩形范围。
+        rectangle_w = geometry["rectangle_w"].copy()
+        rectangle_w[:, 2] += 0.006
+        for edge_index in range(4):
+            self._append_visual_line(
+                rectangle_w[edge_index],
+                rectangle_w[(edge_index + 1) % 4],
+                width=0.003,
+                rgba=np.array([0.0, 0.75, 1.0, 0.95]),
+            )
+
+        # 同时画出训练任务定义的 8 个脚底角点，方便检查坐标是否一致。
+        for corner_w in foot_corners_w.reshape(-1, 3):
+            corner_pos = corner_w.copy()
+            corner_pos[2] += 0.008
+            self._append_visual_geom(
+                mujoco.mjtGeom.mjGEOM_SPHERE,
+                np.array([0.006, 0.0, 0.0]),
+                corner_pos,
+                identity_mat,
+                np.array([0.0, 0.75, 1.0, 1.0]),
+            )
+
+        # 整机 COM 为黄色；竖直投影和投影点按是否越界切换绿/红色。
+        com_color = np.array([1.0, 0.75, 0.0, 1.0])
+        projection_color = (
+            np.array([0.1, 1.0, 0.2, 1.0])
+            if geometry["inside"]
+            else np.array([1.0, 0.1, 0.05, 1.0])
+        )
+        self._append_visual_geom(
+            mujoco.mjtGeom.mjGEOM_SPHERE,
+            np.array([0.018, 0.0, 0.0]),
+            whole_body_com_w,
+            identity_mat,
+            com_color,
+        )
+        projection_pos = geometry["com_projection_w"].copy()
+        projection_pos[2] += 0.012
+        self._append_visual_line(
+            whole_body_com_w,
+            projection_pos,
+            width=0.003,
+            rgba=projection_color,
+        )
+        self._append_visual_geom(
+            mujoco.mjtGeom.mjGEOM_SPHERE,
+            np.array([0.014, 0.0, 0.0]),
+            projection_pos,
+            identity_mat,
+            projection_color,
+        )
 
     def get_gravity_orientation(self, quat: np.ndarray) -> np.ndarray:
         """计算投影重力向量
@@ -357,6 +670,8 @@ class G1FlatMujocoRunner:
         
         # 创建 viewer
         self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+        self.update_support_visualization()
+        self.viewer.sync()
         # self.stabilize_robot(duration=0.05)
         
         # 初始化观测历史
@@ -446,6 +761,7 @@ class G1FlatMujocoRunner:
                     
                     # 物理步进
                     mujoco.mj_step(self.model, self.data)
+                    self.update_support_visualization()
                     self.viewer.sync()
                     
                     # 时间控制
@@ -459,11 +775,18 @@ class G1FlatMujocoRunner:
                 # 定期打印状态
 
                 if self.episode_length_buf % 100 == 0:
+                    support_status = ""
+                    if self.latest_support_geometry is not None:
+                        support_status = (
+                            f", com_margin="
+                            f"{self.latest_support_geometry['signed_margin']:+.3f}m"
+                        )
                     print(
                         f"[INFO] t={self.data.time:.1f}s, "
                         f"h_cmd={self.height_cmd[0]:.3f}, "
                         f"root_h={self.data.qpos[2]:.3f}, "
                         f"err={self.data.qpos[2] - self.height_cmd[0]:+.3f}"
+                        f"{support_status}"
                     )
                     
         except KeyboardInterrupt:
@@ -545,6 +868,11 @@ def main():
     parser.add_argument("--scene-file", type=str, default=None,
                         help="直接指定场景文件路径 (优先级高于 --scene)")
     parser.add_argument("--duration", type=float, default=100.0, help="仿真时长 (秒)")
+    parser.add_argument(
+        "--no-support-vis",
+        action="store_true",
+        help="关闭整机质心、质心投影与双脚支撑域实时可视化",
+    )
     parser.add_argument("--list-scenes", action="store_true", help="列出所有可用场景")
     args = parser.parse_args()
     
@@ -598,6 +926,7 @@ def main():
     
     cfg = G1FlatSim2SimCfg()
     cfg.sim.sim_duration = args.duration
+    cfg.sim.visualize_support = not args.no_support_vis
     
     runner = G1FlatMujocoRunner(
         cfg=cfg,
