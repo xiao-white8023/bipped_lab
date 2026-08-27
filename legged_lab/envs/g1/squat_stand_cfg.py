@@ -153,7 +153,7 @@ class RightArmMotionCfg:
     max_range_fraction: float = 0.6
 
     # Velocity envelope of the fastest joints; max_vel below supplies the
-    # relative per-joint profile.
+    # relative per-joint profile
     min_max_vel: float = 0.1
     max_max_vel: float = 0.5
 
