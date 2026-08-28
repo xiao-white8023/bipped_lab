@@ -7,11 +7,14 @@ import isaaclab.sim as sim_utils
 import torch
 from isaaclab.assets.articulation import Articulation
 from isaaclab.scene import InteractiveScene
-from isaaclab.sensors import ContactSensor
+from isaaclab.sensors import ContactSensor, ContactSensorCfg
 from isaaclab.sim import PhysxCfg, SimulationContext
 from isaaclab.utils.buffers import CircularBuffer
 
-from legged_lab.envs.g1.g1_recovery_cfg import G1RecoveryEnvCfg
+from legged_lab.envs.g1.g1_recovery_cfg import (
+    G1_RECOVERY_BODY_NAMES,
+    G1RecoveryEnvCfg,
+)
 from legged_lab.utils.env_utils.scene import SceneCfg
 from legged_lab.utils.recovery_reset_state_loader import RecoveryResetStateLoader
 from rsl_rl.env import VecEnv
@@ -24,6 +27,7 @@ class G1RecoveryEnv(VecEnv):
     CRITIC_CURRENT_DIM = 78
     AMP_OBSERVATION_DIM = 195
     FORMAL_EXPERT_TRANSITION_DT = 0.02
+    SELF_COLLISION_SENSOR_PREFIX = "recovery_self_collision_"
 
     def __init__(self, cfg: G1RecoveryEnvCfg, headless):
         self.cfg: G1RecoveryEnvCfg
@@ -38,6 +42,15 @@ class G1RecoveryEnv(VecEnv):
         if abs(self.step_dt - 0.02) >= 1.0e-8:
             raise RuntimeError(
                 f"G1 Recovery policy step_dt must be 0.02 s, got {self.step_dt}."
+            )
+        if abs(self.cfg.scene.max_episode_length_s - 6.0) >= 1.0e-8:
+            raise RuntimeError(
+                "G1 Recovery max_episode_length_s must remain 6.0 s, got "
+                f"{self.cfg.scene.max_episode_length_s}."
+            )
+        if not self.cfg.scene.robot.spawn.articulation_props.enabled_self_collisions:
+            raise RuntimeError(
+                "Standalone G1 Recovery articulation must enable self-collisions."
             )
 
         sim_cfg = sim_utils.SimulationCfg(
@@ -61,20 +74,62 @@ class G1RecoveryEnv(VecEnv):
             physics_dt=self.physics_dt,
             step_dt=self.step_dt,
         )
+        # IsaacLab filtered contact reporting is one-to-many only.  Use one
+        # sensor body per sensor and filter exclusively against robot links;
+        # ground forces therefore never enter the self-collision metric.
+        for body_index, body_name in enumerate(G1_RECOVERY_BODY_NAMES):
+            setattr(
+                scene_cfg,
+                f"{self.SELF_COLLISION_SENSOR_PREFIX}{body_index:02d}",
+                ContactSensorCfg(
+                    prim_path=f"{{ENV_REGEX_NS}}/Robot/{body_name}",
+                    # Each filter expression must resolve to exactly one body
+                    # per environment in the PhysX tensor API.  One wildcard
+                    # expression over all links is rejected by IsaacLab/PhysX.
+                    filter_prim_paths_expr=[
+                        f"{{ENV_REGEX_NS}}/Robot/{filter_body_name}"
+                        for filter_body_name in G1_RECOVERY_BODY_NAMES
+                    ],
+                    history_length=0,
+                    update_period=self.physics_dt,
+                    max_contact_data_count_per_prim=32,
+                ),
+            )
         self.scene = InteractiveScene(scene_cfg)
         self.sim.reset()
 
         self.robot: Articulation = self.scene["robot"]
         self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
+        self.self_collision_sensors = tuple(
+            self.scene.sensors[
+                f"{self.SELF_COLLISION_SENSOR_PREFIX}{body_index:02d}"
+            ]
+            for body_index in range(len(G1_RECOVERY_BODY_NAMES))
+        )
 
         if self.robot.num_joints != 23:
             raise RuntimeError(
                 f"G1 Recovery requires exactly 23 joints, got {self.robot.num_joints}."
             )
+        if tuple(self.robot.body_names) != G1_RECOVERY_BODY_NAMES:
+            mismatches = self._first_order_mismatches(
+                tuple(self.robot.body_names), G1_RECOVERY_BODY_NAMES
+            )
+            raise RuntimeError(
+                "G1 Recovery self-collision sensor body order does not match the "
+                f"articulation: {'; '.join(mismatches)}"
+            )
         if self.cfg.reset.random_yaw:
             raise RuntimeError(
                 "Recovery random_yaw must remain disabled in Stage 4.2b."
             )
+
+        try:
+            self.torso_body_index = self.robot.body_names.index("torso_link")
+        except ValueError as exc:
+            raise RuntimeError(
+                "G1 Recovery articulation is missing required torso_link."
+            ) from exc
 
         self.reset_state_loader = RecoveryResetStateLoader(
             state_dir=self.cfg.reset.state_dir,
@@ -146,6 +201,21 @@ class G1RecoveryEnv(VecEnv):
         self.max_episode_length = math.ceil(
             self.max_episode_length_s / self.step_dt
         )
+        if self.max_episode_length != 300:
+            raise RuntimeError(
+                "G1 Recovery 6.0 s episode must contain exactly 300 policy "
+                f"steps, got {self.max_episode_length}."
+            )
+        hold_steps = self.cfg.success.hold_s / self.step_dt
+        self.success_hold_steps = round(hold_steps)
+        if (
+            abs(hold_steps - self.success_hold_steps) >= 1.0e-8
+            or self.success_hold_steps != 25
+        ):
+            raise RuntimeError(
+                "G1 Recovery 0.5 s success hold must contain exactly 25 policy "
+                f"steps, got {hold_steps}."
+            )
         self.num_actions = self.robot.data.default_joint_pos.shape[1]
         self.clip_actions = self.cfg.control.clip_actions
         self.clip_obs = self.cfg.observation.clip_observations
@@ -159,6 +229,7 @@ class G1RecoveryEnv(VecEnv):
             device=self.device,
             requires_grad=False,
         )
+        self.last_action = torch.zeros_like(self.action)
         self.joint_pos_target = self.robot.data.default_joint_pos.clone()
 
         self.episode_length_buf = torch.zeros(
@@ -169,6 +240,11 @@ class G1RecoveryEnv(VecEnv):
             self.num_envs, dtype=torch.bool, device=self.device
         )
         self.time_out_buf = torch.zeros_like(self.reset_buf)
+        self.terminated_buf = torch.zeros_like(self.reset_buf)
+        self.success_buf = torch.zeros_like(self.reset_buf)
+        self.success_hold_counter = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
         self.reset_env_ids = torch.empty(0, dtype=torch.long, device=self.device)
         self.pre_reset_amp_obs = torch.empty(
             self.num_envs,
@@ -188,6 +264,43 @@ class G1RecoveryEnv(VecEnv):
             dtype=torch.float,
             device=self.device,
         )
+
+        # IsaacLab's filtered contact force history cannot aggregate multiple
+        # sensor bodies correctly.  Record the exact per-physics-substep hit
+        # semantics explicitly for each 0.02 s policy step.
+        self.self_collision_hit_substeps = torch.zeros(
+            self.num_envs,
+            self.cfg.sim.decimation,
+            dtype=torch.bool,
+            device=self.device,
+        )
+
+        float_buffers = (
+            "pelvis_height",
+            "torso_up_z",
+            "height_reward_raw",
+            "height_reward_scaled",
+            "joint_acc_cost",
+            "joint_pos_limits_cost",
+            "action_rate_cost",
+            "self_collision_cost",
+            "joint_acc_reward",
+            "joint_pos_limits_reward",
+            "action_rate_reward",
+            "self_collision_reward",
+            "task_reward",
+        )
+        for buffer_name in float_buffers:
+            setattr(
+                self,
+                buffer_name,
+                torch.zeros(
+                    self.num_envs, dtype=torch.float, device=self.device
+                ),
+            )
+        self.height_ok = torch.zeros_like(self.reset_buf)
+        self.upright_ok = torch.zeros_like(self.reset_buf)
+        self.ready_now = torch.zeros_like(self.reset_buf)
 
         self.init_obs_buffer()
 
@@ -366,9 +479,17 @@ class G1RecoveryEnv(VecEnv):
         self.critic_obs_buffer.reset(env_ids)
         self.episode_length_buf[env_ids] = 0
         self.action[env_ids] = 0.0
+        self.last_action[env_ids] = 0.0
         self.joint_pos_target[env_ids] = joint_pos
         self.last_reset_state_ids[env_ids] = sample["state_ids"]
         self.last_reset_joint_pos[env_ids] = joint_pos
+        self.success_hold_counter[env_ids] = 0
+        self.success_buf[env_ids] = False
+        self.terminated_buf[env_ids] = False
+        self.height_ok[env_ids] = False
+        self.upright_ok[env_ids] = False
+        self.ready_now[env_ids] = False
+        self.self_collision_hit_substeps[env_ids] = False
 
         self.scene.write_data_to_sim()
         self.sim.forward()
@@ -412,6 +533,149 @@ class G1RecoveryEnv(VecEnv):
             )
         self._reset_from_state_ids(env_ids, state_ids)
 
+    def _read_self_collision_hits(self):
+        """Return whether any robot-vs-robot force exceeds the V1 threshold."""
+
+        threshold = self.cfg.reward.self_collision_force_threshold
+        hit = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
+        for sensor in self.self_collision_sensors:
+            force_matrix_w = sensor.data.force_matrix_w
+            if force_matrix_w is None:
+                raise RuntimeError(
+                    "Recovery self-collision sensor has no filtered force matrix."
+                )
+            if force_matrix_w.shape[0] != self.num_envs:
+                raise RuntimeError(
+                    "Recovery self-collision force matrix has invalid batch shape "
+                    f"{tuple(force_matrix_w.shape)}."
+                )
+            force_magnitude = torch.linalg.vector_norm(
+                force_matrix_w, dim=-1
+            )
+            hit |= (force_magnitude > threshold).reshape(
+                self.num_envs, -1
+            ).any(dim=-1)
+        return hit
+
+    @staticmethod
+    def self_collision_cost_from_hits(hit_substeps):
+        """Count physics substeps containing a hit; input entries are booleans."""
+
+        if not isinstance(hit_substeps, torch.Tensor):
+            raise TypeError("self-collision hit history must be a torch.Tensor.")
+        if hit_substeps.ndim != 2:
+            raise ValueError(
+                "self-collision hit history must have shape [num_envs, substeps], "
+                f"got {tuple(hit_substeps.shape)}."
+            )
+        if hit_substeps.dtype != torch.bool:
+            raise ValueError("self-collision hit history must have bool dtype.")
+        return hit_substeps.sum(dim=-1).float()
+
+    def _update_recovery_state_metrics(self):
+        self.pelvis_height = self.robot.data.root_link_pos_w[:, 2]
+        h_default = self.robot.data.default_root_state[:, 2]
+        self.height_ok = (
+            self.pelvis_height >= self.cfg.success.height_ratio * h_default
+        )
+
+        # body_link_quat_w uses WXYZ. R[2, 2] is the torso local +Z
+        # projection onto world +Z and equals 1 - 2(x^2 + y^2).
+        torso_quat = torch.nn.functional.normalize(
+            self.robot.data.body_link_quat_w[:, self.torso_body_index], dim=-1
+        )
+        self.torso_up_z = 1.0 - 2.0 * (
+            torso_quat[:, 1].square() + torso_quat[:, 2].square()
+        )
+        self.upright_ok = (
+            self.torso_up_z >= self.cfg.success.upright_threshold
+        )
+        self.ready_now = self.height_ok & self.upright_ok
+
+    def compute_reward(self):
+        """Compute the pre-AMP Recovery task reward without dt scaling."""
+
+        self._update_recovery_state_metrics()
+        reward_cfg = self.cfg.reward
+        h_default = self.robot.data.default_root_state[:, 2]
+        self.height_reward_raw = torch.exp(
+            -torch.square(h_default - self.pelvis_height)
+            / reward_cfg.height_std**2
+        )
+        self.height_reward_scaled = (
+            reward_cfg.height_scale * self.height_reward_raw
+        )
+
+        # These four terms are all non-negative costs, matching the repository's
+        # existing mdp joint_acc_l2, joint_pos_limits, and action-rate math.
+        self.joint_acc_cost = torch.sum(
+            torch.square(self.robot.data.joint_acc), dim=-1
+        )
+        joint_pos = self.robot.data.joint_pos
+        soft_limits = self.robot.data.soft_joint_pos_limits
+        out_of_limits = -(
+            joint_pos - soft_limits[..., 0]
+        ).clip(max=0.0)
+        out_of_limits += (
+            joint_pos - soft_limits[..., 1]
+        ).clip(min=0.0)
+        self.joint_pos_limits_cost = torch.sum(out_of_limits, dim=-1)
+        self.action_rate_cost = torch.sum(
+            torch.square(self.action - self.last_action), dim=-1
+        )
+        self.self_collision_cost = self.self_collision_cost_from_hits(
+            self.self_collision_hit_substeps
+        )
+
+        self.joint_acc_reward = (
+            reward_cfg.joint_acc_weight * self.joint_acc_cost
+        )
+        self.joint_pos_limits_reward = (
+            reward_cfg.joint_pos_limits_weight * self.joint_pos_limits_cost
+        )
+        self.action_rate_reward = (
+            reward_cfg.action_rate_weight * self.action_rate_cost
+        )
+        self.self_collision_reward = (
+            reward_cfg.self_collision_weight * self.self_collision_cost
+        )
+        self.task_reward = (
+            self.height_reward_scaled
+            + self.joint_acc_reward
+            + self.joint_pos_limits_reward
+            + self.action_rate_reward
+            + self.self_collision_reward
+        )
+        if not torch.isfinite(self.task_reward).all():
+            raise RuntimeError("G1 Recovery task reward contains NaN or Inf.")
+        return self.task_reward
+
+    def _build_step_log(self):
+        return {
+            "RecoveryReward/height_raw": self.height_reward_raw.mean(),
+            "RecoveryReward/height_scaled": self.height_reward_scaled.mean(),
+            "RecoveryReward/joint_acc": self.joint_acc_reward.mean(),
+            "RecoveryReward/joint_pos_limits": self.joint_pos_limits_reward.mean(),
+            "RecoveryReward/action_rate": self.action_rate_reward.mean(),
+            "RecoveryReward/self_collision": self.self_collision_reward.mean(),
+            "RecoveryReward/task_total": self.task_reward.mean(),
+            "Recovery/height_ok_ratio": self.height_ok.float().mean(),
+            "Recovery/upright_ok_ratio": self.upright_ok.float().mean(),
+            "Recovery/ready_now_ratio": self.ready_now.float().mean(),
+            "Recovery/success_count": self.success_buf.float().sum(),
+            "Recovery/success_ratio": self.success_buf.float().mean(),
+            "Recovery/timeout_count": self.time_out_buf.float().sum(),
+            "Recovery/success_hold_counter_mean": self.success_hold_counter.float().mean(),
+            "Recovery/pelvis_height_mean": self.pelvis_height.mean(),
+            "Recovery/torso_up_z_mean": self.torso_up_z.mean(),
+            "RecoverySelfCollision/cost_mean": self.self_collision_cost.mean(),
+            "RecoverySelfCollision/hit_env_ratio": (
+                self.self_collision_cost > 0.0
+            ).float().mean(),
+        }
+
     def step(self, actions: torch.Tensor):
         expected_shape = (self.num_envs, self.num_actions)
         if not isinstance(actions, torch.Tensor):
@@ -430,24 +694,31 @@ class G1RecoveryEnv(VecEnv):
             actions, -self.clip_actions, self.clip_actions
         )
         self.joint_pos_target = self._compute_joint_position_target(self.action)
+        self.self_collision_hit_substeps.zero_()
 
-        for _ in range(self.cfg.sim.decimation):
+        for substep_index in range(self.cfg.sim.decimation):
             self.sim_step_counter += 1
             self.robot.set_joint_position_target(self.joint_pos_target)
             self.scene.write_data_to_sim()
             self.sim.step(render=False)
             self.scene.update(dt=self.physics_dt)
+            self.self_collision_hit_substeps[:, substep_index] = (
+                self._read_self_collision_hits()
+            )
 
         if not self.headless:
             self.sim.render()
 
         self.episode_length_buf += 1
+        reward_buf = self.compute_reward()
         self.reset_buf, self.time_out_buf = self.check_reset()
-        reward_buf = torch.zeros(
-            self.num_envs, dtype=torch.float, device=self.device
-        )
+        self.last_action.copy_(self.action)
 
-        self.extras = {"time_outs": self.time_out_buf.clone()}
+        self.extras = {
+            "time_outs": self.time_out_buf.clone(),
+            "terminated": self.terminated_buf.clone(),
+            "log": self._build_step_log(),
+        }
 
         # Terminal AMP 必须在 dataset-based fallen reset 之前采集。
         self.pre_reset_amp_obs = self.get_amp_obs_for_expert_trans().detach()
@@ -463,8 +734,19 @@ class G1RecoveryEnv(VecEnv):
         return actor_obs, reward_buf, self.reset_buf, self.extras
 
     def check_reset(self):
-        time_out_buf = self.episode_length_buf >= self.max_episode_length
-        reset_buf = time_out_buf.clone()
+        self.success_hold_counter = torch.where(
+            self.ready_now,
+            self.success_hold_counter + 1,
+            torch.zeros_like(self.success_hold_counter),
+        )
+        self.success_buf = self.success_hold_counter >= self.success_hold_steps
+        self.terminated_buf = self.success_buf.clone()
+
+        raw_time_out = self.episode_length_buf >= self.max_episode_length
+        # If success and the horizon coincide, true termination takes priority;
+        # only non-success horizon exits receive PPO timeout bootstrapping.
+        time_out_buf = raw_time_out & ~self.success_buf
+        reset_buf = self.success_buf | time_out_buf
         return reset_buf, time_out_buf
 
     def get_observations(self):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage-4.2c smoke test for G1 Recovery reset visualization/QC APIs."""
+"""Smoke test for standalone G1 Recovery V1 reward and termination semantics."""
 
 from __future__ import annotations
 
@@ -31,8 +31,13 @@ simulation_app = app_launcher.app
 
 import torch
 
-from legged_lab.envs.g1.g1_recovery_cfg import G1RecoveryEnvCfg
+from legged_lab.envs.g1.g1_recovery_cfg import (
+    G1RecoveryAgentCfg,
+    G1RecoveryEnvCfg,
+)
 from legged_lab.envs.g1.g1_recovery_env import G1RecoveryEnv
+from rsl_rl.runners import AmpOnPolicyRunner
+from rsl_rl.utils import RecoveryAMPData
 
 
 NUM_ENVS = 4
@@ -40,6 +45,26 @@ ACTOR_OBS_DIM = 300
 CRITIC_OBS_DIM = 312
 AMP_OBS_DIM = 195
 EXPERT_TRANSITION_DT = 0.02
+REQUIRED_LOG_KEYS = {
+    "RecoveryReward/height_raw",
+    "RecoveryReward/height_scaled",
+    "RecoveryReward/joint_acc",
+    "RecoveryReward/joint_pos_limits",
+    "RecoveryReward/action_rate",
+    "RecoveryReward/self_collision",
+    "RecoveryReward/task_total",
+    "Recovery/height_ok_ratio",
+    "Recovery/upright_ok_ratio",
+    "Recovery/ready_now_ratio",
+    "Recovery/success_count",
+    "Recovery/success_ratio",
+    "Recovery/timeout_count",
+    "Recovery/success_hold_counter_mean",
+    "Recovery/pelvis_height_mean",
+    "Recovery/torso_up_z_mean",
+    "RecoverySelfCollision/cost_mean",
+    "RecoverySelfCollision/hit_env_ratio",
+}
 
 
 def _assert_finite_shape(tensor, shape, label):
@@ -57,13 +82,45 @@ def _check_step_output(step_output):
     _assert_finite_shape(actor_obs, (NUM_ENVS, ACTOR_OBS_DIM), "actor_obs")
     _assert_finite_shape(critic_obs, (NUM_ENVS, CRITIC_OBS_DIM), "critic_obs")
     _assert_finite_shape(reward, (NUM_ENVS,), "reward")
-    if torch.count_nonzero(reward).item() != 0:
-        raise AssertionError("Stage-4.1 task reward must remain exactly zero.")
     if done.shape != (NUM_ENVS,) or done.dtype != torch.bool:
         raise AssertionError(f"done has invalid shape/dtype: {done.shape}, {done.dtype}.")
     if not torch.isfinite(done.float()).all():
         raise AssertionError("done contains invalid values.")
+    if not REQUIRED_LOG_KEYS.issubset(infos.get("log", {})):
+        missing = REQUIRED_LOG_KEYS - set(infos.get("log", {}))
+        raise AssertionError(f"Recovery logs are missing keys: {sorted(missing)}")
+    if not all(
+        torch.isfinite(torch.as_tensor(value)).all()
+        for value in infos["log"].values()
+    ):
+        raise AssertionError("Recovery logs contain NaN or Inf values.")
     return actor_obs, reward, done, infos
+
+
+def _write_default_standing(env):
+    env_ids = torch.arange(NUM_ENVS, dtype=torch.long, device=env.device)
+    env.scene.reset(env_ids)
+    root_state = env.robot.data.default_root_state[env_ids].clone()
+    root_state[:, :3] += env.scene.env_origins[env_ids]
+    joint_pos = env.robot.data.default_joint_pos[env_ids].clone()
+    joint_vel = env.robot.data.default_joint_vel[env_ids].clone()
+    env.robot.write_root_link_pose_to_sim(root_state[:, :7], env_ids=env_ids)
+    env.robot.write_root_link_velocity_to_sim(root_state[:, 7:], env_ids=env_ids)
+    env.robot.write_joint_state_to_sim(joint_pos, joint_vel, env_ids=env_ids)
+    env.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
+    env.robot.set_joint_velocity_target(torch.zeros_like(joint_vel), env_ids=env_ids)
+    env.scene.write_data_to_sim()
+    env.sim.forward()
+    env.scene.update(dt=env.physics_dt)
+    env.actor_obs_buffer.reset(env_ids)
+    env.critic_obs_buffer.reset(env_ids)
+    env.episode_length_buf[env_ids] = 0
+    env.action[env_ids] = 0.0
+    env.last_action[env_ids] = 0.0
+    env.success_hold_counter[env_ids] = 0
+    env.success_buf[env_ids] = False
+    env.terminated_buf[env_ids] = False
+    env.self_collision_hit_substeps[env_ids] = False
 
 
 def _assert_dataset_reset(env, env_ids=None):
@@ -168,7 +225,6 @@ def run_smoke_test():
     cfg = G1RecoveryEnvCfg()
     cfg.device = args.device
     cfg.scene.num_envs = NUM_ENVS
-    cfg.scene.max_episode_length_s = 0.08
     state_dir = Path(cfg.reset.state_dir)
     if not state_dir.is_dir() or not any(state_dir.glob("*.npz")):
         raise FileNotFoundError(
@@ -189,10 +245,36 @@ def run_smoke_test():
         raise AssertionError("Expert and policy Recovery transition_dt must match.")
     if env.num_actions != 23:
         raise AssertionError(f"num_actions must be 23, got {env.num_actions}.")
-    if env.max_episode_length != 4:
+    if env.max_episode_length_s != 6.0:
         raise AssertionError(
-            f"0.08 s must produce four policy steps, got {env.max_episode_length}."
+            f"episode length must be 6.0 s, got {env.max_episode_length_s}."
         )
+    if env.max_episode_length != 300:
+        raise AssertionError(
+            f"6.0 s must produce 300 policy steps, got {env.max_episode_length}."
+        )
+    if env.success_hold_steps != 25:
+        raise AssertionError(
+            f"0.5 s must produce 25 hold steps, got {env.success_hold_steps}."
+        )
+    if len(env.self_collision_sensors) != len(env.robot.body_names):
+        raise AssertionError(
+            "Recovery must create one filtered self-collision sensor per body."
+        )
+    for sensor in env.self_collision_sensors:
+        force_matrix = sensor.data.force_matrix_w
+        if force_matrix.shape != (
+            NUM_ENVS,
+            1,
+            len(env.robot.body_names),
+            3,
+        ):
+            raise AssertionError(
+                "Self-collision force matrix has invalid shape "
+                f"{tuple(force_matrix.shape)}."
+            )
+        if any("ground" in path.lower() for path in sensor.cfg.filter_prim_paths_expr):
+            raise AssertionError("Ground leaked into a self-collision filter.")
     if env.last_reset_state_ids.shape != (NUM_ENVS,):
         raise AssertionError(
             f"last_reset_state_ids must be {(NUM_ENVS,)}, "
@@ -277,6 +359,73 @@ def run_smoke_test():
     env.reset_to_state_ids(all_env_ids, deterministic_state_ids)
     _assert_dataset_reset(env)
 
+    # Fallen dataset resets always begin with a fresh hold counter and cannot
+    # terminate immediately even if an individual sample is momentarily ready.
+    env._update_recovery_state_metrics()
+    if torch.any(env.success_buf) or torch.any(env.success_hold_counter):
+        raise AssertionError("A fallen dataset reset started as successful.")
+    reset_now, _ = env.check_reset()
+    if torch.any(reset_now) or torch.any(env.success_buf):
+        raise AssertionError("A fallen reset succeeded without a 25-step hold.")
+
+    synthetic_hits = torch.zeros((3, 4), dtype=torch.bool, device=env.device)
+    synthetic_hits[1, 2] = True
+    synthetic_hits[2] = True
+    synthetic_cost = env.self_collision_cost_from_hits(synthetic_hits)
+    torch.testing.assert_close(
+        synthetic_cost,
+        torch.tensor([0.0, 1.0, 4.0], device=env.device),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+    # The exact default standing pose satisfies both gates.  Success occurs on
+    # the 25th consecutive policy evaluation, never earlier.
+    _write_default_standing(env)
+    env._update_recovery_state_metrics()
+    if not torch.all(env.height_ok):
+        raise AssertionError("Default standing state failed the height gate.")
+    if not torch.all(env.upright_ok):
+        raise AssertionError("Default standing state failed the torso upright gate.")
+    for _ in range(env.success_hold_steps - 1):
+        reset_now, time_out_now = env.check_reset()
+        if torch.any(reset_now) or torch.any(time_out_now):
+            raise AssertionError("Standing state succeeded before 25 hold steps.")
+    reset_now, time_out_now = env.check_reset()
+    if not torch.all(reset_now) or not torch.all(env.success_buf):
+        raise AssertionError("Standing state did not succeed on hold step 25.")
+    if torch.any(time_out_now) or not torch.all(env.terminated_buf):
+        raise AssertionError("Recovery success must be a true termination.")
+
+    # Exercise the real step/reset path from hold step 24 and verify success
+    # terminal AMP states were captured before the new fallen reset.
+    _write_default_standing(env)
+    env._update_recovery_state_metrics()
+    env.success_hold_counter.fill_(env.success_hold_steps - 1)
+    zero_actions = torch.zeros(
+        (NUM_ENVS, env.num_actions), device=env.device
+    )
+    _, _, success_done, success_infos = _check_step_output(
+        env.step(zero_actions)
+    )
+    if not torch.all(success_done):
+        raise AssertionError("Held standing state did not terminate as success.")
+    if not torch.all(success_infos["terminated"]):
+        raise AssertionError("Success infos did not mark terminated=True.")
+    if torch.any(success_infos["time_outs"]):
+        raise AssertionError("Success was incorrectly marked as timeout truncation.")
+    torch.testing.assert_close(
+        success_infos["terminal_amp_states"],
+        env.pre_reset_amp_obs[env.reset_env_ids],
+        rtol=0.0,
+        atol=0.0,
+    )
+    _assert_dataset_reset(env, env.reset_env_ids)
+
+    # Return to deterministic fallen states before action/reward checks.
+    env.reset_to_state_ids(all_env_ids, deterministic_state_ids)
+    _assert_dataset_reset(env)
+
     actor_current, critic_current = env.compute_current_observations()
     _assert_finite_shape(actor_current, (NUM_ENVS, 75), "actor_current")
     _assert_finite_shape(critic_current, (NUM_ENVS, 78), "critic_current")
@@ -290,9 +439,6 @@ def run_smoke_test():
     amp_obs = env.get_amp_obs_for_expert_trans()
     _assert_finite_shape(amp_obs, (NUM_ENVS, AMP_OBS_DIM), "initial amp_obs")
 
-    zero_actions = torch.zeros(
-        (NUM_ENVS, env.num_actions), device=env.device
-    )
     _, _, done, _ = _check_step_output(env.step(zero_actions))
     if torch.any(done):
         raise AssertionError("Recovery terminated before its timeout.")
@@ -301,6 +447,36 @@ def run_smoke_test():
         env.robot.data.default_joint_pos,
         rtol=0.0,
         atol=1.0e-7,
+    )
+    observed_self_collision_cost = env.self_collision_cost_from_hits(
+        env.self_collision_hit_substeps
+    )
+    torch.testing.assert_close(
+        env.self_collision_cost,
+        observed_self_collision_cost,
+        rtol=0.0,
+        atol=0.0,
+    )
+    if torch.any(env.self_collision_cost < 0.0) or torch.any(
+        env.self_collision_cost > env.cfg.sim.decimation
+    ):
+        raise AssertionError("Observed self-collision cost escaped [0, 4].")
+    h_default = env.robot.data.default_root_state[:, 2]
+    expected_height_raw = torch.exp(
+        -torch.square(h_default - env.robot.data.root_link_pos_w[:, 2]) / 0.09
+    )
+    expected_task_reward = (
+        3.5 * expected_height_raw
+        - 2.5e-7 * env.joint_acc_cost
+        - 10.0 * env.joint_pos_limits_cost
+        - 0.01 * env.action_rate_cost
+        - 0.1 * env.self_collision_cost
+    )
+    torch.testing.assert_close(
+        env.height_reward_raw, expected_height_raw, rtol=1.0e-6, atol=1.0e-7
+    )
+    torch.testing.assert_close(
+        env.task_reward, expected_task_reward, rtol=1.0e-6, atol=1.0e-7
     )
 
     one_actions = torch.ones_like(zero_actions)
@@ -328,6 +504,8 @@ def run_smoke_test():
     amp_obs = env.get_amp_obs_for_expert_trans()
     _assert_finite_shape(amp_obs, (NUM_ENVS, AMP_OBS_DIM), "random-step amp_obs")
 
+    env.episode_length_buf.fill_(env.max_episode_length - 1)
+    env.success_hold_counter.zero_()
     actor_obs, _, done, infos = _check_step_output(env.step(one_actions))
     if not torch.all(done):
         raise AssertionError("All four smoke-test environments must time out.")
@@ -338,7 +516,9 @@ def run_smoke_test():
     if "terminal_amp_states" not in infos:
         raise AssertionError("Timeout infos are missing terminal_amp_states.")
     if not torch.equal(infos["time_outs"], done):
-        raise AssertionError("Only timeout termination is allowed in Stage 4.1.")
+        raise AssertionError("Horizon exits must be timeout truncations.")
+    if torch.any(infos["terminated"]):
+        raise AssertionError("Timeout truncation was incorrectly marked terminated.")
     terminal_amp_states = infos["terminal_amp_states"]
     _assert_finite_shape(
         terminal_amp_states,
@@ -366,10 +546,32 @@ def run_smoke_test():
         atol=0.0,
     )
 
+    # Initialize the real AMP runner without a preload cache to verify that the
+    # standalone config selects RecoveryAMPData and applies both reward knobs.
+    agent_cfg = G1RecoveryAgentCfg()
+    train_cfg = agent_cfg.to_dict()
+    train_cfg["amp_preload_transitions"] = False
+    train_cfg["amp_num_preload_transitions"] = 0
+    runner = AmpOnPolicyRunner(
+        env,
+        train_cfg,
+        log_dir=None,
+        device=env.device,
+    )
+    if not isinstance(runner.alg.amp_data, RecoveryAMPData):
+        raise AssertionError("Recovery runner did not select RecoveryAMPData.")
+    if runner.alg.amp_data.transition_dt != EXPERT_TRANSITION_DT:
+        raise AssertionError("Recovery runner AMP transition_dt is not 0.02 s.")
+    if runner.alg.discriminator.amp_reward_coef != 0.3:
+        raise AssertionError("Recovery amp_reward_coef is not 0.3.")
+    if runner.alg.discriminator.task_reward_lerp != 0.7:
+        raise AssertionError("Recovery amp_task_reward_lerp is not 0.7.")
+
     print(
-        "G1 Recovery Stage 4.2c smoke test passed: "
+        "G1 Recovery V1 smoke test passed: "
         "physics_dt=0.005, decimation=4, step_dt=0.02, "
-        "deterministic/freeze/hold reset QC passed, "
+        "episode=300 steps, success_hold=25 steps, "
+        "reward/success/timeout/self-collision/terminal-AMP checks passed, "
         "actor=300D, critic=312D, AMP=195D.",
         flush=True,
     )

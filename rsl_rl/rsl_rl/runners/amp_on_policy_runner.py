@@ -16,7 +16,7 @@ from rsl_rl.modules import (
     EmpiricalNormalization,
     MhaActorCritic,
 )
-from rsl_rl.utils import AMPLoader, Normalizer, store_code_state
+from rsl_rl.utils import AMPLoader, Normalizer, RecoveryAMPData, store_code_state
 
 
 class AmpOnPolicyRunner:
@@ -83,14 +83,37 @@ class AmpOnPolicyRunner:
             # this is used by the symmetry function for handling different observation terms
             self.alg_cfg["symmetry_cfg"]["_env"] = env
 
-        # init amp loader
-        amp_data = AMPLoader(
-            device,
-            time_between_frames=self.env.step_dt,
-            preload_transitions=True,
-            num_preload_transitions=train_cfg["amp_num_preload_transitions"],
-            motion_files=train_cfg["amp_motion_files"],
-        )
+        # Keep the legacy TXT loader as the default while allowing standalone
+        # Recovery to select its Stage-3 NPZ adapter through configuration.
+        amp_data_class_name = train_cfg.get("amp_data_class_name", "AMPLoader")
+        if amp_data_class_name == "AMPLoader":
+            amp_data = AMPLoader(
+                device,
+                time_between_frames=self.env.step_dt,
+                preload_transitions=True,
+                num_preload_transitions=train_cfg["amp_num_preload_transitions"],
+                motion_files=train_cfg["amp_motion_files"],
+            )
+        elif amp_data_class_name == "RecoveryAMPData":
+            amp_data = RecoveryAMPData(
+                motion_dir=train_cfg["amp_motion_dir"],
+                device=device,
+                transition_dt=train_cfg["amp_transition_dt"],
+                expected_fps=train_cfg.get("amp_expected_fps", 50.0),
+                sampling=train_cfg.get("amp_sampling", "uniform_frame"),
+                preload_transitions=train_cfg.get(
+                    "amp_preload_transitions", True
+                ),
+                num_preload_transitions=train_cfg[
+                    "amp_num_preload_transitions"
+                ],
+            )
+        else:
+            raise ValueError(
+                "Unsupported AMP data class "
+                f"{amp_data_class_name!r}; expected 'AMPLoader' or "
+                "'RecoveryAMPData'."
+            )
         
         print(f"DEBUG: 数据集的维度: {amp_data.observation_dim}")
         amp_obs_demo = self.env.get_amp_obs_for_expert_trans()  # 获得AMP样本的维度
@@ -304,6 +327,7 @@ class AmpOnPolicyRunner:
                         rewards,
                         normalizer=self.alg.amp_normalizer,
                     )[0]
+                    infos.setdefault("log", {})["AMP/reward_mean"] = rewards.mean()
 
                     # Start the next rollout transition from the post-reset states.
                     amp_obs = next_amp_obs.clone()
