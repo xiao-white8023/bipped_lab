@@ -13,6 +13,7 @@ from isaaclab.utils.buffers import CircularBuffer
 
 from legged_lab.envs.g1.g1_recovery_cfg import G1RecoveryEnvCfg
 from legged_lab.utils.env_utils.scene import SceneCfg
+from legged_lab.utils.recovery_reset_state_loader import RecoveryResetStateLoader
 from rsl_rl.env import VecEnv
 from rsl_rl.utils import RecoveryAMPFeatureBuilder
 
@@ -70,6 +71,16 @@ class G1RecoveryEnv(VecEnv):
             raise RuntimeError(
                 f"G1 Recovery requires exactly 23 joints, got {self.robot.num_joints}."
             )
+        if self.cfg.reset.random_yaw:
+            raise RuntimeError(
+                "Recovery random_yaw must remain disabled in Stage 4.2b."
+            )
+
+        self.reset_state_loader = RecoveryResetStateLoader(
+            state_dir=self.cfg.reset.state_dir,
+            device=self.device,
+        )
+        self._validate_reset_state_ordering()
 
         # Expert 与 policy 共用 Stage 3.2 的 whole-body AMP feature builder。
         self.amp_feature_builder = RecoveryAMPFeatureBuilder(self.robot.body_names)
@@ -85,8 +96,48 @@ class G1RecoveryEnv(VecEnv):
         self.reset(env_ids)
 
         print(f"G1 recovery policy dt: {self.step_dt:.8f} s")
+        print(f"G1 recovery reset states: {self.reset_state_loader.num_states}")
         print("G1 recovery joint names:", self.robot.joint_names)
         print("G1 recovery body names:", self.robot.body_names)
+
+    @staticmethod
+    def _first_order_mismatches(actual, expected, limit=5):
+        mismatches = []
+        for index in range(max(len(actual), len(expected))):
+            actual_name = actual[index] if index < len(actual) else "<missing>"
+            expected_name = expected[index] if index < len(expected) else "<missing>"
+            if actual_name != expected_name:
+                mismatches.append(
+                    f"index {index}: robot={actual_name!r}, dataset={expected_name!r}"
+                )
+                if len(mismatches) == limit:
+                    break
+        return mismatches
+
+    def _validate_reset_state_ordering(self):
+        ordering_pairs = (
+            (
+                "joint_names",
+                tuple(self.robot.joint_names),
+                tuple(self.reset_state_loader.joint_names),
+            ),
+            (
+                "body_names",
+                tuple(self.robot.body_names),
+                tuple(self.reset_state_loader.body_names),
+            ),
+        )
+        for label, robot_order, dataset_order in ordering_pairs:
+            if robot_order != dataset_order:
+                first_mismatches = self._first_order_mismatches(
+                    robot_order, dataset_order
+                )
+                message = (
+                    f"G1 Recovery robot/dataset {label} ordering mismatch; "
+                    f"first mismatches: {'; '.join(first_mismatches)}"
+                )
+                print(message)
+                raise RuntimeError(message)
 
     def init_buffers(self):
         self.extras = {}
@@ -122,6 +173,18 @@ class G1RecoveryEnv(VecEnv):
         self.pre_reset_amp_obs = torch.empty(
             self.num_envs,
             self.AMP_OBSERVATION_DIM,
+            dtype=torch.float,
+            device=self.device,
+        )
+        self.last_reset_state_ids = torch.full(
+            (self.num_envs,),
+            -1,
+            dtype=torch.long,
+            device=self.device,
+        )
+        self.last_reset_joint_pos = torch.zeros(
+            self.num_envs,
+            self.num_actions,
             dtype=torch.float,
             device=self.device,
         )
@@ -238,7 +301,7 @@ class G1RecoveryEnv(VecEnv):
         )
         return processed_actions
 
-    def reset(self, env_ids):
+    def _normalize_env_ids(self, env_ids):
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
         elif not torch.is_tensor(env_ids):
@@ -246,38 +309,108 @@ class G1RecoveryEnv(VecEnv):
         else:
             env_ids = env_ids.to(device=self.device, dtype=torch.long)
         env_ids = env_ids.flatten()
+        if torch.any(env_ids < 0) or torch.any(env_ids >= self.num_envs):
+            raise IndexError(
+                f"Recovery env_ids must be in [0, {self.num_envs - 1}]."
+            )
+        return env_ids
+
+    @torch.no_grad()
+    def _reset_from_state_ids(self, env_ids, state_ids):
+        env_ids = self._normalize_env_ids(env_ids)
+        if isinstance(state_ids, torch.Tensor) and state_ids.dtype == torch.bool:
+            raise ValueError("Recovery state_ids must contain integer indexes.")
+        state_ids = torch.as_tensor(
+            state_ids, dtype=torch.long, device=self.device
+        ).flatten()
+        if env_ids.numel() != state_ids.numel():
+            raise ValueError(
+                "Recovery env_ids and state_ids must have the same length, got "
+                f"{env_ids.numel()} and {state_ids.numel()}."
+            )
 
         if env_ids.numel() == 0:
             return
 
         self.scene.reset(env_ids)
 
-        root_state = self.robot.data.default_root_state[env_ids].clone()
-        root_state[:, :3] += self.scene.env_origins[env_ids]
-        joint_pos = self.robot.data.default_joint_pos[env_ids].clone()
-        joint_vel = self.robot.data.default_joint_vel[env_ids].clone()
+        sample = self.reset_state_loader.get_state_batch(state_ids)
+        source_root_pos = sample["root_pos_w"]
+        root_pos = source_root_pos.clone()
+        env_origins = self.scene.env_origins[env_ids]
+        root_pos[:, :2] = env_origins[:, :2]
+        root_pos[:, 2] = env_origins[:, 2] + source_root_pos[:, 2]
+
+        root_pose = torch.cat([root_pos, sample["root_quat_w"]], dim=-1)
+        root_velocity = torch.cat(
+            [sample["root_lin_vel_w"], sample["root_ang_vel_w"]], dim=-1
+        )
+        joint_pos = sample["joint_pos"]
+        joint_vel = sample["joint_vel"]
 
         self.robot.write_root_link_pose_to_sim(
-            root_state[:, :7], env_ids=env_ids
+            root_pose, env_ids=env_ids
         )
         self.robot.write_root_link_velocity_to_sim(
-            root_state[:, 7:13], env_ids=env_ids
+            root_velocity, env_ids=env_ids
         )
         self.robot.write_joint_state_to_sim(
             joint_pos, joint_vel, env_ids=env_ids
         )
         self.robot.set_joint_position_target(joint_pos, env_ids=env_ids)
-        self.robot.set_joint_velocity_target(joint_vel, env_ids=env_ids)
+        self.robot.set_joint_velocity_target(
+            torch.zeros_like(joint_vel), env_ids=env_ids
+        )
 
         self.actor_obs_buffer.reset(env_ids)
         self.critic_obs_buffer.reset(env_ids)
         self.episode_length_buf[env_ids] = 0
         self.action[env_ids] = 0.0
         self.joint_pos_target[env_ids] = joint_pos
+        self.last_reset_state_ids[env_ids] = sample["state_ids"]
+        self.last_reset_joint_pos[env_ids] = joint_pos
 
         self.scene.write_data_to_sim()
         self.sim.forward()
         self.scene.update(dt=self.physics_dt)
+
+    def reset(self, env_ids):
+        env_ids = self._normalize_env_ids(env_ids)
+        if env_ids.numel() == 0:
+            return
+        state_ids = self.reset_state_loader.sample_state_ids(env_ids.numel())
+        self._reset_from_state_ids(env_ids, state_ids)
+
+    @torch.no_grad()
+    def reset_to_state_ids(self, env_ids, state_ids):
+        env_ids = self._normalize_env_ids(env_ids)
+        if isinstance(state_ids, torch.Tensor) and state_ids.dtype == torch.bool:
+            raise ValueError("Recovery state_ids must contain integer indexes.")
+        state_ids = torch.as_tensor(state_ids, device=self.device)
+        if state_ids.ndim != 1:
+            raise ValueError(
+                f"Recovery state_ids must have shape [B], got {tuple(state_ids.shape)}."
+            )
+        if (
+            state_ids.dtype == torch.bool
+            or state_ids.dtype.is_floating_point
+            or state_ids.dtype.is_complex
+        ):
+            raise ValueError("Recovery state_ids must contain integer indexes.")
+        state_ids = state_ids.to(dtype=torch.long)
+        if env_ids.numel() != state_ids.numel():
+            raise ValueError(
+                "Recovery env_ids and state_ids must have the same length, got "
+                f"{env_ids.numel()} and {state_ids.numel()}."
+            )
+        if torch.any(state_ids < 0) or torch.any(
+            state_ids >= self.reset_state_loader.num_states
+        ):
+            raise IndexError(
+                "Recovery state_ids must be in "
+                f"[0, {self.reset_state_loader.num_states - 1}]."
+            )
+        self._reset_from_state_ids(env_ids, state_ids)
 
     def step(self, actions: torch.Tensor):
         expected_shape = (self.num_envs, self.num_actions)
@@ -316,7 +449,7 @@ class G1RecoveryEnv(VecEnv):
 
         self.extras = {"time_outs": self.time_out_buf.clone()}
 
-        # Terminal AMP 必须在 deterministic standing reset 之前采集。
+        # Terminal AMP 必须在 dataset-based fallen reset 之前采集。
         self.pre_reset_amp_obs = self.get_amp_obs_for_expert_trans().detach()
         self.reset_env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
         if self.reset_env_ids.numel() > 0:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage-4.1 smoke test for the standalone G1 Recovery environment."""
+"""Stage-4.2c smoke test for G1 Recovery reset visualization/QC APIs."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from isaaclab.app import AppLauncher
 
 
 parser = argparse.ArgumentParser(
-    description="Smoke-test the standalone Stage-4.1 G1 Recovery environment."
+    description="Smoke-test Stage-4.2c G1 Recovery reset visualization/QC APIs."
 )
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
@@ -66,11 +66,115 @@ def _check_step_output(step_output):
     return actor_obs, reward, done, infos
 
 
+def _assert_dataset_reset(env, env_ids=None):
+    if env_ids is None:
+        env_ids = torch.arange(NUM_ENVS, device=env.device)
+    else:
+        env_ids = env_ids.to(device=env.device, dtype=torch.long)
+
+    state_ids = env.last_reset_state_ids[env_ids]
+    if state_ids.shape != (env_ids.numel(),):
+        raise AssertionError(
+            f"last_reset_state_ids has invalid shape {tuple(state_ids.shape)}."
+        )
+    if torch.any(state_ids < 0) or torch.any(
+        state_ids >= env.reset_state_loader.num_states
+    ):
+        raise AssertionError("last_reset_state_ids contains an invalid dataset ID.")
+
+    reference = env.reset_state_loader.get_state_batch(state_ids)
+    env_origins = env.scene.env_origins[env_ids]
+    expected_root_pos = reference["root_pos_w"].clone()
+    expected_root_pos[:, :2] = env_origins[:, :2]
+    expected_root_pos[:, 2] = (
+        env_origins[:, 2] + reference["root_pos_w"][:, 2]
+    )
+
+    atol = 2.0e-5
+    torch.testing.assert_close(
+        env.robot.data.root_link_pos_w[env_ids],
+        expected_root_pos,
+        rtol=1.0e-5,
+        atol=atol,
+    )
+
+    robot_quat = torch.nn.functional.normalize(
+        env.robot.data.root_link_quat_w[env_ids], dim=-1
+    )
+    source_quat = torch.nn.functional.normalize(reference["root_quat_w"], dim=-1)
+    orientation_dot = torch.abs(torch.sum(robot_quat * source_quat, dim=-1))
+    torch.testing.assert_close(
+        orientation_dot,
+        torch.ones_like(orientation_dot),
+        rtol=0.0,
+        atol=atol,
+    )
+
+    comparisons = (
+        (
+            env.robot.data.root_link_lin_vel_w[env_ids],
+            reference["root_lin_vel_w"],
+            "root linear velocity",
+        ),
+        (
+            env.robot.data.root_link_ang_vel_w[env_ids],
+            reference["root_ang_vel_w"],
+            "root angular velocity",
+        ),
+        (
+            env.robot.data.joint_pos[env_ids],
+            reference["joint_pos"],
+            "joint position",
+        ),
+        (
+            env.robot.data.joint_vel[env_ids],
+            reference["joint_vel"],
+            "joint velocity",
+        ),
+        (
+            env.joint_pos_target[env_ids],
+            reference["joint_pos"],
+            "environment joint position target",
+        ),
+        (
+            env.robot.data.joint_pos_target[env_ids],
+            reference["joint_pos"],
+            "actuator joint position target",
+        ),
+        (
+            env.last_reset_joint_pos[env_ids],
+            reference["joint_pos"],
+            "cached reset joint position",
+        ),
+    )
+    for actual, expected, label in comparisons:
+        try:
+            torch.testing.assert_close(
+                actual, expected, rtol=1.0e-5, atol=atol
+            )
+        except AssertionError as error:
+            raise AssertionError(f"Dataset reset did not preserve {label}.") from error
+
+    torch.testing.assert_close(
+        env.robot.data.joint_vel_target[env_ids],
+        torch.zeros_like(reference["joint_vel"]),
+        rtol=0.0,
+        atol=0.0,
+    )
+    return reference
+
+
 def run_smoke_test():
     cfg = G1RecoveryEnvCfg()
     cfg.device = args.device
     cfg.scene.num_envs = NUM_ENVS
     cfg.scene.max_episode_length_s = 0.08
+    state_dir = Path(cfg.reset.state_dir)
+    if not state_dir.is_dir() or not any(state_dir.glob("*.npz")):
+        raise FileNotFoundError(
+            f"Recovery reset-state dataset is missing or empty: {state_dir}. "
+            "Run legged_lab/scripts/build_recovery_reset_dataset.py first."
+        )
     env = G1RecoveryEnv(cfg=cfg, headless=args.headless)
 
     if env.physics_dt != 0.005:
@@ -89,6 +193,89 @@ def run_smoke_test():
         raise AssertionError(
             f"0.08 s must produce four policy steps, got {env.max_episode_length}."
         )
+    if env.last_reset_state_ids.shape != (NUM_ENVS,):
+        raise AssertionError(
+            f"last_reset_state_ids must be {(NUM_ENVS,)}, "
+            f"got {tuple(env.last_reset_state_ids.shape)}."
+        )
+    _assert_dataset_reset(env)
+
+    deterministic_state_ids = torch.arange(
+        NUM_ENVS, dtype=torch.long, device=env.device
+    )
+    all_env_ids = torch.arange(NUM_ENVS, dtype=torch.long, device=env.device)
+    env.reset_to_state_ids(all_env_ids, deterministic_state_ids)
+    if not torch.equal(env.last_reset_state_ids, deterministic_state_ids):
+        raise AssertionError(
+            "reset_to_state_ids did not preserve deterministic IDs [0, 1, 2, 3]."
+        )
+    _assert_dataset_reset(env)
+
+    try:
+        env.reset_to_state_ids([0, 1], [0])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("reset_to_state_ids must reject unequal ID lengths.")
+    try:
+        env.reset_to_state_ids([0], [env.reset_state_loader.num_states])
+    except IndexError:
+        pass
+    else:
+        raise AssertionError("reset_to_state_ids must reject out-of-range state IDs.")
+
+    freeze_reference = {
+        "root_pos": env.robot.data.root_link_pos_w.clone(),
+        "root_quat": env.robot.data.root_link_quat_w.clone(),
+        "joint_pos": env.robot.data.joint_pos.clone(),
+        "joint_vel": env.robot.data.joint_vel.clone(),
+    }
+    for _ in range(3):
+        env.sim.forward()
+        env.scene.update(dt=env.physics_dt)
+    freeze_actual = {
+        "root_pos": env.robot.data.root_link_pos_w,
+        "root_quat": env.robot.data.root_link_quat_w,
+        "joint_pos": env.robot.data.joint_pos,
+        "joint_vel": env.robot.data.joint_vel,
+    }
+    for key in freeze_reference:
+        torch.testing.assert_close(
+            freeze_actual[key], freeze_reference[key], rtol=0.0, atol=0.0
+        )
+
+    # Hold QC intentionally selects exactly two environments for ten physics steps.
+    hold_env_ids = torch.tensor([0, 1], dtype=torch.long, device=env.device)
+    episode_length_before_hold = env.episode_length_buf.clone()
+    zero_velocity_target = torch.zeros_like(
+        env.last_reset_joint_pos[hold_env_ids]
+    )
+    for _ in range(10):
+        env.robot.set_joint_position_target(
+            env.last_reset_joint_pos[hold_env_ids], env_ids=hold_env_ids
+        )
+        env.robot.set_joint_velocity_target(
+            zero_velocity_target, env_ids=hold_env_ids
+        )
+        env.scene.write_data_to_sim()
+        env.sim.step(render=False)
+        env.scene.update(dt=env.physics_dt)
+    hold_tensors = (
+        env.robot.data.root_link_pos_w[hold_env_ids],
+        env.robot.data.root_link_quat_w[hold_env_ids],
+        env.robot.data.root_link_lin_vel_w[hold_env_ids],
+        env.robot.data.root_link_ang_vel_w[hold_env_ids],
+        env.robot.data.joint_pos[hold_env_ids],
+        env.robot.data.joint_vel[hold_env_ids],
+    )
+    if not all(torch.isfinite(tensor).all() for tensor in hold_tensors):
+        raise AssertionError("Ten-step two-environment Hold QC produced NaN or Inf.")
+    if not torch.equal(env.episode_length_buf, episode_length_before_hold):
+        raise AssertionError("Low-level Hold QC modified episode_length_buf.")
+
+    # Restore an exact reset before exercising the normal policy/timeout path.
+    env.reset_to_state_ids(all_env_ids, deterministic_state_ids)
+    _assert_dataset_reset(env)
 
     actor_current, critic_current = env.compute_current_observations()
     _assert_finite_shape(actor_current, (NUM_ENVS, 75), "actor_current")
@@ -162,11 +349,7 @@ def run_smoke_test():
     torch.testing.assert_close(
         terminal_amp_states, pre_reset_reference, rtol=0.0, atol=0.0
     )
-    post_reset_amp = env.get_amp_obs_for_expert_trans()[env.reset_env_ids]
-    if torch.allclose(terminal_amp_states, post_reset_amp):
-        raise AssertionError(
-            "terminal_amp_states unexpectedly match post-reset standing AMP states."
-        )
+    _assert_dataset_reset(env, env.reset_env_ids)
 
     actor_history = actor_obs.reshape(NUM_ENVS, 4, 75)
     critic_history = infos["observations"]["critic"].reshape(NUM_ENVS, 4, 78)
@@ -184,8 +367,9 @@ def run_smoke_test():
     )
 
     print(
-        "G1 Recovery Stage 4.1 smoke test passed: "
+        "G1 Recovery Stage 4.2c smoke test passed: "
         "physics_dt=0.005, decimation=4, step_dt=0.02, "
+        "deterministic/freeze/hold reset QC passed, "
         "actor=300D, critic=312D, AMP=195D.",
         flush=True,
     )
