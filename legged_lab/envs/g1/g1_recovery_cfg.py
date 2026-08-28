@@ -4,6 +4,9 @@
 import os
 
 import legged_lab
+import legged_lab.mdp as mdp
+from isaaclab.managers import RewardTermCfg as RewTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.utils import configclass
 from isaaclab_rl.rsl_rl import RslRlPpoAlgorithmCfg
 
@@ -89,17 +92,42 @@ class RecoveryResetCfg:
 
 
 @configclass
-class RecoveryRewardCfg:
-    height_std: float = 0.3
-    height_scale: float = 3.5
+class Reward:
+    # 起身主奖励
+    root_height_exp = RewTerm(
+        func=mdp.recovery_root_height_exp,
+        weight=3.5,
+        params={
+            "std": 0.3,
+            "asset_cfg": SceneEntityCfg("robot"),
+        },
+    )
 
-    # The corresponding terms are non-negative costs; negative weights make
-    # them reward penalties exactly once.
-    joint_acc_weight: float = -2.5e-7
-    joint_pos_limits_weight: float = -10.0
-    action_rate_weight: float = -0.01
-    self_collision_weight: float = -0.1
-    self_collision_force_threshold: float = 10.0
+    # 正则项；函数均返回非负 cost，由负权重转为 penalty。
+    dof_acc_l2 = RewTerm(
+        func=mdp.recovery_joint_acc_l2,
+        weight=-2.5e-7,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+    )
+    dof_pos_limits = RewTerm(
+        func=mdp.recovery_joint_pos_limits,
+        weight=-10.0,
+        params={"asset_cfg": SceneEntityCfg("robot")},
+    )
+    action_rate_l2 = RewTerm(
+        func=mdp.standalone_recovery_action_rate_l2,
+        weight=-0.01,
+    )
+    self_collisions = RewTerm(
+        func=mdp.recovery_self_collisions,
+        weight=-0.1,
+        params={"force_threshold": 10.0},
+    )
+
+
+# Keep the former public name available while the active configuration follows
+# the G1 Film ``Reward`` naming style.
+RecoveryRewardCfg = Reward
 
 
 @configclass
@@ -134,7 +162,7 @@ class G1RecoveryEnvCfg:
 
     reset: RecoveryResetCfg = RecoveryResetCfg()
 
-    reward: RecoveryRewardCfg = RecoveryRewardCfg()
+    reward: Reward = Reward()
 
     success: RecoverySuccessCfg = RecoverySuccessCfg()
 
@@ -156,18 +184,22 @@ class G1RecoveryEnvCfg:
             )
         if self.reset.random_yaw:
             raise ValueError("Recovery random_yaw must remain disabled in Stage 4.2b.")
-        if self.reward.height_std <= 0.0 or self.reward.height_scale <= 0.0:
+        height_std = self.reward.root_height_exp.params["std"]
+        if height_std <= 0.0 or self.reward.root_height_exp.weight <= 0.0:
             raise ValueError("Recovery height reward parameters must be positive.")
-        if self.reward.self_collision_force_threshold != 10.0:
+        self_collision_threshold = self.reward.self_collisions.params[
+            "force_threshold"
+        ]
+        if self_collision_threshold != 10.0:
             raise ValueError(
                 "Recovery self-collision force threshold must remain 10.0 N."
             )
         expected_weights = (-2.5e-7, -10.0, -0.01, -0.1)
         actual_weights = (
-            self.reward.joint_acc_weight,
-            self.reward.joint_pos_limits_weight,
-            self.reward.action_rate_weight,
-            self.reward.self_collision_weight,
+            self.reward.dof_acc_l2.weight,
+            self.reward.dof_pos_limits.weight,
+            self.reward.action_rate_l2.weight,
+            self.reward.self_collisions.weight,
         )
         if actual_weights != expected_weights:
             raise ValueError(
@@ -243,6 +275,7 @@ __all__ = [
     "G1RecoveryAgentCfg",
     "G1RecoveryEnvCfg",
     "G1_RECOVERY_BODY_NAMES",
+    "Reward",
     "RecoveryControlCfg",
     "RecoveryObservationCfg",
     "RecoveryRewardCfg",

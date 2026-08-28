@@ -6,6 +6,7 @@ import math
 import isaaclab.sim as sim_utils
 import torch
 from isaaclab.assets.articulation import Articulation
+from isaaclab.managers import RewardManager
 from isaaclab.scene import InteractiveScene
 from isaaclab.sensors import ContactSensor, ContactSensorCfg
 from isaaclab.sim import PhysxCfg, SimulationContext
@@ -144,6 +145,14 @@ class G1RecoveryEnv(VecEnv):
                 "RecoveryAMPFeatureBuilder must produce exactly 195 features, got "
                 f"{self.amp_feature_builder.feature_dim}."
             )
+
+        # 与 G1 Film 一致，由 RewardManager 解析并管理奖励项。
+        self.reward_manager = RewardManager(self.cfg.reward, self)
+        self.self_collision_force_threshold = float(
+            self.reward_manager.get_term_cfg("self_collisions").params[
+                "force_threshold"
+            ]
+        )
 
         self.init_buffers()
 
@@ -446,6 +455,8 @@ class G1RecoveryEnv(VecEnv):
             return
 
         self.scene.reset(env_ids)
+        reward_extras = self.reward_manager.reset(env_ids)
+        self.extras.setdefault("log", {}).update(reward_extras)
 
         sample = self.reset_state_loader.get_state_batch(state_ids)
         source_root_pos = sample["root_pos_w"]
@@ -536,7 +547,7 @@ class G1RecoveryEnv(VecEnv):
     def _read_self_collision_hits(self):
         """Return whether any robot-vs-robot force exceeds the V1 threshold."""
 
-        threshold = self.cfg.reward.self_collision_force_threshold
+        threshold = self.self_collision_force_threshold
         hit = torch.zeros(
             self.num_envs, dtype=torch.bool, device=self.device
         )
@@ -598,55 +609,26 @@ class G1RecoveryEnv(VecEnv):
         """Compute the pre-AMP Recovery task reward without dt scaling."""
 
         self._update_recovery_state_metrics()
+
+        # RewardManager normally applies dt scaling. Recovery V1 explicitly
+        # defines per-policy-step rewards, so 1.0 preserves the existing math.
+        self.task_reward = self.reward_manager.compute(1.0)
+
         reward_cfg = self.cfg.reward
-        h_default = self.robot.data.default_root_state[:, 2]
-        self.height_reward_raw = torch.exp(
-            -torch.square(h_default - self.pelvis_height)
-            / reward_cfg.height_std**2
-        )
         self.height_reward_scaled = (
-            reward_cfg.height_scale * self.height_reward_raw
+            reward_cfg.root_height_exp.weight * self.height_reward_raw
         )
-
-        # These four terms are all non-negative costs, matching the repository's
-        # existing mdp joint_acc_l2, joint_pos_limits, and action-rate math.
-        self.joint_acc_cost = torch.sum(
-            torch.square(self.robot.data.joint_acc), dim=-1
-        )
-        joint_pos = self.robot.data.joint_pos
-        soft_limits = self.robot.data.soft_joint_pos_limits
-        out_of_limits = -(
-            joint_pos - soft_limits[..., 0]
-        ).clip(max=0.0)
-        out_of_limits += (
-            joint_pos - soft_limits[..., 1]
-        ).clip(min=0.0)
-        self.joint_pos_limits_cost = torch.sum(out_of_limits, dim=-1)
-        self.action_rate_cost = torch.sum(
-            torch.square(self.action - self.last_action), dim=-1
-        )
-        self.self_collision_cost = self.self_collision_cost_from_hits(
-            self.self_collision_hit_substeps
-        )
-
         self.joint_acc_reward = (
-            reward_cfg.joint_acc_weight * self.joint_acc_cost
+            reward_cfg.dof_acc_l2.weight * self.joint_acc_cost
         )
         self.joint_pos_limits_reward = (
-            reward_cfg.joint_pos_limits_weight * self.joint_pos_limits_cost
+            reward_cfg.dof_pos_limits.weight * self.joint_pos_limits_cost
         )
         self.action_rate_reward = (
-            reward_cfg.action_rate_weight * self.action_rate_cost
+            reward_cfg.action_rate_l2.weight * self.action_rate_cost
         )
         self.self_collision_reward = (
-            reward_cfg.self_collision_weight * self.self_collision_cost
-        )
-        self.task_reward = (
-            self.height_reward_scaled
-            + self.joint_acc_reward
-            + self.joint_pos_limits_reward
-            + self.action_rate_reward
-            + self.self_collision_reward
+            reward_cfg.self_collisions.weight * self.self_collision_cost
         )
         if not torch.isfinite(self.task_reward).all():
             raise RuntimeError("G1 Recovery task reward contains NaN or Inf.")

@@ -103,6 +103,65 @@ def recovery_action_rate_l2(env: BaseEnv | G1ROUGHEnv | G1Env) -> torch.Tensor:
     return env.recovery_action_rate_value
 
 
+# Standalone G1 Recovery rewards.
+def recovery_root_height_exp(
+    env,
+    std: float,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Reward the pelvis for reaching its default standing height."""
+
+    asset: Articulation = env.scene[asset_cfg.name]
+    env.pelvis_height = asset.data.root_link_pos_w[:, 2]
+    default_height = asset.data.default_root_state[:, 2]
+    env.height_reward_raw = torch.exp(
+        -torch.square(default_height - env.pelvis_height) / std**2
+    )
+    return env.height_reward_raw
+
+
+def recovery_joint_acc_l2(
+    env,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Compute joint-acceleration cost and retain Recovery diagnostics."""
+
+    env.joint_acc_cost = joint_acc_l2(env, asset_cfg)
+    return env.joint_acc_cost
+
+
+def recovery_joint_pos_limits(
+    env,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Compute joint-limit cost and retain Recovery diagnostics."""
+
+    env.joint_pos_limits_cost = joint_pos_limits(env, asset_cfg)
+    return env.joint_pos_limits_cost
+
+
+def standalone_recovery_action_rate_l2(env) -> torch.Tensor:
+    """Penalize changes between consecutive executed Recovery actions."""
+
+    env.action_rate_cost = torch.sum(
+        torch.square(env.action - env.last_action), dim=-1
+    )
+    return env.action_rate_cost
+
+
+def recovery_self_collisions(env, force_threshold: float) -> torch.Tensor:
+    """Count physics substeps with a robot-versus-robot collision."""
+
+    if force_threshold != env.self_collision_force_threshold:
+        raise RuntimeError(
+            "Recovery self-collision reward and sensor thresholds must match."
+        )
+    env.self_collision_cost = env.self_collision_cost_from_hits(
+        env.self_collision_hit_substeps
+    )
+    return env.self_collision_cost
+
+
 def enter_recovery_event(env: BaseEnv | G1ROUGHEnv | G1Env) -> torch.Tensor:
     """Indicate a NORMAL -> Recovery transition for locomotion failure penalty."""
     return env.enter_recovery_buf.float()
