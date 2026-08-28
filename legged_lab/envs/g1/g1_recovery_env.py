@@ -606,29 +606,34 @@ class G1RecoveryEnv(VecEnv):
         self.ready_now = self.height_ok & self.upright_ok
 
     def compute_reward(self):
-        """Compute the pre-AMP Recovery task reward without dt scaling."""
+        """Compute the policy-dt-scaled pre-AMP Recovery task reward."""
 
         self._update_recovery_state_metrics()
-
-        # RewardManager normally applies dt scaling. Recovery V1 explicitly
-        # defines per-policy-step rewards, so 1.0 preserves the existing math.
-        self.task_reward = self.reward_manager.compute(1.0)
+        self.task_reward = self.reward_manager.compute(self.step_dt)
 
         reward_cfg = self.cfg.reward
         self.height_reward_scaled = (
-            reward_cfg.root_height_exp.weight * self.height_reward_raw
+            self.step_dt
+            * reward_cfg.root_height_exp.weight
+            * self.height_reward_raw
         )
         self.joint_acc_reward = (
-            reward_cfg.dof_acc_l2.weight * self.joint_acc_cost
+            self.step_dt * reward_cfg.dof_acc_l2.weight * self.joint_acc_cost
         )
         self.joint_pos_limits_reward = (
-            reward_cfg.dof_pos_limits.weight * self.joint_pos_limits_cost
+            self.step_dt
+            * reward_cfg.dof_pos_limits.weight
+            * self.joint_pos_limits_cost
         )
         self.action_rate_reward = (
-            reward_cfg.action_rate_l2.weight * self.action_rate_cost
+            self.step_dt
+            * reward_cfg.action_rate_l2.weight
+            * self.action_rate_cost
         )
         self.self_collision_reward = (
-            reward_cfg.self_collisions.weight * self.self_collision_cost
+            self.step_dt
+            * reward_cfg.self_collisions.weight
+            * self.self_collision_cost
         )
         if not torch.isfinite(self.task_reward).all():
             raise RuntimeError("G1 Recovery task reward contains NaN or Inf.")

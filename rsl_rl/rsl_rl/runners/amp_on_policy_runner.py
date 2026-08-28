@@ -86,6 +86,7 @@ class AmpOnPolicyRunner:
         # Keep the legacy TXT loader as the default while allowing standalone
         # Recovery to select its Stage-3 NPZ adapter through configuration.
         amp_data_class_name = train_cfg.get("amp_data_class_name", "AMPLoader")
+        self.amp_data_class_name = amp_data_class_name
         if amp_data_class_name == "AMPLoader":
             amp_data = AMPLoader(
                 device,
@@ -194,6 +195,37 @@ class AmpOnPolicyRunner:
         self.tot_time = 0
         self.current_learning_iteration = 0
         self.git_status_repos = [rsl_rl.__file__]
+
+    def _record_amp_reward_logs(
+        self,
+        infos,
+        task_rewards,
+        mixed_rewards,
+        discriminator_output,
+    ):
+        """Record unambiguous standalone Recovery AMP reward components."""
+
+        log = infos.setdefault("log", {})
+        # Compatibility key: this has historically represented the reward sent
+        # to PPO after Task/AMP mixing.
+        log["AMP/reward_mean"] = mixed_rewards.mean()
+        if self.amp_data_class_name != "RecoveryAMPData":
+            return
+
+        style_rewards = (
+            self.alg.discriminator.amp_reward_coef
+            * torch.clamp(
+                1.0 - 0.25 * torch.square(discriminator_output - 1.0),
+                min=0.0,
+            )
+        ).squeeze(-1)
+        log.update(
+            {
+                "AMP/style_reward_mean": style_rewards.mean(),
+                "AMP/task_reward_mean": task_rewards.mean(),
+                "AMP/mixed_reward_mean": mixed_rewards.mean(),
+            }
+        )
 
     def learn(self, num_learning_iterations: int, init_at_random_ep_len: bool = False):  # noqa: C901
         # initialize writer
@@ -321,13 +353,21 @@ class AmpOnPolicyRunner:
                             terminal_amp_states,
                         )
 
-                    rewards = self.alg.discriminator.predict_amp_reward(
-                        amp_obs,
-                        next_amp_obs_with_term,
+                    task_rewards = rewards
+                    rewards, discriminator_output = (
+                        self.alg.discriminator.predict_amp_reward(
+                            amp_obs,
+                            next_amp_obs_with_term,
+                            task_rewards,
+                            normalizer=self.alg.amp_normalizer,
+                        )
+                    )
+                    self._record_amp_reward_logs(
+                        infos,
+                        task_rewards,
                         rewards,
-                        normalizer=self.alg.amp_normalizer,
-                    )[0]
-                    infos.setdefault("log", {})["AMP/reward_mean"] = rewards.mean()
+                        discriminator_output,
+                    )
 
                     # Start the next rollout transition from the post-reset states.
                     amp_obs = next_amp_obs.clone()

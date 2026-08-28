@@ -44,7 +44,12 @@ NUM_ENVS = 4
 ACTOR_OBS_DIM = 300
 CRITIC_OBS_DIM = 312
 AMP_OBS_DIM = 195
+AMP_TRANSITION_DIM = 390
 EXPERT_TRANSITION_DT = 0.02
+AMP_REWARD_COEF = 0.1
+AMP_TASK_REWARD_LERP = 0.75
+AMP_HIDDEN_DIMS = [1024, 512, 256]
+AMP_PRELOAD_TRANSITIONS = 200000
 REQUIRED_LOG_KEYS = {
     "RecoveryReward/height_raw",
     "RecoveryReward/height_scaled",
@@ -95,6 +100,163 @@ def _check_step_output(step_output):
     ):
         raise AssertionError("Recovery logs contain NaN or Inf values.")
     return actor_obs, reward, done, infos
+
+
+def _assert_discriminator_architecture(discriminator):
+    if discriminator.input_dim != AMP_TRANSITION_DIM:
+        raise AssertionError(
+            "Recovery discriminator input must be 390D, got "
+            f"{discriminator.input_dim}."
+        )
+
+    trunk_modules = list(discriminator.trunk)
+    if len(trunk_modules) != 2 * len(AMP_HIDDEN_DIMS):
+        raise AssertionError(
+            "Recovery discriminator trunk must contain one Linear/ReLU pair "
+            "per hidden dimension."
+        )
+
+    expected_input_dim = AMP_TRANSITION_DIM
+    for layer_index, expected_output_dim in enumerate(AMP_HIDDEN_DIMS):
+        linear = trunk_modules[2 * layer_index]
+        activation = trunk_modules[2 * layer_index + 1]
+        if not isinstance(linear, torch.nn.Linear):
+            raise AssertionError(
+                "Recovery discriminator trunk contains a non-Linear layer."
+            )
+        if not isinstance(activation, torch.nn.ReLU):
+            raise AssertionError("Recovery discriminator must use ReLU activations.")
+        if (
+            linear.in_features != expected_input_dim
+            or linear.out_features != expected_output_dim
+        ):
+            raise AssertionError(
+                "Recovery discriminator Linear dimensions do not match "
+                f"{[AMP_TRANSITION_DIM, *AMP_HIDDEN_DIMS]}."
+            )
+        expected_input_dim = expected_output_dim
+
+    if (
+        discriminator.amp_linear.in_features != AMP_HIDDEN_DIMS[-1]
+        or discriminator.amp_linear.out_features != 1
+    ):
+        raise AssertionError(
+            "Recovery discriminator output head must be Linear(256, 1)."
+        )
+
+
+def _assert_amp_reward_math(runner):
+    """Verify pure style reward, Task/AMP mixing, range, and log semantics."""
+
+    discriminator = runner.alg.discriminator
+    saved_state = {
+        name: tensor.detach().clone()
+        for name, tensor in discriminator.state_dict().items()
+    }
+    saved_lerp = discriminator.task_reward_lerp
+    was_training = discriminator.training
+
+    state_dim = discriminator.input_dim // 2
+    state = torch.zeros((1, state_dim), device=runner.device)
+    next_state = torch.zeros_like(state)
+    discriminator_values = (-4.0, -1.0, 0.0, 1.0, 2.0, 3.0, 6.0)
+    style_rewards = []
+
+    try:
+        with torch.no_grad():
+            for parameter in discriminator.parameters():
+                parameter.zero_()
+
+        for index, discriminator_value in enumerate(discriminator_values):
+            with torch.no_grad():
+                discriminator.amp_linear.bias.fill_(discriminator_value)
+
+            task_reward = torch.tensor(
+                [-0.03 + 0.02 * index], device=runner.device
+            )
+            expected_discriminator_output = torch.tensor(
+                [[discriminator_value]], device=runner.device
+            )
+            expected_style_reward = AMP_REWARD_COEF * torch.clamp(
+                1.0
+                - 0.25
+                * torch.square(expected_discriminator_output.squeeze(-1) - 1.0),
+                min=0.0,
+            )
+
+            discriminator.task_reward_lerp = 0.0
+            actual_style_reward, actual_discriminator_output = (
+                discriminator.predict_amp_reward(
+                    state,
+                    next_state,
+                    task_reward,
+                    normalizer=None,
+                )
+            )
+            torch.testing.assert_close(
+                actual_discriminator_output,
+                expected_discriminator_output,
+                rtol=0.0,
+                atol=1.0e-7,
+            )
+            torch.testing.assert_close(
+                actual_style_reward,
+                expected_style_reward,
+                rtol=1.0e-6,
+                atol=1.0e-7,
+            )
+
+            discriminator.task_reward_lerp = AMP_TASK_REWARD_LERP
+            actual_mixed_reward, actual_discriminator_output = (
+                discriminator.predict_amp_reward(
+                    state,
+                    next_state,
+                    task_reward,
+                    normalizer=None,
+                )
+            )
+            expected_mixed_reward = (
+                (1.0 - AMP_TASK_REWARD_LERP) * expected_style_reward
+                + AMP_TASK_REWARD_LERP * task_reward
+            )
+            torch.testing.assert_close(
+                actual_mixed_reward,
+                expected_mixed_reward,
+                rtol=1.0e-6,
+                atol=1.0e-7,
+            )
+
+            log_infos = {}
+            runner._record_amp_reward_logs(
+                log_infos,
+                task_reward,
+                actual_mixed_reward,
+                actual_discriminator_output,
+            )
+            expected_logs = {
+                "AMP/style_reward_mean": expected_style_reward.mean(),
+                "AMP/task_reward_mean": task_reward.mean(),
+                "AMP/mixed_reward_mean": expected_mixed_reward.mean(),
+                "AMP/reward_mean": expected_mixed_reward.mean(),
+            }
+            for key, expected_value in expected_logs.items():
+                torch.testing.assert_close(
+                    log_infos["log"][key],
+                    expected_value,
+                    rtol=1.0e-6,
+                    atol=1.0e-7,
+                )
+            style_rewards.append(actual_style_reward)
+    finally:
+        discriminator.load_state_dict(saved_state)
+        discriminator.task_reward_lerp = saved_lerp
+        discriminator.train(was_training)
+
+    style_rewards = torch.cat(style_rewards)
+    if torch.any(style_rewards < 0.0) or torch.any(
+        style_rewards > AMP_REWARD_COEF
+    ):
+        raise AssertionError("Recovery AMP style reward escaped [0, 0.1].")
 
 
 def _write_default_standing(env):
@@ -378,6 +540,23 @@ def run_smoke_test():
         rtol=0.0,
         atol=0.0,
     )
+    torch.testing.assert_close(
+        torch.tensor(
+            env.step_dt * env.cfg.reward.root_height_exp.weight,
+            device=env.device,
+        ),
+        torch.tensor(0.07, device=env.device),
+        rtol=0.0,
+        atol=1.0e-8,
+    )
+    torch.testing.assert_close(
+        env.step_dt
+        * env.cfg.reward.self_collisions.weight
+        * synthetic_cost[-1],
+        torch.tensor(-0.008, device=env.device),
+        rtol=0.0,
+        atol=1.0e-8,
+    )
 
     # The exact default standing pose satisfies both gates.  Success occurs on
     # the 25th consecutive policy evaluation, never earlier.
@@ -465,18 +644,55 @@ def run_smoke_test():
     expected_height_raw = torch.exp(
         -torch.square(h_default - env.robot.data.root_link_pos_w[:, 2]) / 0.09
     )
+    expected_height_reward = env.step_dt * 3.5 * expected_height_raw
+    expected_joint_acc_reward = (
+        env.step_dt * -2.5e-7 * env.joint_acc_cost
+    )
+    expected_joint_pos_limits_reward = (
+        env.step_dt * -10.0 * env.joint_pos_limits_cost
+    )
+    expected_action_rate_reward = (
+        env.step_dt * -0.01 * env.action_rate_cost
+    )
+    expected_self_collision_reward = (
+        env.step_dt * -0.1 * env.self_collision_cost
+    )
     expected_task_reward = (
-        3.5 * expected_height_raw
-        - 2.5e-7 * env.joint_acc_cost
-        - 10.0 * env.joint_pos_limits_cost
-        - 0.01 * env.action_rate_cost
-        - 0.1 * env.self_collision_cost
+        expected_height_reward
+        + expected_joint_acc_reward
+        + expected_joint_pos_limits_reward
+        + expected_action_rate_reward
+        + expected_self_collision_reward
     )
     torch.testing.assert_close(
         env.height_reward_raw, expected_height_raw, rtol=1.0e-6, atol=1.0e-7
     )
+    contribution_pairs = (
+        (env.height_reward_scaled, expected_height_reward),
+        (env.joint_acc_reward, expected_joint_acc_reward),
+        (env.joint_pos_limits_reward, expected_joint_pos_limits_reward),
+        (env.action_rate_reward, expected_action_rate_reward),
+        (env.self_collision_reward, expected_self_collision_reward),
+    )
+    for actual_contribution, expected_contribution in contribution_pairs:
+        torch.testing.assert_close(
+            actual_contribution,
+            expected_contribution,
+            rtol=1.0e-6,
+            atol=1.0e-7,
+        )
     torch.testing.assert_close(
         env.task_reward, expected_task_reward, rtol=1.0e-6, atol=1.0e-7
+    )
+    torch.testing.assert_close(
+        env.task_reward,
+        env.height_reward_scaled
+        + env.joint_acc_reward
+        + env.joint_pos_limits_reward
+        + env.action_rate_reward
+        + env.self_collision_reward,
+        rtol=1.0e-6,
+        atol=1.0e-7,
     )
 
     one_actions = torch.ones_like(zero_actions)
@@ -549,6 +765,18 @@ def run_smoke_test():
     # Initialize the real AMP runner without a preload cache to verify that the
     # standalone config selects RecoveryAMPData and applies both reward knobs.
     agent_cfg = G1RecoveryAgentCfg()
+    if not agent_cfg.amp_preload_transitions:
+        raise AssertionError("Recovery AMP transition preload must remain enabled.")
+    if agent_cfg.amp_num_preload_transitions != AMP_PRELOAD_TRANSITIONS:
+        raise AssertionError("Recovery AMP preload count must remain 200000.")
+    if agent_cfg.amp_discr_hidden_dims != AMP_HIDDEN_DIMS:
+        raise AssertionError(
+            "Recovery discriminator hidden dimensions must remain "
+            f"{AMP_HIDDEN_DIMS}."
+        )
+    if agent_cfg.min_normalized_std != [0.05] * 23:
+        raise AssertionError("Recovery min_normalized_std must remain 23 x 0.05.")
+
     train_cfg = agent_cfg.to_dict()
     train_cfg["amp_preload_transitions"] = False
     train_cfg["amp_num_preload_transitions"] = 0
@@ -562,17 +790,20 @@ def run_smoke_test():
         raise AssertionError("Recovery runner did not select RecoveryAMPData.")
     if runner.alg.amp_data.transition_dt != EXPERT_TRANSITION_DT:
         raise AssertionError("Recovery runner AMP transition_dt is not 0.02 s.")
-    if runner.alg.discriminator.amp_reward_coef != 0.3:
-        raise AssertionError("Recovery amp_reward_coef is not 0.3.")
-    if runner.alg.discriminator.task_reward_lerp != 0.7:
-        raise AssertionError("Recovery amp_task_reward_lerp is not 0.7.")
+    if runner.alg.discriminator.amp_reward_coef != AMP_REWARD_COEF:
+        raise AssertionError("Recovery amp_reward_coef is not 0.1.")
+    if runner.alg.discriminator.task_reward_lerp != AMP_TASK_REWARD_LERP:
+        raise AssertionError("Recovery amp_task_reward_lerp is not 0.75.")
+    _assert_discriminator_architecture(runner.alg.discriminator)
+    _assert_amp_reward_math(runner)
 
     print(
         "G1 Recovery V1 smoke test passed: "
         "physics_dt=0.005, decimation=4, step_dt=0.02, "
         "episode=300 steps, success_hold=25 steps, "
-        "reward/success/timeout/self-collision/terminal-AMP checks passed, "
-        "actor=300D, critic=312D, AMP=195D.",
+        "dt-scaled task reward and AMP 0.1/0.75 mixing checks passed, "
+        "success/timeout/self-collision/terminal-AMP checks passed, "
+        "actor=300D, critic=312D, AMP=195D, transition=390D.",
         flush=True,
     )
 

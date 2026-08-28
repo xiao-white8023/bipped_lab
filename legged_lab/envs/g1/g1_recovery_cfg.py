@@ -256,8 +256,8 @@ class G1RecoveryAgentCfg(BaseAgentCfg):
     amp_preload_transitions = True
     amp_num_preload_transitions = 200000
 
-    amp_reward_coef = 0.3
-    amp_task_reward_lerp = 0.7
+    amp_reward_coef = 0.1
+    amp_task_reward_lerp = 0.75
     amp_discr_hidden_dims = [1024, 512, 256]
     min_normalized_std = [0.05] * 23
 
@@ -265,10 +265,10 @@ class G1RecoveryAgentCfg(BaseAgentCfg):
         super().__post_init__()
         if self.amp_transition_dt != 0.02:
             raise ValueError("Recovery formal AMP transition_dt must remain 0.02 s.")
-        if self.amp_reward_coef != 0.3:
-            raise ValueError("Recovery amp_reward_coef must remain 0.3.")
-        if self.amp_task_reward_lerp != 0.7:
-            raise ValueError("Recovery amp_task_reward_lerp must remain 0.7.")
+        if self.amp_reward_coef != 0.1:
+            raise ValueError("Recovery amp_reward_coef must remain 0.1.")
+        if self.amp_task_reward_lerp != 0.75:
+            raise ValueError("Recovery amp_task_reward_lerp must remain 0.75.")
 
 
 __all__ = [
