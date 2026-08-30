@@ -254,6 +254,31 @@ class G1RecoveryEnv(VecEnv):
         self.success_hold_counter = torch.zeros(
             self.num_envs, dtype=torch.long, device=self.device
         )
+
+        # Lifetime episode statistics for this environment instance. Individual
+        # dataset resets must not clear these cumulative counters.
+        self.recovery_episode_success_total = torch.zeros(
+            (), dtype=torch.long, device=self.device
+        )
+        self.recovery_episode_timeout_total = torch.zeros_like(
+            self.recovery_episode_success_total
+        )
+        self.recovery_episode_completed_total = torch.zeros_like(
+            self.recovery_episode_success_total
+        )
+        self.recovery_episode_duration_sum_s = torch.zeros(
+            (), dtype=torch.float, device=self.device
+        )
+        self.recovery_episode_success_this_step = torch.zeros_like(
+            self.recovery_episode_success_total
+        )
+        self.recovery_episode_timeout_this_step = torch.zeros_like(
+            self.recovery_episode_success_total
+        )
+        self.recovery_episode_completed_this_step = torch.zeros_like(
+            self.recovery_episode_success_total
+        )
+
         self.reset_env_ids = torch.empty(0, dtype=torch.long, device=self.device)
         self.pre_reset_amp_obs = torch.empty(
             self.num_envs,
@@ -639,8 +664,70 @@ class G1RecoveryEnv(VecEnv):
             raise RuntimeError("G1 Recovery task reward contains NaN or Inf.")
         return self.task_reward
 
-    def _build_step_log(self):
+    def _update_recovery_episode_statistics(self):
+        """Accumulate completed-episode outcomes before done environments reset."""
+
+        success_this_step = self.success_buf.sum()
+        timeout_this_step = self.time_out_buf.sum()
+        completed_this_step = success_this_step + timeout_this_step
+
+        self.recovery_episode_success_this_step.copy_(success_this_step)
+        self.recovery_episode_timeout_this_step.copy_(timeout_this_step)
+        self.recovery_episode_completed_this_step.copy_(completed_this_step)
+
+        self.recovery_episode_success_total.add_(success_this_step)
+        self.recovery_episode_timeout_total.add_(timeout_this_step)
+        self.recovery_episode_completed_total.add_(completed_this_step)
+
+        ended_mask = self.success_buf | self.time_out_buf
+        duration_sum_this_step = (
+            self.episode_length_buf[ended_mask].float() * self.step_dt
+        ).sum()
+        self.recovery_episode_duration_sum_s.add_(duration_sum_this_step)
+
+    def _build_recovery_episode_log(self):
+        """Build lifetime completed-episode statistics for this env instance."""
+
+        completed_denominator = (
+            self.recovery_episode_completed_total.float().clamp_min(1.0)
+        )
+        success_rate = (
+            self.recovery_episode_success_total.float()
+            / completed_denominator
+        )
+        timeout_rate = (
+            self.recovery_episode_timeout_total.float()
+            / completed_denominator
+        )
+        mean_duration_s = (
+            self.recovery_episode_duration_sum_s / completed_denominator
+        )
         return {
+            "RecoveryEpisode/completed_total": (
+                self.recovery_episode_completed_total.clone()
+            ),
+            "RecoveryEpisode/success_total": (
+                self.recovery_episode_success_total.clone()
+            ),
+            "RecoveryEpisode/timeout_total": (
+                self.recovery_episode_timeout_total.clone()
+            ),
+            "RecoveryEpisode/success_rate": success_rate,
+            "RecoveryEpisode/timeout_rate": timeout_rate,
+            "RecoveryEpisode/mean_duration_s": mean_duration_s,
+            "RecoveryEpisode/completed_this_step": (
+                self.recovery_episode_completed_this_step.clone()
+            ),
+            "RecoveryEpisode/success_this_step": (
+                self.recovery_episode_success_this_step.clone()
+            ),
+            "RecoveryEpisode/timeout_this_step": (
+                self.recovery_episode_timeout_this_step.clone()
+            ),
+        }
+
+    def _build_step_log(self):
+        log = {
             "RecoveryReward/height_raw": self.height_reward_raw.mean(),
             "RecoveryReward/height_scaled": self.height_reward_scaled.mean(),
             "RecoveryReward/joint_acc": self.joint_acc_reward.mean(),
@@ -652,7 +739,10 @@ class G1RecoveryEnv(VecEnv):
             "Recovery/upright_ok_ratio": self.upright_ok.float().mean(),
             "Recovery/ready_now_ratio": self.ready_now.float().mean(),
             "Recovery/success_count": self.success_buf.float().sum(),
+            # Backward-compatible step-level event ratio; this is not an
+            # episode-level Recovery success rate.
             "Recovery/success_ratio": self.success_buf.float().mean(),
+            "Recovery/step_success_event_ratio": self.success_buf.float().mean(),
             "Recovery/timeout_count": self.time_out_buf.float().sum(),
             "Recovery/success_hold_counter_mean": self.success_hold_counter.float().mean(),
             "Recovery/pelvis_height_mean": self.pelvis_height.mean(),
@@ -662,6 +752,8 @@ class G1RecoveryEnv(VecEnv):
                 self.self_collision_cost > 0.0
             ).float().mean(),
         }
+        log.update(self._build_recovery_episode_log())
+        return log
 
     def step(self, actions: torch.Tensor):
         expected_shape = (self.num_envs, self.num_actions)
@@ -699,6 +791,7 @@ class G1RecoveryEnv(VecEnv):
         self.episode_length_buf += 1
         reward_buf = self.compute_reward()
         self.reset_buf, self.time_out_buf = self.check_reset()
+        self._update_recovery_episode_statistics()
         self.last_action.copy_(self.action)
 
         self.extras = {

@@ -89,7 +89,35 @@ def train():
         log_dir += f"_{agent_cfg.run_name}"
     log_dir = os.path.join(log_root_path, log_dir)
     runner_class: FilmOnPolicyRunner|OnPolicyRunner | ConstrainedOnPolicyRunner | AmpOnPolicyRunner | RENetAmpOnPolicyRunner | MoeAmpOnPolicyRunner | DWAQAmpOnPolicyRunner | MoeOnPolicyRunner|G1OnPolicyRunner|G1StudentOnPolicyRunner = eval(agent_cfg.runner_class_name)
-    runner = runner_class(env, agent_cfg.to_dict(), log_dir=log_dir, device=agent_cfg.device)
+    train_cfg = agent_cfg.to_dict()
+    if env_class_name == "g1_recovery":
+        required_recovery_amp_fields = (
+            "amp_data_class_name",
+            "amp_motion_dir",
+            "amp_transition_dt",
+            "amp_expected_fps",
+            "amp_preload_transitions",
+            "amp_num_preload_transitions",
+            "amp_reward_coef",
+            "amp_task_reward_lerp",
+            "amp_discr_hidden_dims",
+            "min_normalized_std",
+        )
+        missing = [
+            key for key in required_recovery_amp_fields if key not in train_cfg
+        ]
+        if missing:
+            raise RuntimeError(
+                "g1_recovery agent config is missing required Recovery AMP "
+                f"fields after to_dict(): {missing}."
+            )
+
+    runner = runner_class(
+        env,
+        train_cfg,
+        log_dir=log_dir,
+        device=agent_cfg.device,
+    )
 
     if agent_cfg.resume:
         # get path to previous checkpoint

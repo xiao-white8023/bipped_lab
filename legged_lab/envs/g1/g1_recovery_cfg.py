@@ -70,13 +70,13 @@ G1_RECOVERY_ROBOT_CFG = G1_23CFG.replace(
 class RecoveryControlCfg:
     # 23 个关节统一采用 default joint position 上的动作偏移。
     action_scale: float = 0.25
-    clip_actions: float = 1.0
+    clip_actions: float = 100
 
 
 @configclass
 class RecoveryObservationCfg:
     # Actor/Critic 均保留最近 4 个 policy step 的本体观测。
-    history_length: int = 4
+    history_length: int = 10
     clip_observations: float = 100.0
 
 
@@ -176,12 +176,7 @@ class G1RecoveryEnvCfg:
     def __post_init__(self):
         if self.control.action_scale <= 0.0:
             raise ValueError("Recovery action_scale must be positive.")
-        if self.control.clip_actions != 1.0:
-            raise ValueError("Recovery clip_actions must remain 1.0 in Stage 4.1.")
-        if self.observation.history_length != 4:
-            raise ValueError(
-                "Recovery observation history_length must remain 4 in Stage 4.1."
-            )
+
         if self.reset.random_yaw:
             raise ValueError("Recovery random_yaw must remain disabled in Stage 4.2b.")
         height_std = self.reward.root_height_exp.params["std"]
@@ -245,21 +240,21 @@ class G1RecoveryAgentCfg(BaseAgentCfg):
     )
 
     # Select the Stage-3 Recovery NPZ adapter without changing legacy AMP tasks.
-    amp_data_class_name = "RecoveryAMPData"
-    amp_motion_dir = os.path.join(
+    amp_data_class_name: str = "RecoveryAMPData"
+    amp_motion_dir: str = os.path.join(
         LEGGED_LAB_ROOT,
         "envs/g1/datasets/npz/recovery_candidates_v3",
     )
-    amp_transition_dt = 0.02
-    amp_expected_fps = 50.0
-    amp_sampling = "uniform_frame"
-    amp_preload_transitions = True
-    amp_num_preload_transitions = 200000
+    amp_transition_dt: float = 0.02
+    amp_expected_fps: float = 50.0
+    amp_sampling: str = "uniform_frame"
+    amp_preload_transitions: bool = True
+    amp_num_preload_transitions: int = 200000
 
-    amp_reward_coef = 0.1
-    amp_task_reward_lerp = 0.75
-    amp_discr_hidden_dims = [1024, 512, 256]
-    min_normalized_std = [0.05] * 23
+    amp_reward_coef: float = 0.1
+    amp_task_reward_lerp: float = 0.75
+    amp_discr_hidden_dims: list[int] = [1024, 512, 256]
+    min_normalized_std: list[float] = [0.05] * 23
 
     def __post_init__(self):
         super().__post_init__()

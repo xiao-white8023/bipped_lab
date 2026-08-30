@@ -63,12 +63,22 @@ REQUIRED_LOG_KEYS = {
     "Recovery/ready_now_ratio",
     "Recovery/success_count",
     "Recovery/success_ratio",
+    "Recovery/step_success_event_ratio",
     "Recovery/timeout_count",
     "Recovery/success_hold_counter_mean",
     "Recovery/pelvis_height_mean",
     "Recovery/torso_up_z_mean",
     "RecoverySelfCollision/cost_mean",
     "RecoverySelfCollision/hit_env_ratio",
+    "RecoveryEpisode/completed_total",
+    "RecoveryEpisode/success_total",
+    "RecoveryEpisode/timeout_total",
+    "RecoveryEpisode/success_rate",
+    "RecoveryEpisode/timeout_rate",
+    "RecoveryEpisode/mean_duration_s",
+    "RecoveryEpisode/completed_this_step",
+    "RecoveryEpisode/success_this_step",
+    "RecoveryEpisode/timeout_this_step",
 }
 
 
@@ -99,7 +109,91 @@ def _check_step_output(step_output):
         for value in infos["log"].values()
     ):
         raise AssertionError("Recovery logs contain NaN or Inf values.")
+    torch.testing.assert_close(
+        infos["log"]["Recovery/success_ratio"],
+        infos["log"]["Recovery/step_success_event_ratio"],
+        rtol=0.0,
+        atol=0.0,
+    )
     return actor_obs, reward, done, infos
+
+
+def _assert_recovery_episode_statistics(
+    env,
+    success_total,
+    timeout_total,
+    duration_sum_s,
+    success_this_step,
+    timeout_this_step,
+    step_log=None,
+):
+    completed_total = success_total + timeout_total
+    completed_this_step = success_this_step + timeout_this_step
+
+    scalar_expectations = (
+        (env.recovery_episode_success_total, success_total),
+        (env.recovery_episode_timeout_total, timeout_total),
+        (env.recovery_episode_completed_total, completed_total),
+        (env.recovery_episode_duration_sum_s, duration_sum_s),
+        (env.recovery_episode_success_this_step, success_this_step),
+        (env.recovery_episode_timeout_this_step, timeout_this_step),
+        (env.recovery_episode_completed_this_step, completed_this_step),
+    )
+    for actual, expected in scalar_expectations:
+        torch.testing.assert_close(
+            actual,
+            torch.tensor(expected, dtype=actual.dtype, device=actual.device),
+            rtol=0.0,
+            atol=1.0e-6,
+        )
+
+    episode_log = env._build_recovery_episode_log()
+    expected_success_rate = (
+        success_total / completed_total if completed_total > 0 else 0.0
+    )
+    expected_timeout_rate = (
+        timeout_total / completed_total if completed_total > 0 else 0.0
+    )
+    expected_mean_duration_s = (
+        duration_sum_s / completed_total if completed_total > 0 else 0.0
+    )
+    log_expectations = {
+        "RecoveryEpisode/completed_total": completed_total,
+        "RecoveryEpisode/success_total": success_total,
+        "RecoveryEpisode/timeout_total": timeout_total,
+        "RecoveryEpisode/success_rate": expected_success_rate,
+        "RecoveryEpisode/timeout_rate": expected_timeout_rate,
+        "RecoveryEpisode/mean_duration_s": expected_mean_duration_s,
+        "RecoveryEpisode/completed_this_step": completed_this_step,
+        "RecoveryEpisode/success_this_step": success_this_step,
+        "RecoveryEpisode/timeout_this_step": timeout_this_step,
+    }
+    for key, expected in log_expectations.items():
+        actual = episode_log[key]
+        torch.testing.assert_close(
+            actual,
+            torch.tensor(expected, dtype=actual.dtype, device=actual.device),
+            rtol=0.0,
+            atol=1.0e-6,
+        )
+        if step_log is not None:
+            torch.testing.assert_close(
+                step_log[key], actual, rtol=0.0, atol=0.0
+            )
+
+    if completed_total > 0:
+        torch.testing.assert_close(
+            episode_log["RecoveryEpisode/success_rate"]
+            + episode_log["RecoveryEpisode/timeout_rate"],
+            torch.tensor(1.0, device=env.device),
+            rtol=0.0,
+            atol=1.0e-6,
+        )
+    if not all(
+        torch.isfinite(torch.as_tensor(value)).all()
+        for value in episode_log.values()
+    ):
+        raise AssertionError("Recovery episode statistics contain NaN or Inf.")
 
 
 def _assert_discriminator_architecture(discriminator):
@@ -443,6 +537,14 @@ def run_smoke_test():
             f"got {tuple(env.last_reset_state_ids.shape)}."
         )
     _assert_dataset_reset(env)
+    _assert_recovery_episode_statistics(
+        env,
+        success_total=0,
+        timeout_total=0,
+        duration_sum_s=0.0,
+        success_this_step=0,
+        timeout_this_step=0,
+    )
 
     deterministic_state_ids = torch.arange(
         NUM_ENVS, dtype=torch.long, device=env.device
@@ -593,6 +695,16 @@ def run_smoke_test():
         raise AssertionError("Success infos did not mark terminated=True.")
     if torch.any(success_infos["time_outs"]):
         raise AssertionError("Success was incorrectly marked as timeout truncation.")
+    success_duration_sum_s = NUM_ENVS * env.step_dt
+    _assert_recovery_episode_statistics(
+        env,
+        success_total=NUM_ENVS,
+        timeout_total=0,
+        duration_sum_s=success_duration_sum_s,
+        success_this_step=NUM_ENVS,
+        timeout_this_step=0,
+        step_log=success_infos["log"],
+    )
     torch.testing.assert_close(
         success_infos["terminal_amp_states"],
         env.pre_reset_amp_obs[env.reset_env_ids],
@@ -720,6 +832,7 @@ def run_smoke_test():
     amp_obs = env.get_amp_obs_for_expert_trans()
     _assert_finite_shape(amp_obs, (NUM_ENVS, AMP_OBS_DIM), "random-step amp_obs")
 
+    duration_sum_before_timeout = env.recovery_episode_duration_sum_s.clone()
     env.episode_length_buf.fill_(env.max_episode_length - 1)
     env.success_hold_counter.zero_()
     actor_obs, _, done, infos = _check_step_output(env.step(one_actions))
@@ -735,6 +848,22 @@ def run_smoke_test():
         raise AssertionError("Horizon exits must be timeout truncations.")
     if torch.any(infos["terminated"]):
         raise AssertionError("Timeout truncation was incorrectly marked terminated.")
+    timeout_duration_sum_s = NUM_ENVS * env.max_episode_length * env.step_dt
+    torch.testing.assert_close(
+        env.recovery_episode_duration_sum_s - duration_sum_before_timeout,
+        torch.tensor(timeout_duration_sum_s, device=env.device),
+        rtol=0.0,
+        atol=1.0e-6,
+    )
+    _assert_recovery_episode_statistics(
+        env,
+        success_total=NUM_ENVS,
+        timeout_total=NUM_ENVS,
+        duration_sum_s=success_duration_sum_s + timeout_duration_sum_s,
+        success_this_step=0,
+        timeout_this_step=NUM_ENVS,
+        step_log=infos["log"],
+    )
     terminal_amp_states = infos["terminal_amp_states"]
     _assert_finite_shape(
         terminal_amp_states,
@@ -778,6 +907,50 @@ def run_smoke_test():
         raise AssertionError("Recovery min_normalized_std must remain 23 x 0.05.")
 
     train_cfg = agent_cfg.to_dict()
+    required_serialized_fields = {
+        "amp_data_class_name",
+        "amp_motion_dir",
+        "amp_transition_dt",
+        "amp_expected_fps",
+        "amp_sampling",
+        "amp_preload_transitions",
+        "amp_num_preload_transitions",
+        "amp_reward_coef",
+        "amp_task_reward_lerp",
+        "amp_discr_hidden_dims",
+        "min_normalized_std",
+    }
+    missing_serialized_fields = required_serialized_fields - set(train_cfg)
+    if missing_serialized_fields:
+        raise AssertionError(
+            "G1RecoveryAgentCfg.to_dict() omitted Recovery AMP fields: "
+            f"{sorted(missing_serialized_fields)}."
+        )
+    if train_cfg["amp_data_class_name"] != "RecoveryAMPData":
+        raise AssertionError("Serialized Recovery AMP data class is incorrect.")
+    if not train_cfg["amp_motion_dir"].endswith(
+        "envs/g1/datasets/npz/recovery_candidates_v3"
+    ):
+        raise AssertionError("Serialized Recovery AMP motion directory is incorrect.")
+    expected_serialized_values = {
+        "amp_transition_dt": EXPERT_TRANSITION_DT,
+        "amp_expected_fps": 50.0,
+        "amp_sampling": "uniform_frame",
+        "amp_num_preload_transitions": AMP_PRELOAD_TRANSITIONS,
+        "amp_reward_coef": AMP_REWARD_COEF,
+        "amp_task_reward_lerp": AMP_TASK_REWARD_LERP,
+        "amp_discr_hidden_dims": AMP_HIDDEN_DIMS,
+        "min_normalized_std": [0.05] * 23,
+    }
+    for key, expected_value in expected_serialized_values.items():
+        if train_cfg[key] != expected_value:
+            raise AssertionError(
+                f"Serialized Recovery AMP field {key!r} is incorrect: "
+                f"{train_cfg[key]!r}."
+            )
+    if train_cfg["amp_preload_transitions"] is not True:
+        raise AssertionError("Serialized Recovery AMP preload flag must be True.")
+
     train_cfg["amp_preload_transitions"] = False
     train_cfg["amp_num_preload_transitions"] = 0
     runner = AmpOnPolicyRunner(
@@ -786,6 +959,8 @@ def run_smoke_test():
         log_dir=None,
         device=env.device,
     )
+    if runner.amp_data_class_name != "RecoveryAMPData":
+        raise AssertionError("Recovery runner selected the wrong AMP data branch.")
     if not isinstance(runner.alg.amp_data, RecoveryAMPData):
         raise AssertionError("Recovery runner did not select RecoveryAMPData.")
     if runner.alg.amp_data.transition_dt != EXPERT_TRANSITION_DT:
@@ -802,6 +977,7 @@ def run_smoke_test():
         "physics_dt=0.005, decimation=4, step_dt=0.02, "
         "episode=300 steps, success_hold=25 steps, "
         "dt-scaled task reward and AMP 0.1/0.75 mixing checks passed, "
+        "lifetime episode success/timeout/duration checks passed, "
         "success/timeout/self-collision/terminal-AMP checks passed, "
         "actor=300D, critic=312D, AMP=195D, transition=390D.",
         flush=True,

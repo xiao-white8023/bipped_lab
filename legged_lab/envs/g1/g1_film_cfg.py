@@ -82,7 +82,7 @@ class Reward:
 
     # 爬楼梯不需要对z轴的速度进行惩罚
     lin_vel_z_l2 = RewTerm(func=mdp.lin_vel_z_l2, weight=-0.25)
-    
+
     ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.075) # -0.05
 
     energy = RewTerm(func=mdp.energy, weight=-1e-3)
