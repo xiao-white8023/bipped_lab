@@ -49,7 +49,6 @@ from legged_lab.terrains import GRAVEL_TERRAINS_CFG, ROUGH_TERRAINS_CFG, Flat_te
 from legged_lab.assets.g1.g1_29 import G1_29CFG,G1_29DOF_LINKS,G1_23CFG,G1_23DOF_LINKS
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCameraCfg
-from legged_lab.utils.camera_noise.camera_noise_cfg import DistanceDependentGaussianNoiseCfg
 import os
 import legged_lab
 LEGGED_LAB_ROOT = os.path.dirname(legged_lab.__file__)
@@ -74,39 +73,8 @@ class RENetTrainCfg:
     mask_mode: str = "alternate"
     op_probability: float = 0.5
     alternate_interval_iters: int = 20
-    force_vp_terrain_names: list[str] = ["star_terrain"]
+    force_vp_terrain_names: list[str] = ["gap", "high_platform", "hf_stepping_stones", "star_terrain"]
     force_vp_terrain_level: int = -1
-
-
-@configclass
-class RecoveryStateMachineCfg:
-    """V1 shared-Actor Recovery state machine."""
-
-    enable: bool = True
-    max_duration_s: float = 6.0
-    absolute_episode_timeout_s: float = 27.0
-    upright_threshold: float = 0.93
-    torso_force_threshold: float = 1.0
-    foot_force_threshold: float = 5.0
-    success_height_ratio: float = 0.80
-    enable_curriculum: bool = True
-    task_height_ratio: float = 0.80
-    task_height_margin_ratio: float = 0.40
-    curriculum_height_ratio: float = 0.70
-    curriculum_success_ratio: float = 0.60
-    curriculum_min_attempts: int = 1024
-    initial_assist_force: float = 200.0
-    assist_force_step: float = 20.0
-    min_assist_force: float = 0.0
-    initial_beta: float = 1.0
-    beta_step: float = 0.02
-    min_beta: float = 0.25
-    force_upright_gate: float = 0.8
-    dedicated_training_enable: bool = True
-    dedicated_training_ratio: float = 0.20
-    dedicated_stratify_by_terrain_type: bool = True
-    dedicated_inherit_natural_terrain_level: bool = True
-
 
 @configclass
 class Reward:
@@ -120,7 +88,7 @@ class Reward:
 
     dof_acc_l2 = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
 
-    action_rate_l2 = RewTerm(func=mdp.locomotion_action_rate_l2, weight=-0.01)
+    action_rate_l2 = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
 
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
@@ -161,11 +129,11 @@ class Reward:
         },
     )
 
-    feet_stumble = RewTerm(
-        func=mdp.feet_stumble,
-        weight=-2.0,
-        params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=[".*ankle_roll.*"])},
-    )
+    # feet_stumble = RewTerm(
+    #     func=mdp.feet_stumble,
+    #     weight=-2.0,
+    #     params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=[".*ankle_roll.*"])},
+    # )
 
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
 
@@ -206,35 +174,50 @@ class Reward:
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_pitch.*", ".*_knee.*"])},
     )
 
-    # termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
-
-    # Entering Recovery is a locomotion failure/value boundary, but not an
-    # environment reset. Keep its penalty in the same RewardManager pipeline
-    # (including the manager's dt scaling) as the original termination term.
-    enter_recovery_penalty = RewTerm(func=mdp.enter_recovery_event, weight=-200.0)
+    termination_penalty = RewTerm(func=mdp.is_terminated, weight=-200.0)
 
     alive = RewTerm(func=mdp.alive, weight=0.15)
 
     feet_air_time = RewTerm(
-        func=mdp.locomotion_feet_air_time_positive_biped,
-        weight=0.25,
-        params={"threshold": 0.4},
+        func=mdp.feet_air_time_positive_biped,
+        weight=0.15,
+        params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=".*ankle_roll.*"), "threshold": 0.4},
     )
 
+    # gait_phase_contact = RewTerm(
+    #     func=mdp.new_gait_phase_contact,
+    #     weight=0.2,
+    #     params={
+    #         "sensor_cfg": SceneEntityCfg(
+    #             "contact_sensor",
+    #             body_names=[
+    #                 "left_ankle_roll.*",
+    #                 "right_ankle_roll.*",
+    #             ],
+    #         ),
+    #         "stance_threshold": 0.55,
+    #         "command_threshold": 0.1,
+    #     },
+    # )
 
-@configclass
-class RecoveryRegReward:
-    """The five fixed V1 Recovery regularizers, evaluated by a separate manager."""
-
-    joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
-    action_rate = RewTerm(func=mdp.recovery_action_rate_l2, weight=-0.01)
-    torque = RewTerm(func=mdp.joint_torques_l2, weight=-2.5e-6)
-    joint_pos_limit = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
-    joint_vel_limit = RewTerm(
-        func=mdp.joint_vel_limits_penalty,
-        weight=-1.0,
-        params={"soft_ratio": 0.9},
-    )
+    # stair_edge_penalty_L = RewTerm(
+    #     func=mdp.single_foot_contact_area_penalty,
+    #     weight=-0.1,  # 权重可以根据训练效果调整
+    #     params={
+    #         "contact_sensor_cfg": SceneEntityCfg("contact_sensor", body_names="left_ankle_roll_link"),
+    #         "ray_sensor_cfg": SceneEntityCfg("left_feet_ray_caster"), # 在 SceneCfg 中定义的左脚射线
+    #         "threshold": 0.04
+    #     }
+    # )
+    # stair_edge_penalty_R = RewTerm(
+    #     func=mdp.single_foot_contact_area_penalty,
+    #     weight=-0.1,
+    #     params={
+    #         "contact_sensor_cfg": SceneEntityCfg("contact_sensor", body_names="right_ankle_roll_link"),
+    #         "ray_sensor_cfg": SceneEntityCfg("right_feet_ray_caster"), # 在 SceneCfg 中定义的右脚射线
+    #         "threshold": 0.04
+    #     }
+    # )
 
 @configclass
 class G1RENETENVCFG:
@@ -257,7 +240,7 @@ class G1RENETENVCFG:
             drift_range=(0.0, 0.0),
         ),
         camera=CameraCfg(
-            add_camera_noise=True,
+            add_camera_noise=False,
             add_camera=True,
             camera = GroupedRayCasterCameraCfg(
                 prim_path="/World/envs/env_.*/Robot/torso_link", 
@@ -325,27 +308,9 @@ class G1RENETENVCFG:
 
     reward=Reward()
 
-    recovery_reg_reward=RecoveryRegReward()
-
     gait=GaitCfg()
 
     renet=RENetTrainCfg()
-
-    recovery=RecoveryStateMachineCfg()
-
-    # These 59-D files contain physical simulator reset states only. Recovery
-    # AMP expert files remain the separate 53-D discriminator-only interface.
-    recovery_reset_motion_files = [
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_recovery_reset/"
-        f"fallAndGetUp2_subject2_reset_crop_{crop_id:02d}.txt"
-        for crop_id in range(1, 9)
-    ]
-
-    depth_gaussian_noise: DistanceDependentGaussianNoiseCfg = DistanceDependentGaussianNoiseCfg(
-        near_std=0.0,
-        far_std=0.10,
-        distance_exponent=2.0,
-    )
 
     robot: RobotCfg = RobotCfg(
         actor_obs_history_length=10,
@@ -382,7 +347,7 @@ class G1RENETENVCFG:
         rel_heading_envs=1.0,
         heading_command=True,
         heading_control_stiffness=0.5,
-        debug_vis=False,
+        debug_vis=True,
         ranges=CommandRangesCfg(
             lin_vel_x=(-0.6, 1.0), lin_vel_y=(-0.5,0.5), ang_vel_z=(-1.57, 1.57), heading=(-math.pi, math.pi)
         ),
@@ -486,13 +451,6 @@ class CnnMlpCfg:
 
 @configclass
 class CustomRslRlPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
-    enable_recovery_learning: bool = True
-    recovery_critic_hidden_dims: list[int] = [512, 256]
-    recovery_task_adv_weight: float = 2.5
-    recovery_amp_adv_weight: float = 1.0
-    recovery_reg_adv_weight: float = 0.1
-    recovery_ppo_min_rollout_samples: int = 2048
-    recovery_drec_min_replay_samples: int = 2048
     vel_estimation_warmup_iters:int=0
     vel_estimation_coef: float = 1.0
     terrain_recon_coef: float = 0.5
@@ -523,7 +481,6 @@ class CustomRslRlPpoActorCriticCfg(RslRlPpoActorCriticCfg):
     CnnMlp: CnnMlpCfg = None  # 告诉配置系统，我们多加了一个 CnnMlp 的参数
     single_proprio_dim: int = 78
     estimator_mask_dim: int = 1
-    actor_control_dim: int = 2
     estimator_latent_dim: int = 64
     proprio_embed_dim: int = 64
     proprio_embed_dims: list[int] = [256, 128]
@@ -564,7 +521,6 @@ class G1RENETAGENTCFG:
         activation="elu",
         single_proprio_dim=78,
         estimator_mask_dim=1,
-        actor_control_dim=2,
         estimator_latent_dim=64,
         proprio_embed_dim=64,
         proprio_embed_dims=[256, 128],
@@ -637,13 +593,6 @@ class G1RENETAGENTCFG:
         feet_height_warmup_iters=500,
         feet_height_dim=2,
         feet_height_in_critic_offset=83,
-        enable_recovery_learning=True,
-        recovery_critic_hidden_dims=[512, 256],
-        recovery_task_adv_weight=2.5,
-        recovery_amp_adv_weight=1.0,
-        recovery_reg_adv_weight=0.1,
-        recovery_ppo_min_rollout_samples=2048,
-        recovery_drec_min_replay_samples=2048,
         terrain_recon_target_clip=1,
         terrain_recon_warmup_iters=500,
         vel_estimation_warmup_iters=0,
@@ -662,41 +611,22 @@ class G1RENETAGENTCFG:
     load_checkpoint = "model_.*.pt"
 
     # amp parameter
-    amp_reward_coef = 0.3
-    # 风格奖励系数 动作像专家数据。
-    amp_motion_files = [
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
+    amp_reward_coef = 0.4  # 风格奖励系数 动作像专家数据。
+    amp_motion_files = [    f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/stand_to_walk.txt",
+
         f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/walk_turn_around.txt",
+
         f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/walk_turn_left.txt",
+
         f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
         "motion_amp_expert_no_ankle/walk_turn_right.txt",]
     amp_num_preload_transitions = 200000 
     '''
     Taskfinal​=Taskraw​×[0.7+(1−0.7)×D] 判别器输入的就是0或1 如果任务奖励100分 完成的很好 但是不像专家数据 判别器打0分 则作中的任务奖励只有70分 
     '''
-    amp_task_reward_lerp = 0.7  # 这是一个惩罚机制。它把“任务奖励”和“动作质量”挂钩了 
+    amp_task_reward_lerp = 0.6  # 这是一个惩罚机制。它把“任务奖励”和“动作质量”挂钩了
     amp_discr_hidden_dims = [1024, 512, 256]
-
-    # Recovery expert frames are discriminator-only data. They must never be
-    # used as environment reset states. These files are 53D: the unchanged
-    # 50D AMP state followed by IsaacLab projected_gravity_b.
-    recovery_amp_motion_files = [
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_recovery_no_ankle/"
-        "fallAndGetUp2_subject2_crop_01.txt",
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_recovery_no_ankle/"
-        "fallAndGetUp2_subject2_crop_02.txt",
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_recovery_no_ankle/"
-        "fallAndGetUp2_subject2_crop_03.txt",
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_recovery_no_ankle/"
-        "fallAndGetUp2_subject2_crop_04.txt",
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_amp_expert_recovery_no_ankle/"
-        "fallAndGetUp2_subject2_crop_05.txt",
-    ]
-    recovery_amp_num_preload_transitions = 200000
-    recovery_amp_reward_coef = 1.0
-    recovery_amp_task_reward_lerp = 0.0
-    recovery_amp_discr_hidden_dims = [1024, 512, 256]
     min_normalized_std = [0.05] * 23

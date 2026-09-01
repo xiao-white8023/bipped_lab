@@ -30,6 +30,7 @@ simulation_app = app_launcher.app
 
 
 import torch
+from isaaclab.utils.math import quat_apply_inverse
 
 from legged_lab.envs.g1.g1_recovery_cfg import (
     G1RecoveryAgentCfg,
@@ -38,11 +39,12 @@ from legged_lab.envs.g1.g1_recovery_cfg import (
 from legged_lab.envs.g1.g1_recovery_env import G1RecoveryEnv
 from rsl_rl.runners import AmpOnPolicyRunner
 from rsl_rl.utils import RecoveryAMPData
+from rsl_rl.utils.recovery_amp_features import BODY_ORI_6D_SLICE, BODY_POS_SLICE
 
 
 NUM_ENVS = 4
-ACTOR_OBS_DIM = 300
-CRITIC_OBS_DIM = 312
+ACTOR_OBS_DIM = 750
+CRITIC_OBS_DIM = 1950
 AMP_OBS_DIM = 195
 AMP_TRANSITION_DIM = 390
 EXPERT_TRANSITION_DT = 0.02
@@ -53,6 +55,8 @@ AMP_PRELOAD_TRANSITIONS = 200000
 REQUIRED_LOG_KEYS = {
     "RecoveryReward/height_raw",
     "RecoveryReward/height_scaled",
+    "RecoveryReward/upright_raw",
+    "RecoveryReward/upright_scaled",
     "RecoveryReward/joint_acc",
     "RecoveryReward/joint_pos_limits",
     "RecoveryReward/action_rate",
@@ -385,22 +389,32 @@ def _assert_dataset_reset(env, env_ids=None):
     else:
         env_ids = env_ids.to(device=env.device, dtype=torch.long)
 
-    state_ids = env.last_reset_state_ids[env_ids]
-    if state_ids.shape != (env_ids.numel(),):
+    motion_ids = env.last_reset_motion_ids[env_ids]
+    frame_ids = env.last_reset_frame_ids[env_ids]
+    if motion_ids.shape != (env_ids.numel(),):
         raise AssertionError(
-            f"last_reset_state_ids has invalid shape {tuple(state_ids.shape)}."
+            f"last_reset_motion_ids has invalid shape {tuple(motion_ids.shape)}."
         )
-    if torch.any(state_ids < 0) or torch.any(
-        state_ids >= env.reset_state_loader.num_states
+    if frame_ids.shape != (env_ids.numel(),):
+        raise AssertionError(
+            f"last_reset_frame_ids has invalid shape {tuple(frame_ids.shape)}."
+        )
+    if torch.any(motion_ids < 0) or torch.any(
+        motion_ids >= env.reset_motion_loader.num_motions
     ):
-        raise AssertionError("last_reset_state_ids contains an invalid dataset ID.")
+        raise AssertionError("last_reset_motion_ids contains an invalid motion ID.")
+    selected_num_frames = env.reset_motion_loader.motion_num_frames[motion_ids]
+    if torch.any(frame_ids < 0) or torch.any(frame_ids >= selected_num_frames):
+        raise AssertionError("last_reset_frame_ids contains an invalid frame ID.")
 
-    reference = env.reset_state_loader.get_state_batch(state_ids)
+    reference = env.reset_motion_loader.get_frame_batch(motion_ids, frame_ids)
+    root_index = env.reset_motion_loader.root_body_index
+    source_root_pos = reference["body_pos_w"][:, root_index]
     env_origins = env.scene.env_origins[env_ids]
-    expected_root_pos = reference["root_pos_w"].clone()
+    expected_root_pos = source_root_pos.clone()
     expected_root_pos[:, :2] = env_origins[:, :2]
     expected_root_pos[:, 2] = (
-        env_origins[:, 2] + reference["root_pos_w"][:, 2]
+        env_origins[:, 2] + source_root_pos[:, 2]
     )
 
     atol = 2.0e-5
@@ -411,27 +425,22 @@ def _assert_dataset_reset(env, env_ids=None):
         atol=atol,
     )
 
-    robot_quat = torch.nn.functional.normalize(
-        env.robot.data.root_link_quat_w[env_ids], dim=-1
-    )
-    source_quat = torch.nn.functional.normalize(reference["root_quat_w"], dim=-1)
-    orientation_dot = torch.abs(torch.sum(robot_quat * source_quat, dim=-1))
     torch.testing.assert_close(
-        orientation_dot,
-        torch.ones_like(orientation_dot),
-        rtol=0.0,
+        env.robot.data.root_link_quat_w[env_ids],
+        reference["body_quat_w"][:, root_index],
+        rtol=1.0e-5,
         atol=atol,
     )
 
     comparisons = (
         (
             env.robot.data.root_link_lin_vel_w[env_ids],
-            reference["root_lin_vel_w"],
+            reference["body_lin_vel_w"][:, root_index],
             "root linear velocity",
         ),
         (
             env.robot.data.root_link_ang_vel_w[env_ids],
-            reference["root_ang_vel_w"],
+            reference["body_ang_vel_w"][:, root_index],
             "root angular velocity",
         ),
         (
@@ -477,18 +486,44 @@ def _assert_dataset_reset(env, env_ids=None):
     return reference
 
 
+def _deterministic_motion_frames(loader):
+    motion_ids = torch.arange(
+        NUM_ENVS, dtype=torch.long, device=loader.device
+    ) % loader.num_motions
+    frame_ids = torch.tensor(
+        [
+            0,
+            loader.clips[int(motion_ids[1].item())].num_frames - 1,
+            loader.clips[int(motion_ids[2].item())].num_frames // 2,
+            loader.clips[int(motion_ids[3].item())].num_frames - 1,
+        ],
+        dtype=torch.long,
+        device=loader.device,
+    )
+    return motion_ids, frame_ids
+
+
 def run_smoke_test():
     cfg = G1RecoveryEnvCfg()
     cfg.device = args.device
     cfg.scene.num_envs = NUM_ENVS
-    state_dir = Path(cfg.reset.state_dir)
-    if not state_dir.is_dir() or not any(state_dir.glob("*.npz")):
+    motion_dir = Path(cfg.reset.motion_dir)
+    if not motion_dir.is_dir() or not any(motion_dir.glob("*.npz")):
         raise FileNotFoundError(
-            f"Recovery reset-state dataset is missing or empty: {state_dir}. "
-            "Run legged_lab/scripts/build_recovery_reset_dataset.py first."
+            f"Recovery trajectory dataset is missing or empty: {motion_dir}."
         )
     env = G1RecoveryEnv(cfg=cfg, headless=args.headless)
 
+    if env.cfg.observation.history_length != 10:
+        raise AssertionError("Recovery actor/critic history_length must remain 10.")
+    if env.cfg.reward.root_height_exp.weight != 3.5:
+        raise AssertionError("Recovery height reward weight must remain 3.5.")
+    if env.cfg.reward.root_height_exp.params["std"] != 0.3:
+        raise AssertionError("Recovery height reward std must remain 0.3.")
+    if env.cfg.reward.upright.weight != 1.0:
+        raise AssertionError("Recovery upright reward weight must remain 1.0.")
+    if env.cfg.success.upright_threshold != 0.93:
+        raise AssertionError("Recovery upright success threshold must remain 0.93.")
     if env.physics_dt != 0.005:
         raise AssertionError(f"physics_dt must be 0.005, got {env.physics_dt}.")
     if env.cfg.sim.decimation != 4:
@@ -531,10 +566,15 @@ def run_smoke_test():
             )
         if any("ground" in path.lower() for path in sensor.cfg.filter_prim_paths_expr):
             raise AssertionError("Ground leaked into a self-collision filter.")
-    if env.last_reset_state_ids.shape != (NUM_ENVS,):
+    if env.last_reset_motion_ids.shape != (NUM_ENVS,):
         raise AssertionError(
-            f"last_reset_state_ids must be {(NUM_ENVS,)}, "
-            f"got {tuple(env.last_reset_state_ids.shape)}."
+            f"last_reset_motion_ids must be {(NUM_ENVS,)}, "
+            f"got {tuple(env.last_reset_motion_ids.shape)}."
+        )
+    if env.last_reset_frame_ids.shape != (NUM_ENVS,):
+        raise AssertionError(
+            f"last_reset_frame_ids must be {(NUM_ENVS,)}, "
+            f"got {tuple(env.last_reset_frame_ids.shape)}."
         )
     _assert_dataset_reset(env)
     _assert_recovery_episode_statistics(
@@ -546,29 +586,69 @@ def run_smoke_test():
         timeout_this_step=0,
     )
 
-    deterministic_state_ids = torch.arange(
-        NUM_ENVS, dtype=torch.long, device=env.device
+    deterministic_motion_ids, deterministic_frame_ids = (
+        _deterministic_motion_frames(env.reset_motion_loader)
     )
     all_env_ids = torch.arange(NUM_ENVS, dtype=torch.long, device=env.device)
-    env.reset_to_state_ids(all_env_ids, deterministic_state_ids)
-    if not torch.equal(env.last_reset_state_ids, deterministic_state_ids):
+    env.reset_to_motion_frames(
+        all_env_ids, deterministic_motion_ids, deterministic_frame_ids
+    )
+    if not torch.equal(env.last_reset_motion_ids, deterministic_motion_ids):
         raise AssertionError(
-            "reset_to_state_ids did not preserve deterministic IDs [0, 1, 2, 3]."
+            "reset_to_motion_frames did not preserve deterministic motion IDs."
         )
-    _assert_dataset_reset(env)
+    if not torch.equal(env.last_reset_frame_ids, deterministic_frame_ids):
+        raise AssertionError(
+            "reset_to_motion_frames did not preserve deterministic frame IDs."
+        )
+    deterministic_reference = _assert_dataset_reset(env)
+    for batch_index, (motion_id, frame_id) in enumerate(
+        zip(deterministic_motion_ids.tolist(), deterministic_frame_ids.tolist())
+    ):
+        clip = env.reset_motion_loader.clips[motion_id]
+        for field in (
+            "joint_pos",
+            "joint_vel",
+            "body_pos_w",
+            "body_quat_w",
+            "body_lin_vel_w",
+            "body_ang_vel_w",
+        ):
+            torch.testing.assert_close(
+                deterministic_reference[field][batch_index],
+                getattr(clip, field)[frame_id],
+                rtol=0.0,
+                atol=0.0,
+            )
 
     try:
-        env.reset_to_state_ids([0, 1], [0])
+        env.reset_to_motion_frames([0, 1], [0], [0])
     except ValueError:
         pass
     else:
-        raise AssertionError("reset_to_state_ids must reject unequal ID lengths.")
+        raise AssertionError(
+            "reset_to_motion_frames must reject unequal ID lengths."
+        )
     try:
-        env.reset_to_state_ids([0], [env.reset_state_loader.num_states])
+        env.reset_to_motion_frames(
+            [0], [env.reset_motion_loader.num_motions], [0]
+        )
+    except (ValueError, IndexError):
+        pass
+    else:
+        raise AssertionError(
+            "reset_to_motion_frames must reject out-of-range motion IDs."
+        )
+    try:
+        env.reset_to_motion_frames(
+            [0], [0], [env.reset_motion_loader.clips[0].num_frames]
+        )
     except IndexError:
         pass
     else:
-        raise AssertionError("reset_to_state_ids must reject out-of-range state IDs.")
+        raise AssertionError(
+            "reset_to_motion_frames must reject out-of-range frame IDs."
+        )
 
     freeze_reference = {
         "root_pos": env.robot.data.root_link_pos_w.clone(),
@@ -620,7 +700,9 @@ def run_smoke_test():
         raise AssertionError("Low-level Hold QC modified episode_length_buf.")
 
     # Restore an exact reset before exercising the normal policy/timeout path.
-    env.reset_to_state_ids(all_env_ids, deterministic_state_ids)
+    env.reset_to_motion_frames(
+        all_env_ids, deterministic_motion_ids, deterministic_frame_ids
+    )
     _assert_dataset_reset(env)
 
     # Fallen dataset resets always begin with a fresh hold counter and cannot
@@ -714,12 +796,32 @@ def run_smoke_test():
     _assert_dataset_reset(env, env.reset_env_ids)
 
     # Return to deterministic fallen states before action/reward checks.
-    env.reset_to_state_ids(all_env_ids, deterministic_state_ids)
+    env.reset_to_motion_frames(
+        all_env_ids, deterministic_motion_ids, deterministic_frame_ids
+    )
     _assert_dataset_reset(env)
 
     actor_current, critic_current = env.compute_current_observations()
     _assert_finite_shape(actor_current, (NUM_ENVS, 75), "actor_current")
-    _assert_finite_shape(critic_current, (NUM_ENVS, 78), "critic_current")
+    _assert_finite_shape(critic_current, (NUM_ENVS, 195), "critic_current")
+    whole_body_amp_features = env.amp_feature_builder.build(
+        env.robot.data.body_link_pos_w,
+        env.robot.data.body_link_quat_w,
+        env.robot.data.body_link_lin_vel_w,
+        env.robot.data.body_link_ang_vel_w,
+    )
+    torch.testing.assert_close(
+        critic_current[:, 78:117],
+        whole_body_amp_features[:, BODY_POS_SLICE],
+        rtol=0.0,
+        atol=0.0,
+    )
+    torch.testing.assert_close(
+        critic_current[:, 117:195],
+        whole_body_amp_features[:, BODY_ORI_6D_SLICE],
+        rtol=0.0,
+        atol=0.0,
+    )
     actor_obs, infos = env.get_observations()
     _assert_finite_shape(actor_obs, (NUM_ENVS, ACTOR_OBS_DIM), "initial actor_obs")
     _assert_finite_shape(
@@ -752,6 +854,38 @@ def run_smoke_test():
         env.self_collision_cost > env.cfg.sim.decimation
     ):
         raise AssertionError("Observed self-collision cost escaped [0, 4].")
+    torso_quat_w = torch.nn.functional.normalize(
+        env.robot.data.body_link_quat_w[:, env.torso_body_index], dim=-1
+    )
+    gravity_direction_w = torch.tensor(
+        (0.0, 0.0, -1.0), dtype=torso_quat_w.dtype, device=env.device
+    ).expand(NUM_ENVS, -1)
+    expected_projected_gravity = quat_apply_inverse(
+        torso_quat_w, gravity_direction_w
+    )
+    expected_torso_up_z = -expected_projected_gravity[:, 2]
+    expected_upright_raw = torch.clamp(expected_torso_up_z, min=0.0, max=1.0)
+    expected_upright_reward = env.step_dt * expected_upright_raw
+    torch.testing.assert_close(
+        env.torso_projected_gravity_b,
+        expected_projected_gravity,
+        rtol=1.0e-6,
+        atol=1.0e-7,
+    )
+    torch.testing.assert_close(
+        env.torso_up_z, expected_torso_up_z, rtol=1.0e-6, atol=1.0e-7
+    )
+    torch.testing.assert_close(
+        env.upright_reward_raw,
+        expected_upright_raw,
+        rtol=1.0e-6,
+        atol=1.0e-7,
+    )
+    if not torch.equal(
+        env.upright_ok,
+        expected_torso_up_z >= env.cfg.success.upright_threshold,
+    ):
+        raise AssertionError("Recovery upright success gate does not use threshold 0.93.")
     h_default = env.robot.data.default_root_state[:, 2]
     expected_height_raw = torch.exp(
         -torch.square(h_default - env.robot.data.root_link_pos_w[:, 2]) / 0.09
@@ -771,6 +905,7 @@ def run_smoke_test():
     )
     expected_task_reward = (
         expected_height_reward
+        + expected_upright_reward
         + expected_joint_acc_reward
         + expected_joint_pos_limits_reward
         + expected_action_rate_reward
@@ -781,6 +916,7 @@ def run_smoke_test():
     )
     contribution_pairs = (
         (env.height_reward_scaled, expected_height_reward),
+        (env.upright_reward_scaled, expected_upright_reward),
         (env.joint_acc_reward, expected_joint_acc_reward),
         (env.joint_pos_limits_reward, expected_joint_pos_limits_reward),
         (env.action_rate_reward, expected_action_rate_reward),
@@ -799,6 +935,7 @@ def run_smoke_test():
     torch.testing.assert_close(
         env.task_reward,
         env.height_reward_scaled
+        + env.upright_reward_scaled
         + env.joint_acc_reward
         + env.joint_pos_limits_reward
         + env.action_rate_reward
@@ -876,8 +1013,8 @@ def run_smoke_test():
     )
     _assert_dataset_reset(env, env.reset_env_ids)
 
-    actor_history = actor_obs.reshape(NUM_ENVS, 4, 75)
-    critic_history = infos["observations"]["critic"].reshape(NUM_ENVS, 4, 78)
+    actor_history = actor_obs.reshape(NUM_ENVS, 10, 75)
+    critic_history = infos["observations"]["critic"].reshape(NUM_ENVS, 10, 195)
     torch.testing.assert_close(
         actor_history,
         actor_history[:, -1:].expand_as(actor_history),
@@ -894,6 +1031,8 @@ def run_smoke_test():
     # Initialize the real AMP runner without a preload cache to verify that the
     # standalone config selects RecoveryAMPData and applies both reward knobs.
     agent_cfg = G1RecoveryAgentCfg()
+    if agent_cfg.empirical_normalization is not False:
+        raise AssertionError("Recovery empirical_normalization must remain False.")
     if not agent_cfg.amp_preload_transitions:
         raise AssertionError("Recovery AMP transition preload must remain enabled.")
     if agent_cfg.amp_num_preload_transitions != AMP_PRELOAD_TRANSITIONS:
@@ -979,7 +1118,9 @@ def run_smoke_test():
         "dt-scaled task reward and AMP 0.1/0.75 mixing checks passed, "
         "lifetime episode success/timeout/duration checks passed, "
         "success/timeout/self-collision/terminal-AMP checks passed, "
-        "actor=300D, critic=312D, AMP=195D, transition=390D.",
+        "actor_current=75D, actor_history=750D, "
+        "critic_current=195D, critic_history=1950D, "
+        "AMP=195D, transition=390D.",
         flush=True,
     )
 

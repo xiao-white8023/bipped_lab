@@ -11,21 +11,22 @@ from isaaclab.scene import InteractiveScene
 from isaaclab.sensors import ContactSensor, ContactSensorCfg
 from isaaclab.sim import PhysxCfg, SimulationContext
 from isaaclab.utils.buffers import CircularBuffer
+from isaaclab.utils.math import quat_apply_inverse
 
 from legged_lab.envs.g1.g1_recovery_cfg import (
     G1_RECOVERY_BODY_NAMES,
     G1RecoveryEnvCfg,
 )
 from legged_lab.utils.env_utils.scene import SceneCfg
-from legged_lab.utils.recovery_reset_state_loader import RecoveryResetStateLoader
 from rsl_rl.env import VecEnv
-from rsl_rl.utils import RecoveryAMPFeatureBuilder
+from rsl_rl.utils import RecoveryAMPFeatureBuilder, RecoveryNPZMotionLoader
+from rsl_rl.utils.recovery_amp_features import BODY_ORI_6D_SLICE, BODY_POS_SLICE
 
 
 class G1RecoveryEnv(VecEnv):
 
     ACTOR_CURRENT_DIM = 75
-    CRITIC_CURRENT_DIM = 78
+    CRITIC_CURRENT_DIM = 195
     AMP_OBSERVATION_DIM = 195
     FORMAL_EXPERT_TRANSITION_DT = 0.02
     SELF_COLLISION_SENSOR_PREFIX = "recovery_self_collision_"
@@ -121,9 +122,7 @@ class G1RecoveryEnv(VecEnv):
                 f"articulation: {'; '.join(mismatches)}"
             )
         if self.cfg.reset.random_yaw:
-            raise RuntimeError(
-                "Recovery random_yaw must remain disabled in Stage 4.2b."
-            )
+            raise RuntimeError("Recovery random_yaw must remain disabled.")
 
         try:
             self.torso_body_index = self.robot.body_names.index("torso_link")
@@ -132,11 +131,13 @@ class G1RecoveryEnv(VecEnv):
                 "G1 Recovery articulation is missing required torso_link."
             ) from exc
 
-        self.reset_state_loader = RecoveryResetStateLoader(
-            state_dir=self.cfg.reset.state_dir,
+        self.reset_motion_loader = RecoveryNPZMotionLoader(
+            motion_dir=self.cfg.reset.motion_dir,
             device=self.device,
+            expected_fps=50.0,
+            sampling="uniform_frame",
         )
-        self._validate_reset_state_ordering()
+        self._validate_reset_motion_ordering()
 
         # Expert 与 policy 共用 Stage 3.2 的 whole-body AMP feature builder。
         self.amp_feature_builder = RecoveryAMPFeatureBuilder(self.robot.body_names)
@@ -160,7 +161,11 @@ class G1RecoveryEnv(VecEnv):
         self.reset(env_ids)
 
         print(f"G1 recovery policy dt: {self.step_dt:.8f} s")
-        print(f"G1 recovery reset states: {self.reset_state_loader.num_states}")
+        print(
+            "G1 recovery reset motions/frames: "
+            f"{self.reset_motion_loader.num_motions}/"
+            f"{self.reset_motion_loader.total_frames}"
+        )
         print("G1 recovery joint names:", self.robot.joint_names)
         print("G1 recovery body names:", self.robot.body_names)
 
@@ -178,17 +183,17 @@ class G1RecoveryEnv(VecEnv):
                     break
         return mismatches
 
-    def _validate_reset_state_ordering(self):
+    def _validate_reset_motion_ordering(self):
         ordering_pairs = (
             (
                 "joint_names",
                 tuple(self.robot.joint_names),
-                tuple(self.reset_state_loader.joint_names),
+                tuple(self.reset_motion_loader.joint_names),
             ),
             (
                 "body_names",
                 tuple(self.robot.body_names),
-                tuple(self.reset_state_loader.body_names),
+                tuple(self.reset_motion_loader.body_names),
             ),
         )
         for label, robot_order, dataset_order in ordering_pairs:
@@ -202,6 +207,21 @@ class G1RecoveryEnv(VecEnv):
                 )
                 print(message)
                 raise RuntimeError(message)
+        if (
+            self.reset_motion_loader.root_body_name != "pelvis"
+            or self.reset_motion_loader.root_body_index
+            != self.reset_motion_loader.body_index("pelvis")
+        ):
+            raise RuntimeError(
+                "G1 Recovery reset trajectory root body must be pelvis, got "
+                f"{self.reset_motion_loader.root_body_name!r} at index "
+                f"{self.reset_motion_loader.root_body_index}."
+            )
+        if self.reset_motion_loader.fps != 50.0:
+            raise RuntimeError(
+                "G1 Recovery reset trajectories must use exactly 50 Hz, got "
+                f"{self.reset_motion_loader.fps}."
+            )
 
     def init_buffers(self):
         self.extras = {}
@@ -286,7 +306,13 @@ class G1RecoveryEnv(VecEnv):
             dtype=torch.float,
             device=self.device,
         )
-        self.last_reset_state_ids = torch.full(
+        self.last_reset_motion_ids = torch.full(
+            (self.num_envs,),
+            -1,
+            dtype=torch.long,
+            device=self.device,
+        )
+        self.last_reset_frame_ids = torch.full(
             (self.num_envs,),
             -1,
             dtype=torch.long,
@@ -314,6 +340,8 @@ class G1RecoveryEnv(VecEnv):
             "torso_up_z",
             "height_reward_raw",
             "height_reward_scaled",
+            "upright_reward_raw",
+            "upright_reward_scaled",
             "joint_acc_cost",
             "joint_pos_limits_cost",
             "action_rate_cost",
@@ -335,6 +363,9 @@ class G1RecoveryEnv(VecEnv):
         self.height_ok = torch.zeros_like(self.reset_buf)
         self.upright_ok = torch.zeros_like(self.reset_buf)
         self.ready_now = torch.zeros_like(self.reset_buf)
+        self.torso_projected_gravity_b = torch.zeros(
+            self.num_envs, 3, dtype=torch.float, device=self.device
+        )
 
         self.init_obs_buffer()
 
@@ -380,8 +411,16 @@ class G1RecoveryEnv(VecEnv):
         )
 
         root_lin_vel = robot.data.root_lin_vel_b
+        whole_body_amp_features = self.amp_feature_builder.build(
+            robot.data.body_link_pos_w,
+            robot.data.body_link_quat_w,
+            robot.data.body_link_lin_vel_w,
+            robot.data.body_link_ang_vel_w,
+        )
+        body_pos_b = whole_body_amp_features[:, BODY_POS_SLICE]
+        body_ori_6d = whole_body_amp_features[:, BODY_ORI_6D_SLICE]
         current_critic_obs = torch.cat(
-            [current_actor_obs, root_lin_vel], dim=-1
+            [current_actor_obs, root_lin_vel, body_pos_b, body_ori_6d], dim=-1
         )
 
         self._require_finite_shape(
@@ -463,17 +502,13 @@ class G1RecoveryEnv(VecEnv):
         return env_ids
 
     @torch.no_grad()
-    def _reset_from_state_ids(self, env_ids, state_ids):
+    def _apply_reset_motion_sample(self, env_ids, sample):
         env_ids = self._normalize_env_ids(env_ids)
-        if isinstance(state_ids, torch.Tensor) and state_ids.dtype == torch.bool:
-            raise ValueError("Recovery state_ids must contain integer indexes.")
-        state_ids = torch.as_tensor(
-            state_ids, dtype=torch.long, device=self.device
-        ).flatten()
-        if env_ids.numel() != state_ids.numel():
+        if env_ids.numel() != sample["motion_ids"].numel():
             raise ValueError(
-                "Recovery env_ids and state_ids must have the same length, got "
-                f"{env_ids.numel()} and {state_ids.numel()}."
+                "Recovery env_ids and sampled motion frames must have the same "
+                f"length, got {env_ids.numel()} and "
+                f"{sample['motion_ids'].numel()}."
             )
 
         if env_ids.numel() == 0:
@@ -483,16 +518,19 @@ class G1RecoveryEnv(VecEnv):
         reward_extras = self.reward_manager.reset(env_ids)
         self.extras.setdefault("log", {}).update(reward_extras)
 
-        sample = self.reset_state_loader.get_state_batch(state_ids)
-        source_root_pos = sample["root_pos_w"]
+        root_index = self.reset_motion_loader.root_body_index
+        source_root_pos = sample["body_pos_w"][:, root_index]
         root_pos = source_root_pos.clone()
         env_origins = self.scene.env_origins[env_ids]
         root_pos[:, :2] = env_origins[:, :2]
         root_pos[:, 2] = env_origins[:, 2] + source_root_pos[:, 2]
 
-        root_pose = torch.cat([root_pos, sample["root_quat_w"]], dim=-1)
+        root_quat_w = sample["body_quat_w"][:, root_index]
+        root_lin_vel_w = sample["body_lin_vel_w"][:, root_index]
+        root_ang_vel_w = sample["body_ang_vel_w"][:, root_index]
+        root_pose = torch.cat([root_pos, root_quat_w], dim=-1)
         root_velocity = torch.cat(
-            [sample["root_lin_vel_w"], sample["root_ang_vel_w"]], dim=-1
+            [root_lin_vel_w, root_ang_vel_w], dim=-1
         )
         joint_pos = sample["joint_pos"]
         joint_vel = sample["joint_vel"]
@@ -517,7 +555,8 @@ class G1RecoveryEnv(VecEnv):
         self.action[env_ids] = 0.0
         self.last_action[env_ids] = 0.0
         self.joint_pos_target[env_ids] = joint_pos
-        self.last_reset_state_ids[env_ids] = sample["state_ids"]
+        self.last_reset_motion_ids[env_ids] = sample["motion_ids"]
+        self.last_reset_frame_ids[env_ids] = sample["frame_ids"]
         self.last_reset_joint_pos[env_ids] = joint_pos
         self.success_hold_counter[env_ids] = 0
         self.success_buf[env_ids] = False
@@ -535,39 +574,20 @@ class G1RecoveryEnv(VecEnv):
         env_ids = self._normalize_env_ids(env_ids)
         if env_ids.numel() == 0:
             return
-        state_ids = self.reset_state_loader.sample_state_ids(env_ids.numel())
-        self._reset_from_state_ids(env_ids, state_ids)
+        sample = self.reset_motion_loader.sample_frame_batch(env_ids.numel())
+        self._apply_reset_motion_sample(env_ids, sample)
 
     @torch.no_grad()
-    def reset_to_state_ids(self, env_ids, state_ids):
+    def reset_to_motion_frames(self, env_ids, motion_ids, frame_ids):
         env_ids = self._normalize_env_ids(env_ids)
-        if isinstance(state_ids, torch.Tensor) and state_ids.dtype == torch.bool:
-            raise ValueError("Recovery state_ids must contain integer indexes.")
-        state_ids = torch.as_tensor(state_ids, device=self.device)
-        if state_ids.ndim != 1:
+        sample = self.reset_motion_loader.get_frame_batch(motion_ids, frame_ids)
+        if env_ids.numel() != sample["motion_ids"].numel():
             raise ValueError(
-                f"Recovery state_ids must have shape [B], got {tuple(state_ids.shape)}."
+                "Recovery env_ids, motion_ids, and frame_ids must have the same "
+                f"length, got {env_ids.numel()}, {sample['motion_ids'].numel()}, "
+                f"and {sample['frame_ids'].numel()}."
             )
-        if (
-            state_ids.dtype == torch.bool
-            or state_ids.dtype.is_floating_point
-            or state_ids.dtype.is_complex
-        ):
-            raise ValueError("Recovery state_ids must contain integer indexes.")
-        state_ids = state_ids.to(dtype=torch.long)
-        if env_ids.numel() != state_ids.numel():
-            raise ValueError(
-                "Recovery env_ids and state_ids must have the same length, got "
-                f"{env_ids.numel()} and {state_ids.numel()}."
-            )
-        if torch.any(state_ids < 0) or torch.any(
-            state_ids >= self.reset_state_loader.num_states
-        ):
-            raise IndexError(
-                "Recovery state_ids must be in "
-                f"[0, {self.reset_state_loader.num_states - 1}]."
-            )
-        self._reset_from_state_ids(env_ids, state_ids)
+        self._apply_reset_motion_sample(env_ids, sample)
 
     def _read_self_collision_hits(self):
         """Return whether any robot-vs-robot force exceeds the V1 threshold."""
@@ -610,6 +630,21 @@ class G1RecoveryEnv(VecEnv):
             raise ValueError("self-collision hit history must have bool dtype.")
         return hit_substeps.sum(dim=-1).float()
 
+    def _compute_torso_upright(self):
+        torso_quat_w = torch.nn.functional.normalize(
+            self.robot.data.body_link_quat_w[:, self.torso_body_index], dim=-1
+        )
+        gravity_direction_w = torch.tensor(
+            (0.0, 0.0, -1.0),
+            dtype=torso_quat_w.dtype,
+            device=torso_quat_w.device,
+        ).expand(self.num_envs, -1)
+        self.torso_projected_gravity_b = quat_apply_inverse(
+            torso_quat_w, gravity_direction_w
+        )
+        self.torso_up_z = -self.torso_projected_gravity_b[:, 2]
+        return self.torso_projected_gravity_b, self.torso_up_z
+
     def _update_recovery_state_metrics(self):
         self.pelvis_height = self.robot.data.root_link_pos_w[:, 2]
         h_default = self.robot.data.default_root_state[:, 2]
@@ -617,14 +652,7 @@ class G1RecoveryEnv(VecEnv):
             self.pelvis_height >= self.cfg.success.height_ratio * h_default
         )
 
-        # body_link_quat_w uses WXYZ. R[2, 2] is the torso local +Z
-        # projection onto world +Z and equals 1 - 2(x^2 + y^2).
-        torso_quat = torch.nn.functional.normalize(
-            self.robot.data.body_link_quat_w[:, self.torso_body_index], dim=-1
-        )
-        self.torso_up_z = 1.0 - 2.0 * (
-            torso_quat[:, 1].square() + torso_quat[:, 2].square()
-        )
+        _, self.torso_up_z = self._compute_torso_upright()
         self.upright_ok = (
             self.torso_up_z >= self.cfg.success.upright_threshold
         )
@@ -641,6 +669,9 @@ class G1RecoveryEnv(VecEnv):
             self.step_dt
             * reward_cfg.root_height_exp.weight
             * self.height_reward_raw
+        )
+        self.upright_reward_scaled = (
+            self.step_dt * reward_cfg.upright.weight * self.upright_reward_raw
         )
         self.joint_acc_reward = (
             self.step_dt * reward_cfg.dof_acc_l2.weight * self.joint_acc_cost
@@ -730,6 +761,8 @@ class G1RecoveryEnv(VecEnv):
         log = {
             "RecoveryReward/height_raw": self.height_reward_raw.mean(),
             "RecoveryReward/height_scaled": self.height_reward_scaled.mean(),
+            "RecoveryReward/upright_raw": self.upright_reward_raw.mean(),
+            "RecoveryReward/upright_scaled": self.upright_reward_scaled.mean(),
             "RecoveryReward/joint_acc": self.joint_acc_reward.mean(),
             "RecoveryReward/joint_pos_limits": self.joint_pos_limits_reward.mean(),
             "RecoveryReward/action_rate": self.action_rate_reward.mean(),

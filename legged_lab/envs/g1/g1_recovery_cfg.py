@@ -75,19 +75,19 @@ class RecoveryControlCfg:
 
 @configclass
 class RecoveryObservationCfg:
-    # Actor/Critic 均保留最近 4 个 policy step 的本体观测。
+    # Actor/Critic 均保留最近 10 个 policy step 的本体观测。
     history_length: int = 10
     clip_observations: float = 100.0
 
 
 @configclass
 class RecoveryResetCfg:
-    # Stage 4.2b 只使用已筛选的 single-state whole-body NPZ。
-    state_dir: str = os.path.join(
+    # Formal runtime resets sample exact integer frames from full trajectories.
+    motion_dir: str = os.path.join(
         LEGGED_LAB_ROOT,
-        "envs/g1/datasets/npz/recovery_reset_states_v1",
+        "envs/g1/datasets/npz/recovery_candidates_v3",
     )
-    # 保留后续阶段的配置入口；当前必须关闭以验证 exact dataset reset。
+    # Exact dataset reset preserves the stored world-frame orientation.
     random_yaw: bool = False
 
 
@@ -101,6 +101,10 @@ class Reward:
             "std": 0.3,
             "asset_cfg": SceneEntityCfg("robot"),
         },
+    )
+    upright = RewTerm(
+        func=mdp.recovery_torso_upright,
+        weight=1.0,
     )
 
     # 正则项；函数均返回非负 cost，由负权重转为 penalty。
@@ -178,10 +182,12 @@ class G1RecoveryEnvCfg:
             raise ValueError("Recovery action_scale must be positive.")
 
         if self.reset.random_yaw:
-            raise ValueError("Recovery random_yaw must remain disabled in Stage 4.2b.")
+            raise ValueError("Recovery random_yaw must remain disabled.")
         height_std = self.reward.root_height_exp.params["std"]
         if height_std <= 0.0 or self.reward.root_height_exp.weight <= 0.0:
             raise ValueError("Recovery height reward parameters must be positive.")
+        if self.reward.upright.weight != 1.0:
+            raise ValueError("Recovery upright reward weight must remain 1.0.")
         self_collision_threshold = self.reward.self_collisions.params[
             "force_threshold"
         ]

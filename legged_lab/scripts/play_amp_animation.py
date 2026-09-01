@@ -14,11 +14,7 @@ During playback, the terminal displays:
 - current playback time
 - total motion duration
 
-Locomotion export preserves the existing 58D full-AMP layout. Recovery export
-appends ``robot.data.projected_gravity_b`` after IsaacLab replay, producing a
-61D full-AMP frame. The gravity is deliberately not reconstructed from the
-visualization Euler angles so expert and policy Recovery AMP use the exact same
-IsaacLab definition.
+Export preserves the existing 58D full-AMP locomotion layout.
 """
 
 from __future__ import annotations
@@ -80,12 +76,6 @@ parser.add_argument(
     ),
 )
 parser.add_argument(
-    "--amp_profile",
-    choices=("locomotion", "recovery"),
-    default="locomotion",
-    help="AMP export layout: locomotion=58D, recovery=61D with projected gravity.",
-)
-parser.add_argument(
     "--start_time",
     type=float,
     default=None,
@@ -137,8 +127,6 @@ simulation_app = app_launcher.app
 
 
 # Safe to import simulation-dependent project modules after launching the app.
-import torch  # noqa: E402
-
 from legged_lab.envs import *  # noqa: F401,F403,E402
 from legged_lab.utils import task_registry  # noqa: E402
 
@@ -202,18 +190,15 @@ def _write_motion_file(
     frames: np.ndarray,
     frame_duration: float,
     motion_weight: float,
-    amp_profile: str,
     start_time: float,
     end_time: float,
 ) -> None:
     output_path = Path(save_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    expected_dim = {"locomotion": 58, "recovery": 61}[amp_profile]
-    if frames.ndim != 2 or frames.shape[1] != expected_dim:
+    if frames.ndim != 2 or frames.shape[1] != 58:
         raise ValueError(
-            f"Expected {amp_profile} AMP expert data with shape "
-            f"(T, {expected_dim}), got {frames.shape}."
+            f"Expected locomotion AMP expert data with shape (T, 58), got {frames.shape}."
         )
     if not np.isfinite(frames).all():
         raise ValueError("Generated AMP expert frames contain NaN or Inf values.")
@@ -233,7 +218,6 @@ def _write_motion_file(
 
     print(
         f"Saved AMP expert motion to '{output_path}':\n"
-        f"  AMP profile   = {amp_profile}\n"
         f"  frame count   = {frames.shape[0]}\n"
         f"  dimension     = {frames.shape[1]}\n"
         f"  FrameDuration = {frame_duration:.9f}\n"
@@ -565,29 +549,7 @@ def play_amp_animation() -> None:
                         f"but returned {tuple(base_amp_frame.shape)}."
                     )
 
-                amp_frame = base_amp_frame[0]
-                if args_cli.amp_profile == "recovery":
-                    # This is the same simulator-state field used by
-                    # G1RENetEnv.get_recovery_amp_obs() during policy rollout.
-                    projected_gravity = env.robot.data.projected_gravity_b
-                    if tuple(projected_gravity.shape) != (1, 3):
-                        raise ValueError(
-                            "robot.data.projected_gravity_b must have shape (1, 3) "
-                            "while exporting with --num_envs=1, got "
-                            f"{tuple(projected_gravity.shape)}."
-                        )
-                    gravity = projected_gravity[0]
-                    if not gravity.isfinite().all():
-                        raise ValueError("projected_gravity_b contains NaN or Inf.")
-                    gravity_norm = float(gravity.norm().item())
-                    if abs(gravity_norm - 1.0) >= 1e-3:
-                        raise ValueError(
-                            "projected_gravity_b must have unit norm, got "
-                            f"{gravity_norm:.8f}."
-                        )
-                    amp_frame = torch.cat((amp_frame, gravity), dim=-1)
-
-                all_frames.append(amp_frame.detach().cpu().numpy().copy())
+                all_frames.append(base_amp_frame[0].detach().cpu().numpy().copy())
 
         print()
 
@@ -608,7 +570,6 @@ def play_amp_animation() -> None:
                 frames=np.stack(all_frames, axis=0),
                 frame_duration=output_frame_duration,
                 motion_weight=args_cli.motion_weight,
-                amp_profile=args_cli.amp_profile,
                 start_time=start_time,
                 end_time=end_time,
             )

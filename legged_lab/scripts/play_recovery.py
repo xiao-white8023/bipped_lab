@@ -5,18 +5,18 @@ The recovery task is intentionally different from the locomotion tasks:
 
 * it controls every joint of the 23-DoF G1 model;
 * it has no velocity or height command;
-* reset states come from the validated single-state Recovery NPZ dataset;
+* resets sample exact integer frames from full Recovery NPZ trajectories;
 * the actor input is a 10-frame history of the 75-D proprioceptive state.
 
 Examples
 --------
-Play random reset states with the newest checkpoint::
+Play random trajectory-frame resets with the newest checkpoint::
 
     python legged_lab/scripts/play_recovery.py --num_envs 16
 
-Replay one reset state (1-based index) after every episode::
+Replay one exact trajectory frame after every episode::
 
-    python legged_lab/scripts/play_recovery.py --num_envs 1 --state 12
+    python legged_lab/scripts/play_recovery.py --num_envs 1 --motion_id 0 --frame_id 12
 
 Skip TorchScript/ONNX export::
 
@@ -67,13 +67,16 @@ parser.add_argument(
 )
 parser.add_argument("--seed", type=int, default=None, help="Environment seed.")
 parser.add_argument(
-    "--state",
+    "--motion_id",
     type=int,
     default=None,
-    help=(
-        "Optional 1-based Recovery reset-state index. When set, all completed "
-        "episodes are reset to this same state."
-    ),
+    help="Optional zero-based Recovery trajectory ID for deterministic resets.",
+)
+parser.add_argument(
+    "--frame_id",
+    type=int,
+    default=None,
+    help="Optional zero-based integer frame ID for deterministic resets.",
 )
 parser.add_argument(
     "--no_export",
@@ -99,8 +102,12 @@ if args_cli.task != "g1_recovery":
     parser.error("play_recovery.py only supports --task g1_recovery.")
 if args_cli.num_envs <= 0:
     parser.error("--num_envs must be positive.")
-if args_cli.state is not None and args_cli.state <= 0:
-    parser.error("--state is 1-based and must be positive.")
+if (args_cli.motion_id is None) != (args_cli.frame_id is None):
+    parser.error("--motion_id and --frame_id must be provided together.")
+if args_cli.motion_id is not None and args_cli.motion_id < 0:
+    parser.error("--motion_id must be non-negative.")
+if args_cli.frame_id is not None and args_cli.frame_id < 0:
+    parser.error("--frame_id must be non-negative.")
 if args_cli.print_every < 0:
     parser.error("--print_every must be non-negative.")
 if args_cli.max_steps is not None and args_cli.max_steps <= 0:
@@ -126,19 +133,25 @@ from legged_lab.utils.cli_args import update_rsl_rl_cfg  # noqa: E402
 from rsl_rl.runners import AmpOnPolicyRunner  # noqa: E402
 
 
-def _set_fixed_reset_state(env, state_index: int, env_ids=None) -> None:
-    """Reset selected environments to a user-facing 1-based dataset index."""
-    state_id = state_index - 1
-    num_states = env.reset_state_loader.num_states
-    if state_id >= num_states:
+def _set_fixed_motion_frame(env, motion_id: int, frame_id: int, env_ids=None) -> None:
+    """Reset selected environments to one exact trajectory frame."""
+    loader = env.reset_motion_loader
+    if motion_id >= loader.num_motions:
         raise IndexError(
-            f"--state {state_index} requested, but the dataset contains "
-            f"{num_states} states."
+            f"--motion_id {motion_id} requested, but the dataset contains "
+            f"{loader.num_motions} motions."
+        )
+    num_frames = loader.clips[motion_id].num_frames
+    if frame_id >= num_frames:
+        raise IndexError(
+            f"--frame_id {frame_id} requested, but motion {motion_id} contains "
+            f"{num_frames} frames."
         )
     if env_ids is None:
         env_ids = torch.arange(env.num_envs, device=env.device)
-    state_ids = torch.full_like(env_ids, state_id)
-    env.reset_to_state_ids(env_ids, state_ids)
+    motion_ids = torch.full_like(env_ids, motion_id)
+    frame_ids = torch.full_like(env_ids, frame_id)
+    env.reset_to_motion_frames(env_ids, motion_ids, frame_ids)
 
 
 def _build_runner(env, agent_cfg, log_dir: str):
@@ -178,7 +191,8 @@ def _print_metrics(step: int, env, extras: dict) -> None:
         f"ready={scalar('Recovery/ready_now_ratio'):.3f}, "
         f"episode_success={scalar('RecoveryEpisode/success_rate'):.3f}, "
         f"completed={int(scalar('RecoveryEpisode/completed_total'))}, "
-        f"reset_state={int(env.last_reset_state_ids[0].item()) + 1}"
+        f"reset_motion={int(env.last_reset_motion_ids[0].item())}, "
+        f"reset_frame={int(env.last_reset_frame_ids[0].item())}"
     )
 
 
@@ -233,8 +247,8 @@ def play() -> None:
             filename="policy.onnx",
         )
 
-    if args_cli.state is not None:
-        _set_fixed_reset_state(env, args_cli.state)
+    if args_cli.motion_id is not None:
+        _set_fixed_motion_frame(env, args_cli.motion_id, args_cli.frame_id)
 
     obs, _ = env.get_observations()
     expected_obs_dim = env.ACTOR_CURRENT_DIM * env_cfg.observation.history_length
@@ -257,10 +271,12 @@ def play() -> None:
 
             # G1RecoveryEnv has already applied a random dataset reset before
             # returning from step(). Replace it and refresh the observation
-            # history when a deterministic state was requested.
-            if args_cli.state is not None and torch.any(dones):
+            # history when a deterministic trajectory frame was requested.
+            if args_cli.motion_id is not None and torch.any(dones):
                 done_ids = dones.nonzero(as_tuple=False).flatten()
-                _set_fixed_reset_state(env, args_cli.state, done_ids)
+                _set_fixed_motion_frame(
+                    env, args_cli.motion_id, args_cli.frame_id, done_ids
+                )
                 obs, _ = env.get_observations()
 
         step += 1

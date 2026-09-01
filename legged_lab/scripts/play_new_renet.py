@@ -2,11 +2,9 @@
 
 The RENet actor observation layout is::
 
-    proprio_history | depth_history | actor_mode | recovery_beta
+    proprio_history | depth_history | estimator_mask
 
-Normal locomotion uses actor mode 0 (VP) or 1 (OP).  The environment recovery
-state machine owns actor mode 2, so switching the locomotion estimator never
-overrides an active Recovery episode.
+The estimator mask uses 0 for VP and 1 for OP.
 """
 
 import argparse
@@ -65,11 +63,6 @@ parser.add_argument(
     type=str,
     default=None,
     help="Export directory (default: <checkpoint_run>/exported).",
-)
-parser.add_argument(
-    "--dedicated_recovery",
-    action="store_true",
-    help="Keep dedicated Recovery reset environments; disabled for normal playback.",
 )
 parser.add_argument("--no_gamepad", action="store_true", help="Disable Linux evdev gamepad input.")
 AppLauncher.add_app_launcher_args(parser)
@@ -135,10 +128,6 @@ def configure_playback(env_cfg):
     env_cfg.scene.height_scanner.drift_range = (0.0, 0.0)
     env_cfg.scene.camera.add_camera_noise = bool(args_cli.depth_noise)
     env_cfg.scene.camera.camera.debug_vis = bool(args_cli.depth_debug_vis)
-
-    # Dedicated rows are a training sampler.  Natural falls can still enter
-    # Recovery through the state machine when this sampler is disabled.
-    env_cfg.recovery.dedicated_training_enable = bool(args_cli.dedicated_recovery)
 
     # Playback owns the OP/VP choice.  Do not silently force individual terrain
     # cells back to VP when the user explicitly selected OP.
@@ -288,14 +277,8 @@ def patch_estimator_mode(obs, estimator, env, policy_model):
     env.cfg.renet.mask_mode = estimator
     env.renet_estimator_mask.fill_(mask_value)
 
-    actor_mode_index = policy_model.proprio_actor_dim + policy_model.depth_flat_dim
-    locomotion_mode = torch.full(
-        (env.num_envs, 1), mask_value, dtype=obs.dtype, device=obs.device
-    )
-    recovery_mode = torch.full_like(locomotion_mode, 2.0)
-    obs[:, actor_mode_index : actor_mode_index + 1] = torch.where(
-        env.recovery_mask.unsqueeze(-1), recovery_mode, locomotion_mode
-    )
+    estimator_mask_index = policy_model.proprio_actor_dim + policy_model.depth_flat_dim
+    obs[:, estimator_mask_index : estimator_mask_index + 1] = mask_value
     print(f"[INFO] RENet locomotion estimator switched to {estimator.upper()} (mask={mask_value:.1f}).")
     return obs
 
@@ -315,7 +298,6 @@ def play():
     # is enough to validate each expert-data interface and avoids a large,
     # unnecessary playback allocation.
     agent_cfg.amp_num_preload_transitions = 1
-    agent_cfg.recovery_amp_num_preload_transitions = 1
     agent_cfg.num_steps_per_env = 1
 
     if agent_cfg.runner_class_name != "RENetAmpOnPolicyRunner":
@@ -405,14 +387,13 @@ def play():
                 obs, _, _, extras = env.step(actions)
 
                 if step_counter % 100 == 0:
-                    actor_mode = extras["observations"]["actor_mode"].squeeze(-1)
-                    vp_count = int((actor_mode == 0.0).sum().item())
-                    op_count = int((actor_mode == 1.0).sum().item())
-                    recovery_count = int((actor_mode == 2.0).sum().item())
+                    estimator_mask = extras["observations"]["renet_mask"].squeeze(-1)
+                    vp_count = int((estimator_mask == 0.0).sum().item())
+                    op_count = int((estimator_mask == 1.0).sum().item())
                     print(
                         f"[DEBUG] step={step_counter}, cmd={command.detach().cpu().numpy()}, "
                         f"requested={estimator.upper()}, "
-                        f"modes(VP/OP/Recovery)={vp_count}/{op_count}/{recovery_count}"
+                        f"modes(VP/OP)={vp_count}/{op_count}"
                     )
 
                 step_counter += 1

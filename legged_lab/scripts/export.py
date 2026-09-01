@@ -28,13 +28,10 @@ class FullPolicyExporter(nn.Module):
 
 
 class RENetPolicyExporter(nn.Module):
-    """Export-safe RENet policy with dynamic VP/OP/Recovery routing.
+    """Export-safe RENet policy with dynamic VP/OP routing.
 
-    ``RENetActorCritic`` skips inactive branches at runtime.  A trace made with
-    a single example would therefore permanently remove the other modes from
-    TorchScript/ONNX.  This deployment wrapper evaluates all three encoders and
-    selects their latent with tensor operations, so ``actor_mode`` remains a
-    real runtime input in the exported graph.
+    This wrapper evaluates both estimators and selects their latents with tensor
+    operations, so the estimator mask remains a runtime input after tracing.
     """
 
     def __init__(self, policy, normalizer=None):
@@ -47,7 +44,7 @@ class RENetPolicyExporter(nn.Module):
 
     def forward(self, x):
         observations = self.normalizer(x)
-        proprio_history, depth_flat, actor_mode, beta_obs, current_proprio = (
+        proprio_history, depth_flat, estimator_mask, current_proprio = (
             self.policy._split_actor_obs(observations)
         )
 
@@ -66,29 +63,12 @@ class RENetPolicyExporter(nn.Module):
         op_latent = op_hidden[-1]
         vp_latent = vp_hidden[-1]
 
-        recovery_embed = self.policy._embed_recovery_proprio_history(proprio_history)
-        recovery_features = self.policy._fuse_recovery_features(recovery_embed)
-        _, recovery_hidden = self.policy.recovery_gru(recovery_features)
-        recovery_latent = recovery_hidden[-1]
-
-        is_op = actor_mode == 1.0
-        is_recovery = actor_mode == 2.0
-        is_vp = actor_mode == 0.0
-        zeros = torch.zeros_like(op_latent)
-        first_latent_slot = torch.where(
-            is_recovery,
-            recovery_latent,
-            torch.where(is_op, op_latent, zeros),
-        )
-        second_latent_slot = torch.where(is_vp, vp_latent, zeros)
+        estimator_mask = estimator_mask.clamp(0.0, 1.0)
         actor_input = torch.cat(
             [
                 current_proprio,
-                first_latent_slot,
-                second_latent_slot,
-                is_op.to(current_proprio.dtype),
-                is_recovery.to(current_proprio.dtype),
-                beta_obs,
+                op_latent * estimator_mask,
+                vp_latent * (1.0 - estimator_mask),
             ],
             dim=-1,
         )
@@ -103,11 +83,10 @@ def _is_renet_policy(policy):
     return all(
         hasattr(policy, name)
         for name in (
-            "actor_control_dim",
+            "estimator_mask_dim",
             "op_gru",
             "vp_gru",
-            "recovery_gru",
-            "recovery_encoder",
+            "_split_actor_obs",
         )
     )
 
@@ -119,15 +98,13 @@ def _make_policy_exporter(policy, normalizer):
 
 
 def _validate_renet_torchscript(policy, normalizer, traced_model, obs_dim):
-    """Check that the exported graph matches eager RENet in all three modes."""
+    """Check that the exported graph matches eager RENet in VP and OP modes."""
 
     generator = torch.Generator(device="cpu")
     generator.manual_seed(0)
-    sample = 0.05 * torch.randn(3, obs_dim, generator=generator)
+    sample = 0.05 * torch.randn(2, obs_dim, generator=generator)
     control_start = policy.proprio_actor_dim + policy.depth_flat_dim
-    sample[:, control_start] = torch.tensor([0.0, 1.0, 2.0])
-    if policy.actor_control_dim >= 2:
-        sample[:, control_start + 1] = 0.25
+    sample[:, control_start] = torch.tensor([0.0, 1.0])
 
     reference = FullPolicyExporter(policy, normalizer).to("cpu").eval()
     with torch.inference_mode():
@@ -136,10 +113,10 @@ def _validate_renet_torchscript(policy, normalizer, traced_model, obs_dim):
     if not torch.allclose(actual, expected, rtol=1.0e-4, atol=1.0e-5):
         max_error = (actual - expected).abs().max().item()
         raise RuntimeError(
-            "RENet TorchScript validation failed for VP/OP/Recovery; "
+            "RENet TorchScript validation failed for VP/OP; "
             f"maximum absolute error: {max_error:.6g}."
         )
-    print("[SUCCESS] TorchScript VP/OP/Recovery routing validation passed.")
+    print("[SUCCESS] TorchScript VP/OP routing validation passed.")
 
 
 def _get_policy_obs_dim(policy):
@@ -285,8 +262,7 @@ def export_policy_as_onnx(policy, normalizer, path, filename="policy.onnx"):
     exporter.to("cpu")
     exporter.eval()
 
-    # Compute the raw actor-observation width. RENet includes actor_mode and
-    # recovery beta in its control suffix.
+    # Compute the raw actor-observation width. RENet includes one estimator mask.
     obs_dim = _get_policy_obs_dim(policy)
     dummy_input = torch.zeros(1, obs_dim)
 

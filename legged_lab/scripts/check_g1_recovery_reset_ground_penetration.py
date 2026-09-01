@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Sequentially visualize G1 Recovery reset states for manual inspection.
+"""Sequentially visualize exact G1 Recovery trajectory frames for manual QC.
 
 - Exactly one G1 robot.
-- One reset state/file is shown at a time.
-- Each state is frozen for 2 seconds by default.
+- One integer trajectory frame is shown at a time.
+- Each frame is frozen for 2 seconds by default.
 - No env.step() and no sim.step().
-- Terminal prints current index / total count / state_id / file name.
+- Terminal prints current index / total count / motion/frame ID / file name.
 """
 
 from __future__ import annotations
@@ -27,28 +27,34 @@ if str(LOCAL_RSL_RL_PATH) not in sys.path:
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--reset_dir",
+        "--motion_dir",
         type=Path,
         default=None,
-        help="Optional reset-state directory override.",
+        help="Optional Recovery trajectory directory override.",
     )
     parser.add_argument(
         "--display_s",
         type=float,
         default=2.0,
-        help="Seconds to display each reset state. Default: 2.0.",
+        help="Seconds to display each trajectory frame. Default: 2.0.",
     )
     parser.add_argument(
-        "--start_state",
+        "--motion_id",
         type=int,
         default=0,
-        help="Zero-based first state_id to display. Default: 0.",
+        help="Zero-based motion ID after filename sorting. Default: 0.",
     )
     parser.add_argument(
-        "--end_state",
+        "--start_frame",
+        type=int,
+        default=0,
+        help="Zero-based first integer frame to display. Default: 0.",
+    )
+    parser.add_argument(
+        "--end_frame",
         type=int,
         default=None,
-        help="Optional zero-based inclusive last state_id.",
+        help="Optional zero-based inclusive last frame.",
     )
     parser.add_argument(
         "--camera_distance",
@@ -81,7 +87,7 @@ from isaaclab.app import AppLauncher
 
 
 parser = argparse.ArgumentParser(
-    description="Sequential manual QC for G1 Recovery reset states."
+    description="Sequential manual QC for exact G1 Recovery trajectory frames."
 )
 add_arguments(parser)
 AppLauncher.add_app_launcher_args(parser)
@@ -91,10 +97,12 @@ if args.headless:
     parser.error("This visualizer requires GUI. Do not use --headless.")
 if args.display_s <= 0.0:
     parser.error("--display_s must be > 0.")
-if args.start_state < 0:
-    parser.error("--start_state must be >= 0.")
-if args.end_state is not None and args.end_state < args.start_state:
-    parser.error("--end_state must be >= --start_state.")
+if args.motion_id < 0:
+    parser.error("--motion_id must be >= 0.")
+if args.start_frame < 0:
+    parser.error("--start_frame must be >= 0.")
+if args.end_frame is not None and args.end_frame < args.start_frame:
+    parser.error("--end_frame must be >= --start_frame.")
 if args.camera_distance <= 0.0:
     parser.error("--camera_distance must be > 0.")
 if args.camera_height <= 0.0:
@@ -112,40 +120,32 @@ from legged_lab.envs.g1.g1_recovery_cfg import G1RecoveryEnvCfg
 from legged_lab.envs.g1.g1_recovery_env import G1RecoveryEnv
 
 
-def configure_reset_dir(cfg: G1RecoveryEnvCfg) -> Path | None:
-    """Apply an optional reset directory override."""
-    if args.reset_dir is None:
-        if hasattr(cfg, "reset") and hasattr(cfg.reset, "state_dir"):
-            value = getattr(cfg.reset, "state_dir")
+def configure_motion_dir(cfg: G1RecoveryEnvCfg) -> Path | None:
+    """Apply an optional trajectory directory override."""
+    if args.motion_dir is None:
+        if hasattr(cfg, "reset") and hasattr(cfg.reset, "motion_dir"):
+            value = getattr(cfg.reset, "motion_dir")
             if value:
                 return Path(str(value)).expanduser().resolve()
         return None
 
-    reset_dir = args.reset_dir.expanduser().resolve()
-    if not reset_dir.is_dir():
-        raise FileNotFoundError(f"Reset directory not found: {reset_dir}")
+    motion_dir = args.motion_dir.expanduser().resolve()
+    if not motion_dir.is_dir():
+        raise FileNotFoundError(f"Motion directory not found: {motion_dir}")
 
-    if not hasattr(cfg, "reset") or not hasattr(cfg.reset, "state_dir"):
+    if not hasattr(cfg, "reset") or not hasattr(cfg.reset, "motion_dir"):
         raise RuntimeError(
-            "G1RecoveryEnvCfg has no reset.state_dir field; "
-            "--reset_dir cannot be applied."
+            "G1RecoveryEnvCfg has no reset.motion_dir field; "
+            "--motion_dir cannot be applied."
         )
 
-    cfg.reset.state_dir = str(reset_dir)
-    return reset_dir
+    cfg.reset.motion_dir = str(motion_dir)
+    return motion_dir
 
 
-def get_state_file_name(loader, state_id: int) -> str:
-    """Return the reset NPZ file name using loader ordering."""
-    state_files = getattr(loader, "state_files", None)
-    if state_files is not None and len(state_files) > state_id:
-        return Path(str(state_files[state_id])).name
-
-    files = getattr(loader, "files", None)
-    if files is not None and len(files) > state_id:
-        return Path(str(files[state_id])).name
-
-    return f"state_{state_id:04d}.npz"
+def get_motion_file_name(loader, motion_id: int) -> str:
+    """Return the trajectory NPZ file name using loader ordering."""
+    return loader.clips[motion_id].path.name
 
 
 def set_camera(env: G1RecoveryEnv) -> None:
@@ -174,32 +174,35 @@ def set_camera(env: G1RecoveryEnv) -> None:
 
 
 @torch.no_grad()
-def show_state(
+def show_frame(
     env: G1RecoveryEnv,
-    state_id: int,
+    motion_id: int,
+    frame_id: int,
     current_index: int,
     total_to_show: int,
-    total_dataset_states: int,
+    total_motion_frames: int,
 ) -> bool:
-    """Load one exact reset state and freeze-render it."""
+    """Load one exact trajectory frame and freeze-render it."""
     if not simulation_app.is_running():
         return False
 
     env_ids = torch.tensor([0], dtype=torch.long, device=env.device)
-    state_ids = torch.tensor([state_id], dtype=torch.long, device=env.device)
+    motion_ids = torch.tensor([motion_id], dtype=torch.long, device=env.device)
+    frame_ids = torch.tensor([frame_id], dtype=torch.long, device=env.device)
 
     # Use the exact deterministic reset path from the real Recovery environment.
-    env.reset_to_state_ids(env_ids, state_ids)
+    env.reset_to_motion_frames(env_ids, motion_ids, frame_ids)
 
     # Update kinematics/Fabric only. Do NOT integrate physics.
     env.sim.forward()
     env.scene.update(dt=env.physics_dt)
 
-    file_name = get_state_file_name(env.reset_state_loader, state_id)
+    file_name = get_motion_file_name(env.reset_motion_loader, motion_id)
 
     print(
         f"[{current_index}/{total_to_show}] "
-        f"state_id={state_id}/{total_dataset_states - 1} | "
+        f"motion_id={motion_id}/{env.reset_motion_loader.num_motions - 1} | "
+        f"frame_id={frame_id}/{total_motion_frames - 1} | "
         f"file={file_name}",
         flush=True,
     )
@@ -236,53 +239,59 @@ def main() -> None:
     cfg.scene.terrain_type = "plane"
     cfg.scene.terrain_generator = None
 
-    reset_dir = configure_reset_dir(cfg)
+    motion_dir = configure_motion_dir(cfg)
 
     env = G1RecoveryEnv(cfg=cfg, headless=False)
-    loader = env.reset_state_loader
+    loader = env.reset_motion_loader
 
-    total_states = int(loader.num_states)
-    if total_states <= 0:
-        raise RuntimeError("Recovery reset loader contains no states.")
-
-    start_state = int(args.start_state)
-    if start_state >= total_states:
+    if args.motion_id >= loader.num_motions:
         raise IndexError(
-            f"--start_state={start_state} is out of range. "
-            f"Dataset has {total_states} states."
+            f"--motion_id={args.motion_id} is out of range; "
+            f"dataset has {loader.num_motions} motions."
+        )
+    clip = loader.clips[args.motion_id]
+    total_frames = int(clip.num_frames)
+
+    start_frame = int(args.start_frame)
+    if start_frame >= total_frames:
+        raise IndexError(
+            f"--start_frame={start_frame} is out of range. "
+            f"Motion {clip.name!r} has {total_frames} frames."
         )
 
-    if args.end_state is None:
-        end_state = total_states - 1
+    if args.end_frame is None:
+        end_frame = total_frames - 1
     else:
-        end_state = min(int(args.end_state), total_states - 1)
+        end_frame = min(int(args.end_frame), total_frames - 1)
 
-    total_to_show = end_state - start_state + 1
+    total_to_show = end_frame - start_frame + 1
 
     set_camera(env)
 
     print()
     print("=" * 100)
-    print("G1 Recovery Reset Sequential Manual QC")
-    print(f"Total reset files : {total_states}")
-    print(f"Viewing state_ids : {start_state} .. {end_state}")
-    print(f"Files this run    : {total_to_show}")
-    print(f"Time per file     : {args.display_s:.2f} s")
+    print("G1 Recovery Trajectory-Frame Sequential Manual QC")
+    print(f"Motion            : {args.motion_id} | {clip.path.name}")
+    print(f"Total frames      : {total_frames}")
+    print(f"Viewing frame_ids : {start_frame} .. {end_frame}")
+    print(f"Frames this run   : {total_to_show}")
+    print(f"Time per frame    : {args.display_s:.2f} s")
     print("Physics           : OFF (freeze only)")
-    if reset_dir is not None:
-        print(f"Reset directory   : {reset_dir}")
+    if motion_dir is not None:
+        print(f"Motion directory  : {motion_dir}")
     print("=" * 100, flush=True)
 
-    for current_index, state_id in enumerate(
-        range(start_state, end_state + 1),
+    for current_index, frame_id in enumerate(
+        range(start_frame, end_frame + 1),
         start=1,
     ):
-        keep_running = show_state(
+        keep_running = show_frame(
             env=env,
-            state_id=state_id,
+            motion_id=args.motion_id,
+            frame_id=frame_id,
             current_index=current_index,
             total_to_show=total_to_show,
-            total_dataset_states=total_states,
+            total_motion_frames=total_frames,
         )
 
         if not keep_running:
@@ -291,8 +300,8 @@ def main() -> None:
 
     print()
     print("=" * 100)
-    print(f"Finished: displayed {total_to_show}/{total_to_show} reset files.")
-    print("The final reset state remains visible until the window is closed.")
+    print(f"Finished: displayed {total_to_show}/{total_to_show} trajectory frames.")
+    print("The final trajectory frame remains visible until the window is closed.")
     print("=" * 100, flush=True)
 
     while simulation_app.is_running():

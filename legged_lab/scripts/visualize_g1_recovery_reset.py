@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Visualize and quality-check physical G1 Recovery reset states.
+"""Visualize and quality-check physical G1 Recovery trajectory-frame resets.
 
 This tool always uses :class:`G1RecoveryEnv` and its shared reset path. Freeze
 mode performs no physics integration. Hold mode advances PhysX directly while
@@ -27,7 +27,7 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
         "--num_envs",
         type=int,
         default=9,
-        help="Number of G1 environments. Ignored when --state_ids is supplied.",
+        help="Number of G1 environments. Ignored when fixed IDs are supplied.",
     )
     parser.add_argument(
         "--mode",
@@ -36,11 +36,18 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
         help="Freeze exact reset poses or run low-level PhysX hold QC.",
     )
     parser.add_argument(
-        "--state_ids",
+        "--motion_ids",
         nargs="*",
         type=int,
         default=None,
-        help="Optional deterministic zero-based reset-state IDs.",
+        help="Optional deterministic zero-based trajectory IDs.",
+    )
+    parser.add_argument(
+        "--frame_ids",
+        nargs="*",
+        type=int,
+        default=None,
+        help="Integer frame IDs paired one-to-one with --motion_ids.",
     )
     parser.add_argument(
         "--resample_interval_s",
@@ -94,7 +101,7 @@ from isaaclab.app import AppLauncher
 
 
 parser = argparse.ArgumentParser(
-    description="Visualize Stage-4.2c G1 Recovery physical reset states."
+    description="Visualize exact G1 Recovery trajectory-frame resets."
 )
 _add_arguments(parser)
 AppLauncher.add_app_launcher_args(parser)
@@ -104,18 +111,24 @@ if args.headless:
     parser.error("G1 Recovery reset visualization requires GUI; do not use --headless.")
 if args.num_envs <= 0:
     parser.error("--num_envs must be positive.")
-if args.state_ids is not None and not args.state_ids:
-    parser.error("--state_ids requires at least one state ID.")
-if args.state_ids is not None and any(state_id < 0 for state_id in args.state_ids):
-    parser.error("--state_ids must contain non-negative zero-based IDs.")
+if (args.motion_ids is None) != (args.frame_ids is None):
+    parser.error("--motion_ids and --frame_ids must be supplied together.")
+if args.motion_ids is not None and not args.motion_ids:
+    parser.error("Fixed trajectory-frame IDs require at least one pair.")
+if args.motion_ids is not None and len(args.motion_ids) != len(args.frame_ids):
+    parser.error("--motion_ids and --frame_ids must have equal lengths.")
+if args.motion_ids is not None and any(value < 0 for value in args.motion_ids):
+    parser.error("--motion_ids must contain non-negative zero-based IDs.")
+if args.frame_ids is not None and any(value < 0 for value in args.frame_ids):
+    parser.error("--frame_ids must contain non-negative zero-based IDs.")
 if args.resample_interval_s <= 0.0:
     parser.error("--resample_interval_s must be positive.")
 if args.hold_s <= 0.0:
     parser.error("--hold_s must be positive.")
 if args.camera_height is not None and args.camera_height <= 0.0:
     parser.error("--camera_height must be positive.")
-if args.state_ids is not None:
-    args.num_envs = len(args.state_ids)
+if args.motion_ids is not None:
+    args.num_envs = len(args.motion_ids)
 
 app_launcher = AppLauncher(args)
 simulation_app = app_launcher.app
@@ -158,44 +171,49 @@ def _set_grid_camera(env: G1RecoveryEnv) -> None:
     )
 
 
-def _format_value(value, precision=3) -> str:
-    if value is None:
-        return "N/A"
-    if isinstance(value, float):
-        return f"{value:.{precision}f}"
-    return str(value)
-
-
-def _print_reset_batch(env: G1RecoveryEnv, state_ids: torch.Tensor) -> None:
-    ids = state_ids.detach().cpu().tolist()
+def _print_reset_batch(
+    env: G1RecoveryEnv,
+    motion_ids: torch.Tensor,
+    frame_ids: torch.Tensor,
+) -> None:
+    motion_id_list = motion_ids.detach().cpu().tolist()
+    frame_id_list = frame_ids.detach().cpu().tolist()
     print("\n" + "=" * 174)
     print("Recovery Reset Batch")
-    print("state IDs:", ids)
+    print("motion IDs:", motion_id_list)
+    print("frame IDs :", frame_id_list)
     if args.print_metadata:
-        metadata = env.reset_state_loader.get_metadata(state_ids)
+        sample = env.reset_motion_loader.get_frame_batch(motion_ids, frame_ids)
+        root_index = env.reset_motion_loader.root_body_index
+        _, torso_up_z = env._compute_torso_upright()
+        root_lin_speed = torch.linalg.vector_norm(
+            sample["body_lin_vel_w"][:, root_index], dim=-1
+        )
+        root_ang_speed = torch.linalg.vector_norm(
+            sample["body_ang_vel_w"][:, root_index], dim=-1
+        )
+        mean_joint_speed = torch.mean(torch.abs(sample["joint_vel"]), dim=-1)
         header = (
-            f"{'env':>3} {'state_id':>8} {'source_file':<38} "
-            f"{'source_frame':>12} {'source_time_s':>13} "
+            f"{'env':>3} {'motion_id':>9} {'frame_id':>8} {'source_file':<38} "
             f"{'pelvis_height':>14} {'torso_up_z':>11} "
             f"{'root_lin_speed':>14} {'root_ang_speed':>14} "
             f"{'mean_joint_speed':>16}"
         )
         print(header)
         print("-" * len(header))
-        for env_index, (state_id, row) in enumerate(zip(ids, metadata)):
-            source = row.get("source_file")
-            source = "N/A" if source is None else Path(str(source)).name
+        for env_index, (motion_id, frame_id) in enumerate(
+            zip(motion_id_list, frame_id_list)
+        ):
+            source = env.reset_motion_loader.clips[motion_id].path.name
             if len(source) > 38:
                 source = source[:35] + "..."
             print(
-                f"{env_index:>3} {state_id:>8} {source:<38} "
-                f"{_format_value(row.get('source_frame')):>12} "
-                f"{_format_value(row.get('source_time_s')):>13} "
-                f"{_format_value(row.get('pelvis_height')):>14} "
-                f"{_format_value(row.get('torso_up_z')):>11} "
-                f"{_format_value(row.get('root_lin_speed')):>14} "
-                f"{_format_value(row.get('root_ang_speed')):>14} "
-                f"{_format_value(row.get('mean_joint_speed')):>16}"
+                f"{env_index:>3} {motion_id:>9} {frame_id:>8} {source:<38} "
+                f"{float(sample['body_pos_w'][env_index, root_index, 2]):>14.3f} "
+                f"{float(torso_up_z[env_index]):>11.3f} "
+                f"{float(root_lin_speed[env_index]):>14.3f} "
+                f"{float(root_ang_speed[env_index]):>14.3f} "
+                f"{float(mean_joint_speed[env_index]):>16.3f}"
             )
     print("=" * 174, flush=True)
 
@@ -203,15 +221,17 @@ def _print_reset_batch(env: G1RecoveryEnv, state_ids: torch.Tensor) -> None:
 def _reset_batch(
     env: G1RecoveryEnv,
     env_ids: torch.Tensor,
-    fixed_state_ids: torch.Tensor | None,
-) -> torch.Tensor:
-    if fixed_state_ids is None:
+    fixed_motion_ids: torch.Tensor | None,
+    fixed_frame_ids: torch.Tensor | None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if fixed_motion_ids is None:
         env.reset(env_ids)
     else:
-        env.reset_to_state_ids(env_ids, fixed_state_ids)
-    state_ids = env.last_reset_state_ids[env_ids].clone()
-    _print_reset_batch(env, state_ids)
-    return state_ids
+        env.reset_to_motion_frames(env_ids, fixed_motion_ids, fixed_frame_ids)
+    motion_ids = env.last_reset_motion_ids[env_ids].clone()
+    frame_ids = env.last_reset_frame_ids[env_ids].clone()
+    _print_reset_batch(env, motion_ids, frame_ids)
+    return motion_ids, frame_ids
 
 
 def _quaternion_angle(initial_quat, final_quat):
@@ -224,7 +244,8 @@ def _quaternion_angle(initial_quat, final_quat):
 def _run_hold_qc(
     env: G1RecoveryEnv,
     env_ids: torch.Tensor,
-    state_ids: torch.Tensor,
+    motion_ids: torch.Tensor,
+    frame_ids: torch.Tensor,
 ) -> None:
     initial_root_pos = env.robot.data.root_link_pos_w[env_ids].clone()
     initial_root_quat = env.robot.data.root_link_quat_w[env_ids].clone()
@@ -286,14 +307,17 @@ def _run_hold_qc(
     print("\n" + "=" * 128)
     print("Recovery Reset Hold QC (no automatic good/bad threshold)")
     print(
-        f"{'env':>3} {'state_id':>8} {'root_disp_m':>14} "
+        f"{'env':>3} {'motion_id':>9} {'frame_id':>8} {'root_disp_m':>14} "
         f"{'root_angle_change_rad':>22} "
         f"{'max_root_lin_speed':>20} {'max_root_ang_speed':>20}"
     )
-    ids = state_ids.detach().cpu().tolist()
-    for row_index, state_id in enumerate(ids):
+    motion_id_list = motion_ids.detach().cpu().tolist()
+    frame_id_list = frame_ids.detach().cpu().tolist()
+    for row_index, (motion_id, frame_id) in enumerate(
+        zip(motion_id_list, frame_id_list)
+    ):
         print(
-            f"{int(env_ids[row_index]):>3} {state_id:>8} "
+            f"{int(env_ids[row_index]):>3} {motion_id:>9} {frame_id:>8} "
             f"{float(root_displacement[row_index]):>14.6f} "
             f"{float(root_angle_change[row_index]):>22.6f} "
             f"{float(max_root_lin_speed[row_index]):>20.6f} "
@@ -305,9 +329,10 @@ def _run_hold_qc(
 def _run_freeze(
     env: G1RecoveryEnv,
     env_ids: torch.Tensor,
-    fixed_state_ids: torch.Tensor | None,
+    fixed_motion_ids: torch.Tensor | None,
+    fixed_frame_ids: torch.Tensor | None,
 ) -> None:
-    _reset_batch(env, env_ids, fixed_state_ids)
+    _reset_batch(env, env_ids, fixed_motion_ids, fixed_frame_ids)
     env.sim.render()
     if not args.loop:
         return
@@ -315,10 +340,15 @@ def _run_freeze(
     last_random_reset_time = time.perf_counter()
     while simulation_app.is_running():
         env.sim.render()
-        if fixed_state_ids is None:
+        if fixed_motion_ids is None:
             now = time.perf_counter()
             if now - last_random_reset_time >= args.resample_interval_s:
-                _reset_batch(env, env_ids, fixed_state_ids=None)
+                _reset_batch(
+                    env,
+                    env_ids,
+                    fixed_motion_ids=None,
+                    fixed_frame_ids=None,
+                )
                 last_random_reset_time = now
         time.sleep(RENDER_PERIOD_S)
 
@@ -326,17 +356,20 @@ def _run_freeze(
 def _run_hold(
     env: G1RecoveryEnv,
     env_ids: torch.Tensor,
-    fixed_state_ids: torch.Tensor | None,
+    fixed_motion_ids: torch.Tensor | None,
+    fixed_frame_ids: torch.Tensor | None,
 ) -> None:
     while simulation_app.is_running():
         batch_start_time = time.perf_counter()
-        state_ids = _reset_batch(env, env_ids, fixed_state_ids)
-        _run_hold_qc(env, env_ids, state_ids)
+        motion_ids, frame_ids = _reset_batch(
+            env, env_ids, fixed_motion_ids, fixed_frame_ids
+        )
+        _run_hold_qc(env, env_ids, motion_ids, frame_ids)
         env.sim.render()
         if not args.loop:
             return
 
-        if fixed_state_ids is None:
+        if fixed_motion_ids is None:
             while simulation_app.is_running():
                 elapsed = time.perf_counter() - batch_start_time
                 if elapsed >= args.resample_interval_s:
@@ -356,10 +389,14 @@ def main() -> None:
     cfg.scene.terrain_generator = None
     env = G1RecoveryEnv(cfg=cfg, headless=False)
     env_ids = torch.arange(env.num_envs, dtype=torch.long, device=env.device)
-    fixed_state_ids = None
-    if args.state_ids is not None:
-        fixed_state_ids = torch.tensor(
-            args.state_ids, dtype=torch.long, device=env.device
+    fixed_motion_ids = None
+    fixed_frame_ids = None
+    if args.motion_ids is not None:
+        fixed_motion_ids = torch.tensor(
+            args.motion_ids, dtype=torch.long, device=env.device
+        )
+        fixed_frame_ids = torch.tensor(
+            args.frame_ids, dtype=torch.long, device=env.device
         )
 
     _set_grid_camera(env)
@@ -368,9 +405,9 @@ def main() -> None:
         f"num_envs={env.num_envs}, loop={args.loop}."
     )
     if args.mode == "freeze":
-        _run_freeze(env, env_ids, fixed_state_ids)
+        _run_freeze(env, env_ids, fixed_motion_ids, fixed_frame_ids)
     else:
-        _run_hold(env, env_ids, fixed_state_ids)
+        _run_hold(env, env_ids, fixed_motion_ids, fixed_frame_ids)
 
 
 if __name__ == "__main__":

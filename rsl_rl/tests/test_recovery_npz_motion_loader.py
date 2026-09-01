@@ -46,6 +46,7 @@ EXPECTED_SHAPES = {
     "body_lin_vel_w": (512, 24, 3),
     "body_ang_vel_w": (512, 24, 3),
 }
+STATE_FIELDS = tuple(EXPECTED_SHAPES)
 
 
 @pytest.fixture(scope="module")
@@ -68,6 +69,75 @@ def test_loads_real_recovery_dataset_and_metadata(loader):
     assert indices.dtype == torch.long
     assert indices.device == loader.device
     assert [loader.body_names[index] for index in indices.tolist()] == list(REQUIRED_BODIES)
+
+
+def test_get_frame_batch_reads_exact_integer_frames_including_last(loader):
+    motion_ids = torch.tensor(
+        [0, loader.num_motions - 1, 0], dtype=torch.long, device=loader.device
+    )
+    frame_ids = torch.tensor(
+        [0, loader.clips[-1].num_frames - 1, loader.clips[0].num_frames - 1],
+        dtype=torch.long,
+        device=loader.device,
+    )
+
+    sample = loader.get_frame_batch(motion_ids, frame_ids)
+    torch.testing.assert_close(sample["motion_ids"], motion_ids, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(sample["frame_ids"], frame_ids, rtol=0.0, atol=0.0)
+    for batch_index, (motion_id, frame_id) in enumerate(
+        zip(motion_ids.tolist(), frame_ids.tolist())
+    ):
+        clip = loader.clips[motion_id]
+        for field in STATE_FIELDS:
+            torch.testing.assert_close(
+                sample[field][batch_index],
+                getattr(clip, field)[frame_id],
+                rtol=0.0,
+                atol=0.0,
+            )
+
+
+def test_get_frame_batch_rejects_invalid_ids(loader):
+    with pytest.raises(ValueError, match="motion_ids"):
+        loader.get_frame_batch([loader.num_motions], [0])
+    with pytest.raises(IndexError, match="out-of-range"):
+        loader.get_frame_batch([0], [loader.clips[0].num_frames])
+    with pytest.raises(IndexError, match="out-of-range"):
+        loader.get_frame_batch([0], [-1])
+    with pytest.raises(ValueError, match="shape"):
+        loader.get_frame_batch([0, 1], [0])
+
+
+def test_sample_frame_batch_uses_global_integer_frame_indexing(loader, monkeypatch):
+    def deterministic_randint(high, size, *, dtype, device):
+        assert high == loader.total_frames
+        assert size == (loader.total_frames,)
+        assert dtype == torch.long
+        assert device == loader.device
+        return torch.arange(loader.total_frames, dtype=dtype, device=device)
+
+    monkeypatch.setattr(torch, "randint", deterministic_randint)
+    sample = loader.sample_frame_batch(loader.total_frames)
+    expected_motion_ids = torch.repeat_interleave(
+        torch.arange(loader.num_motions, device=loader.device),
+        loader.motion_num_frames,
+    )
+    expected_frame_ids = torch.cat(
+        [
+            torch.arange(clip.num_frames, device=loader.device)
+            for clip in loader.clips
+        ]
+    )
+    torch.testing.assert_close(
+        sample["motion_ids"], expected_motion_ids, rtol=0.0, atol=0.0
+    )
+    torch.testing.assert_close(
+        sample["frame_ids"], expected_frame_ids, rtol=0.0, atol=0.0
+    )
+    assert torch.equal(
+        sample["frame_ids"][loader.motion_frame_ends - 1],
+        loader.motion_num_frames - 1,
+    )
 
 
 @pytest.mark.parametrize("transition_dt", [0.01, 0.02])

@@ -93,16 +93,6 @@ def action_rate_l2(env: BaseEnv  | G1ROUGHEnv |G1Env) -> torch.Tensor:
     )
 
 
-def locomotion_action_rate_l2(env: BaseEnv | G1ROUGHEnv | G1Env) -> torch.Tensor:
-    """Read the action-time Locomotion-only rate cost prepared by RENet."""
-    return env.locomotion_action_rate_value
-
-
-def recovery_action_rate_l2(env: BaseEnv | G1ROUGHEnv | G1Env) -> torch.Tensor:
-    """Read the action-time Recovery-only rate cost prepared by the environment."""
-    return env.recovery_action_rate_value
-
-
 # Standalone G1 Recovery rewards.
 def recovery_root_height_exp(
     env,
@@ -118,6 +108,14 @@ def recovery_root_height_exp(
         -torch.square(default_height - env.pelvis_height) / std**2
     )
     return env.height_reward_raw
+
+
+def recovery_torso_upright(env) -> torch.Tensor:
+    """Reward the torso up-axis alignment with the opposite of gravity."""
+
+    _, torso_up_z = env._compute_torso_upright()
+    env.upright_reward_raw = torch.clamp(torso_up_z, min=0.0, max=1.0)
+    return env.upright_reward_raw
 
 
 def recovery_joint_acc_l2(
@@ -162,11 +160,6 @@ def recovery_self_collisions(env, force_threshold: float) -> torch.Tensor:
     return env.self_collision_cost
 
 
-def enter_recovery_event(env: BaseEnv | G1ROUGHEnv | G1Env) -> torch.Tensor:
-    """Indicate a NORMAL -> Recovery transition for locomotion failure penalty."""
-    return env.enter_recovery_buf.float()
-
-
 def undesired_contacts(env: BaseEnv  | G1ROUGHEnv |G1Env, threshold: float, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
     net_contact_forces = contact_sensor.data.net_forces_w_history
@@ -208,28 +201,6 @@ def feet_air_time_positive_biped(
     # no reward for zero command
     reward *= (
         torch.norm(env.command_generator.command[:, :2], dim=1) + torch.abs(env.command_generator.command[:, 2])
-    ) > 0.1
-    return reward
-
-
-def locomotion_feet_air_time_positive_biped(
-    env: BaseEnv | G1ROUGHEnv | G1Env,
-    threshold: float,
-) -> torch.Tensor:
-    """Use RENet's Locomotion-only foot timers with the existing reward math."""
-    air_time = env.locomotion_feet_air_time
-    contact_time = env.locomotion_feet_contact_time
-    in_contact = contact_time > 0.0
-    in_mode_time = torch.where(in_contact, contact_time, air_time)
-    single_stance = torch.sum(in_contact.int(), dim=1) == 1
-    reward = torch.min(
-        torch.where(single_stance.unsqueeze(-1), in_mode_time, 0.0),
-        dim=1,
-    )[0]
-    reward = torch.clamp(reward, max=threshold)
-    reward *= (
-        torch.norm(env.command_generator.command[:, :2], dim=1)
-        + torch.abs(env.command_generator.command[:, 2])
     ) > 0.1
     return reward
 

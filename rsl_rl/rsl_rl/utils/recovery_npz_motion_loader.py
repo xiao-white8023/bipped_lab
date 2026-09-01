@@ -59,6 +59,11 @@ class RecoveryNPZMotionLoader:
             "body_ang_vel_w",
             "joint_names",
             "body_names",
+            "root_body_index",
+            "root_body_name",
+            "quaternion_convention",
+            "velocity_frame",
+            "body_state_frame",
         }
     )
     SAMPLING_MODES = frozenset({"uniform_frame", "uniform_motion"})
@@ -114,6 +119,13 @@ class RecoveryNPZMotionLoader:
         self.motion_num_frames = torch.tensor(
             [clip.num_frames for clip in self.clips], dtype=torch.long, device=self.device
         )
+        self.motion_frame_offsets = torch.cat(
+            (
+                torch.zeros(1, dtype=torch.long, device=self.device),
+                torch.cumsum(self.motion_num_frames, dim=0)[:-1],
+            )
+        )
+        self.motion_frame_ends = torch.cumsum(self.motion_num_frames, dim=0)
         self.motion_durations = torch.tensor(
             [clip.duration for clip in self.clips], dtype=torch.float64, device=self.device
         )
@@ -494,6 +506,83 @@ class RecoveryNPZMotionLoader:
         if ids.numel() and (torch.any(ids < 0) or torch.any(ids >= self.num_motions)):
             raise ValueError(f"motion_ids must be between 0 and {self.num_motions - 1}.")
         return ids
+
+    def _frame_ids_tensor(self, frame_ids, motion_ids: torch.Tensor) -> torch.Tensor:
+        ids = torch.as_tensor(frame_ids, device=self.device)
+        batch_size = motion_ids.shape[0]
+        if ids.ndim != 1 or ids.shape[0] != batch_size:
+            raise ValueError(
+                f"frame_ids must have shape [{batch_size}], got {tuple(ids.shape)}."
+            )
+        if ids.dtype == torch.bool or ids.is_floating_point() or ids.is_complex():
+            raise ValueError("frame_ids must contain integers.")
+        ids = ids.to(dtype=torch.long)
+        if ids.numel():
+            selected_num_frames = self.motion_num_frames[motion_ids]
+            invalid = (ids < 0) | (ids >= selected_num_frames)
+            if torch.any(invalid):
+                first_invalid = int(torch.nonzero(invalid, as_tuple=False)[0].item())
+                raise IndexError(
+                    "frame_ids contains an out-of-range index at batch position "
+                    f"{first_invalid}: motion_id={int(motion_ids[first_invalid].item())}, "
+                    f"frame_id={int(ids[first_invalid].item())}, valid range="
+                    f"[0, {int(selected_num_frames[first_invalid].item()) - 1}]."
+                )
+        return ids
+
+    def get_frame_batch(self, motion_ids, frame_ids) -> Dict[str, torch.Tensor]:
+        """Read exact integer frames without continuous-time interpolation."""
+
+        motion_ids = self._motion_ids_tensor(motion_ids)
+        frame_ids = self._frame_ids_tensor(frame_ids, motion_ids)
+        batch_size = motion_ids.shape[0]
+        result = {
+            "motion_ids": motion_ids.clone(),
+            "frame_ids": frame_ids.clone(),
+            "joint_pos": torch.empty(
+                (batch_size, self.num_joints), dtype=torch.float32, device=self.device
+            ),
+            "joint_vel": torch.empty(
+                (batch_size, self.num_joints), dtype=torch.float32, device=self.device
+            ),
+            "body_pos_w": torch.empty(
+                (batch_size, self.num_bodies, 3), dtype=torch.float32, device=self.device
+            ),
+            "body_quat_w": torch.empty(
+                (batch_size, self.num_bodies, 4), dtype=torch.float32, device=self.device
+            ),
+            "body_lin_vel_w": torch.empty(
+                (batch_size, self.num_bodies, 3), dtype=torch.float32, device=self.device
+            ),
+            "body_ang_vel_w": torch.empty(
+                (batch_size, self.num_bodies, 3), dtype=torch.float32, device=self.device
+            ),
+        }
+
+        for motion_id, clip in enumerate(self.clips):
+            mask = motion_ids == motion_id
+            if not torch.any(mask):
+                continue
+            selected_frames = frame_ids[mask]
+            for field in _STATE_FIELDS:
+                result[field][mask] = getattr(clip, field)[selected_frames]
+        return result
+
+    def sample_frame_batch(self, batch_size) -> Dict[str, torch.Tensor]:
+        """Sample every stored trajectory frame with equal probability."""
+
+        batch_size = self._validate_batch_size(batch_size)
+        flat_frame_ids = torch.randint(
+            self.total_frames,
+            (batch_size,),
+            dtype=torch.long,
+            device=self.device,
+        )
+        motion_ids = torch.searchsorted(
+            self.motion_frame_ends, flat_frame_ids, right=True
+        )
+        frame_ids = flat_frame_ids - self.motion_frame_offsets[motion_ids]
+        return self.get_frame_batch(motion_ids, frame_ids)
 
     @staticmethod
     def _validate_transition_dt(transition_dt) -> float:

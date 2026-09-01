@@ -240,7 +240,7 @@ class AMPPPO:
         self.amp_transition.observations = amp_obs
         return self.transition.actions
 
-    def process_env_step(self, rewards, dones, infos, amp_obs, recovery_mask_t=None):
+    def process_env_step(self, rewards, dones, infos, amp_obs):
         # Record the rewards and dones
         # Note: we clone here because later on we bootstrap the rewards based on timeouts
         self.transition.rewards = rewards.clone()
@@ -260,32 +260,16 @@ class AMPPPO:
 
         # Bootstrapping on time outs
         if "time_outs" in infos:
-            self.transition.time_outs = infos["time_outs"].to(self.device).clone().bool()
-        else:
-            self.transition.time_outs = torch.zeros_like(dones, dtype=torch.bool, device=self.device)
-        self._apply_timeout_bootstrap()
+            self.transition.rewards += self.gamma * torch.squeeze(
+                self.transition.values * infos["time_outs"].unsqueeze(1).to(self.device), 1
+            )
 
         # record the transition
-        self._store_amp_transition(self.amp_transition.observations, amp_obs, recovery_mask_t)
+        self.amp_storage.insert(self.amp_transition.observations, amp_obs)
         self.storage.add_transitions(self.transition)
         self.transition.clear()
         self.amp_transition.clear()
         self.policy.reset(dones)
-
-    def _apply_timeout_bootstrap(self):
-        """Apply the legacy PPO truncation correction using action-time V(s_t)."""
-        self.transition.rewards += self.gamma * torch.squeeze(
-            self.transition.values * self.transition.time_outs.unsqueeze(1), 1
-        )
-
-    def _store_amp_transition(self, amp_obs, next_amp_obs, recovery_mask_t=None):
-        """Store one AMP transition batch.
-
-        ``recovery_mask_t`` is accepted so specialized algorithms can route
-        transitions without changing the legacy single-discriminator API.
-        """
-        del recovery_mask_t
-        self.amp_storage.insert(amp_obs, next_amp_obs)
 
     def compute_returns(self, last_critic_obs):
         # compute value for the last step
@@ -302,7 +286,7 @@ class AMPPPO:
         return target_weight * (iteration / warmup_iters)
 
     def _amp_mini_batch_generator(self, num_updates: int, mini_batch_size: int):
-        """Yield policy/expert AMP pairs for the legacy discriminator."""
+        """Yield paired policy and expert AMP mini-batches."""
         policy_generator = self.amp_storage.feed_forward_generator(num_updates, mini_batch_size)
         expert_generator = self.amp_data.feed_forward_generator(num_updates, mini_batch_size)
         yield from zip(policy_generator, expert_generator)
@@ -314,7 +298,7 @@ class AMPPPO:
         sample_amp_policy,
         sample_amp_expert,
     ):
-        """Compute one discriminator branch without coupling it to PPO."""
+        """Compute the discriminator loss for one AMP data source."""
         policy_state, policy_next_state = sample_amp_policy
         expert_state, expert_next_state = sample_amp_expert
         if normalizer is not None:
@@ -329,10 +313,8 @@ class AMPPPO:
         expert_loss = torch.nn.MSELoss()(expert_d, torch.ones(expert_d.size(), device=self.device))
         policy_loss = torch.nn.MSELoss()(policy_d, -torch.ones(policy_d.size(), device=self.device))
         amp_loss = 0.5 * (expert_loss + policy_loss)
-        # Preserve the existing AMP behavior: gradient penalty is evaluated on
-        # the raw expert batch rather than the normalized local tensors above.
         grad_pen_loss = discriminator.compute_grad_pen(*sample_amp_expert, lambda_=10)
-        total_loss = self.amploss_coef * amp_loss + self.amploss_coef * grad_pen_loss
+        total_loss = self.amploss_coef * (amp_loss + grad_pen_loss)
         metrics = {
             "loss": amp_loss,
             "grad_pen": grad_pen_loss,
@@ -345,7 +327,7 @@ class AMPPPO:
         return total_loss, metrics, normalizer_update
 
     def _compute_amp_loss(self, sample_amp):
-        """Compute the legacy discriminator loss and legacy log fields."""
+        """Compute the standard single-discriminator AMP loss."""
         sample_amp_policy, sample_amp_expert = sample_amp
         total_loss, branch_metrics, normalizer_update = self._compute_single_amp_discriminator_loss(
             self.discriminator,
@@ -362,112 +344,14 @@ class AMPPPO:
         normalizer_updates = [] if normalizer_update is None else [normalizer_update]
         return total_loss, metrics, normalizer_updates
 
-    def _rollout_mini_batch_generator(self):
-        if self.policy.is_recurrent:
-            return self.storage.recurrent_mini_batch_generator(
-                self.num_mini_batches, self.num_learning_epochs
-            )
-        return self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
-
-    def _get_auxiliary_sample_mask(self, rollout_data, reference_tensor):
-        """Return an optional batch mask for estimator auxiliary supervision.
-
-        Ordinary AMP tasks retain their historical full-mini-batch behavior.
-        Specialized algorithms may return a boolean ``[batch_size]`` mask.
-        """
-        del rollout_data, reference_tensor
-        return None
-
-    @staticmethod
-    def _select_auxiliary_samples(prediction, target, sample_mask):
-        if prediction.shape[0] != target.shape[0]:
-            raise ValueError(
-                "Auxiliary prediction and target batch sizes must match: "
-                f"{prediction.shape[0]} != {target.shape[0]}."
-            )
-        if sample_mask is None:
-            return prediction, target
-        if not isinstance(sample_mask, torch.Tensor):
-            raise TypeError("Auxiliary sample mask must be a torch.Tensor or None.")
-        if sample_mask.dtype != torch.bool:
-            raise TypeError(f"Auxiliary sample mask must have dtype bool, got {sample_mask.dtype}.")
-        if sample_mask.device != prediction.device:
-            raise ValueError(
-                "Auxiliary sample mask and prediction must be on the same device: "
-                f"{sample_mask.device} != {prediction.device}."
-            )
-        if sample_mask.shape != (prediction.shape[0],):
-            raise ValueError(
-                "Auxiliary sample mask must have shape "
-                f"({prediction.shape[0]},), got {tuple(sample_mask.shape)}."
-            )
-        if not torch.any(sample_mask):
-            return None, None
-        return prediction[sample_mask], target[sample_mask]
-
-    @classmethod
-    def _masked_auxiliary_mse(cls, prediction, target, sample_mask):
-        selected_prediction, selected_target = cls._select_auxiliary_samples(
-            prediction, target, sample_mask
-        )
-        if selected_prediction is None:
-            return prediction.sum() * 0.0
-        return nn.functional.mse_loss(selected_prediction, selected_target)
-
-    @classmethod
-    def _masked_terrain_reconstruction_loss(cls, prediction, target, sample_mask):
-        selected_prediction, selected_target = cls._select_auxiliary_samples(
-            prediction, target, sample_mask
-        )
-        if selected_prediction is None:
-            return prediction.sum() * 0.0
-        # Preserve the existing global target normalization, but compute its
-        # statistics only from samples that actually receive supervision.
-        target_mean = selected_target.mean()
-        target_std = selected_target.std().clamp(min=1e-6)
-        normalized_target = (selected_target - target_mean) / target_std
-        return nn.functional.mse_loss(selected_prediction, normalized_target)
-
-    @staticmethod
-    def _compute_surrogate_loss(surrogate, surrogate_clipped, rollout_data=None, ratio=None):
-        del rollout_data, ratio
-        return torch.max(surrogate, surrogate_clipped).mean()
-
-    def _compute_value_losses(
-        self,
-        value_batch,
-        target_values_batch,
-        returns_batch,
-        critic_obs_batch,
-        rollout_data=None,
-    ):
-        del critic_obs_batch, rollout_data
-        if self.use_clipped_value_loss:
-            value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(
-                -self.clip_param, self.clip_param
-            )
-            value_losses = (value_batch - returns_batch).pow(2)
-            value_losses_clipped = (value_clipped - returns_batch).pow(2)
-            value_loss = torch.max(value_losses, value_losses_clipped).mean()
-        else:
-            value_loss = (returns_batch - value_batch).pow(2).mean()
-        return value_loss, value_batch.sum() * 0.0, {}
-
-    def _parameters_for_gradient_clipping(self):
-        return self.policy.parameters()
-
-    @staticmethod
-    def _update_amp_normalizers(normalizer_updates):
-        for normalizer, policy_state, expert_state in normalizer_updates:
-            normalizer.update(policy_state.detach().cpu().numpy())
-            normalizer.update(expert_state.detach().cpu().numpy())
-
     def update(self):  # noqa: C901
         mean_value_loss = 0
         mean_surrogate_loss = 0
         mean_entropy = 0
-        amp_metric_sums = {}
-        value_metric_sums = {}
+        mean_amp_loss = 0
+        mean_grad_pen_loss = 0
+        mean_policy_pred = 0
+        mean_expert_pred = 0
         # -- RND loss
         if self.rnd:
             mean_rnd_loss = 0
@@ -486,9 +370,6 @@ class AMPPPO:
         uses_renet_separate_supervision = False
         mean_terrain_recon_loss = 0
         mean_feet_height_loss = 0
-        auxiliary_mask_seen = False
-        auxiliary_loco_samples = 0.0
-        auxiliary_recovery_samples = 0.0
         vel_weight = self._get_warmup_weight(
             self.current_iteration, self.vel_estimation_warmup_iters, self.vel_estimation_coef
         )
@@ -500,18 +381,25 @@ class AMPPPO:
         )
 
         # generator for mini batches
-        generator = self._rollout_mini_batch_generator()
+        if self.policy.is_recurrent:
+            generator = self.storage.recurrent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
+        else:
+            generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs) # 分成4个批次 每一个批次利用5轮
 
-        num_updates = self.num_learning_epochs * self.num_mini_batches
-        amp_mini_batch_size = self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches
-        amp_generator = self._amp_mini_batch_generator(num_updates, amp_mini_batch_size)
+        # AMP 算法中专门为判别器提供「机器人生成的运动数据」的采样生成器
+        # 专家数据（来自 amp_data，是 “真” 数据）。
+        # 机器人数据（来自 amp_storage，是 “假” 数据，也就是机器人刚才在环境里跑出来的运动数据）。
+        amp_policy_generator = self.amp_storage.feed_forward_generator(
+            self.num_learning_epochs * self.num_mini_batches,
+            self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches,
+        )
+        amp_expert_generator = self.amp_data.feed_forward_generator(
+            self.num_learning_epochs * self.num_mini_batches,
+            self.storage.num_envs * self.storage.num_transitions_per_env // self.num_mini_batches,
+        )
 
         # iterate over batches
-        for sample, sample_amp in zip(generator, amp_generator):
-            rollout_data = None
-            if isinstance(sample[-1], dict):
-                rollout_data = sample[-1]
-                sample = sample[:-1]
+        for sample, sample_amp_policy, sample_amp_expert in zip(generator, amp_policy_generator, amp_expert_generator):
             (
                 obs_batch,
                 critic_obs_batch,
@@ -558,21 +446,6 @@ class AMPPPO:
                 target_values_batch = target_values_batch.repeat(num_aug, 1)
                 advantages_batch = advantages_batch.repeat(num_aug, 1)
                 returns_batch = returns_batch.repeat(num_aug, 1)
-                if rollout_data is not None:
-                    rollout_data = {
-                        key: value.repeat(num_aug, *([1] * (value.ndim - 1)))
-                        for key, value in rollout_data.items()
-                    }
-
-            # Resolve this once and reuse it for every estimator auxiliary
-            # loss. RENet supplies the action-time locomotion mask; ordinary
-            # AMP tasks return None and keep full-batch supervision.
-            auxiliary_sample_mask = self._get_auxiliary_sample_mask(rollout_data, obs_batch)
-            if auxiliary_sample_mask is not None:
-                auxiliary_mask_seen = True
-                num_loco_samples = float(auxiliary_sample_mask.sum().item())
-                auxiliary_loco_samples += num_loco_samples
-                auxiliary_recovery_samples += float(auxiliary_sample_mask.numel()) - num_loco_samples
 
             # Recompute actions log prob and entropy for current batch of transitions
             # Note: we need to do this because we updated the policy with the new parameters
@@ -630,24 +503,20 @@ class AMPPPO:
             surrogate_clipped = -torch.squeeze(advantages_batch) * torch.clamp(
                 ratio, 1.0 - self.clip_param, 1.0 + self.clip_param
             )
-            surrogate_loss = self._compute_surrogate_loss(
-                surrogate, surrogate_clipped, rollout_data, ratio
-            )
+            surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
 
             # Value function loss
-            value_loss, auxiliary_value_loss, value_metrics = self._compute_value_losses(
-                value_batch,
-                target_values_batch,
-                returns_batch,
-                critic_obs_batch,
-                rollout_data,
-            )
+            if self.use_clipped_value_loss:
+                value_clipped = target_values_batch + (value_batch - target_values_batch).clamp(
+                    -self.clip_param, self.clip_param
+                )
+                value_losses = (value_batch - returns_batch).pow(2)
+                value_losses_clipped = (value_clipped - returns_batch).pow(2)
+                value_loss = torch.max(value_losses, value_losses_clipped).mean()
+            else:
+                value_loss = (returns_batch - value_batch).pow(2).mean()
 
-            loss = (
-                surrogate_loss
-                + self.value_loss_coef * (value_loss + auxiliary_value_loss)
-                - self.entropy_coef * entropy_batch.mean()
-            )
+            loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
 
             vel_loss = torch.tensor(0.0, device=self.device)
             op_vel_loss = torch.tensor(0.0, device=self.device)
@@ -663,18 +532,12 @@ class AMPPPO:
                         use_renet_separate_supervision = True
                         uses_renet_separate_supervision = True
                         if "op" in vel_estimate:
-                            op_vel_loss = self._masked_auxiliary_mse(
-                                vel_estimate["op"], vel_target, auxiliary_sample_mask
-                            )
+                            op_vel_loss = nn.functional.mse_loss(vel_estimate["op"], vel_target)
                         if "vp" in vel_estimate:
-                            vp_vel_loss = self._masked_auxiliary_mse(
-                                vel_estimate["vp"], vel_target, auxiliary_sample_mask
-                            )
+                            vp_vel_loss = nn.functional.mse_loss(vel_estimate["vp"], vel_target)
                         vel_loss = op_vel_loss + vp_vel_loss
                     else:
-                        vel_loss = self._masked_auxiliary_mse(
-                            vel_estimate, vel_target, auxiliary_sample_mask
-                        )
+                        vel_loss = nn.functional.mse_loss(vel_estimate, vel_target)
 
             terrain_recon_loss = torch.tensor(0.0, device=self.device)
             if terrain_weight > 0 and hasattr(self.policy, "use_terrain_recon") and self.policy.use_terrain_recon:
@@ -690,11 +553,10 @@ class AMPPPO:
                             -self.terrain_recon_target_clip,
                             self.terrain_recon_target_clip,
                         )
-                    terrain_recon_loss = self._masked_terrain_reconstruction_loss(
-                        terrain_pred,
-                        terrain_target,
-                        auxiliary_sample_mask,
-                    )
+                    target_mean = terrain_target.mean()
+                    target_std = terrain_target.std().clamp(min=1e-6)
+                    terrain_target_norm = (terrain_target - target_mean) / target_std
+                    terrain_recon_loss = nn.functional.mse_loss(terrain_pred, terrain_target_norm)
 
             feet_height_loss = torch.tensor(0.0, device=self.device)
             if (
@@ -708,11 +570,7 @@ class AMPPPO:
                         :,
                         self.feet_height_obs_start_idx : self.feet_height_obs_start_idx + self.feet_height_dim,
                     ].detach()
-                    feet_height_loss = self._masked_auxiliary_mse(
-                        feet_height_pred,
-                        feet_height_target,
-                        auxiliary_sample_mask,
-                    )
+                    feet_height_loss = nn.functional.mse_loss(feet_height_pred, feet_height_target)
 
             op_supervised_loss = torch.tensor(0.0, device=self.device)
             vp_supervised_loss = torch.tensor(0.0, device=self.device)
@@ -772,8 +630,22 @@ class AMPPPO:
                 mseloss = torch.nn.MSELoss()
                 rnd_loss = mseloss(predicted_embedding, target_embedding)
 
-            amp_loss, amp_metrics, normalizer_updates = self._compute_amp_loss(sample_amp)
-            loss += amp_loss
+            # Discriminator loss.
+            policy_state, policy_next_state = sample_amp_policy
+            expert_state, expert_next_state = sample_amp_expert
+            if self.amp_normalizer is not None:
+                with torch.no_grad():
+                    policy_state = self.amp_normalizer.normalize_torch(policy_state, self.device)
+                    policy_next_state = self.amp_normalizer.normalize_torch(policy_next_state, self.device)
+                    expert_state = self.amp_normalizer.normalize_torch(expert_state, self.device)
+                    expert_next_state = self.amp_normalizer.normalize_torch(expert_next_state, self.device)
+            policy_d = self.discriminator(torch.cat([policy_state, policy_next_state], dim=-1))
+            expert_d = self.discriminator(torch.cat([expert_state, expert_next_state], dim=-1))
+            expert_loss = torch.nn.MSELoss()(expert_d, torch.ones(expert_d.size(), device=self.device))
+            policy_loss = torch.nn.MSELoss()(policy_d, -1 * torch.ones(policy_d.size(), device=self.device))
+            amp_loss = 0.5 * (expert_loss + policy_loss)
+            grad_pen_loss = self.discriminator.compute_grad_pen(*sample_amp_expert, lambda_=10)
+            loss += self.amploss_coef * amp_loss + self.amploss_coef * grad_pen_loss
 
             # Compute the gradients
             # -- For PPO
@@ -790,26 +662,24 @@ class AMPPPO:
 
             # Apply the gradients
             # -- For PPO
-            nn.utils.clip_grad_norm_(self._parameters_for_gradient_clipping(), self.max_grad_norm)
+            nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
             self.optimizer.step()
             # -- For RND
             if self.rnd_optimizer:
                 self.rnd_optimizer.step()
 
-            self._update_amp_normalizers(normalizer_updates)
+            if self.amp_normalizer is not None:
+                self.amp_normalizer.update(policy_state.cpu().numpy())
+                self.amp_normalizer.update(expert_state.cpu().numpy())
 
             # Store the losses
             mean_value_loss += value_loss.item()
             mean_surrogate_loss += surrogate_loss.item()
             mean_entropy += entropy_batch.mean().item()
-            for key, value in amp_metrics.items():
-                if isinstance(value, torch.Tensor):
-                    value = value.item()
-                amp_metric_sums[key] = amp_metric_sums.get(key, 0.0) + value
-            for key, value in value_metrics.items():
-                if isinstance(value, torch.Tensor):
-                    value = value.item()
-                value_metric_sums[key] = value_metric_sums.get(key, 0.0) + value
+            mean_amp_loss += amp_loss.item()
+            mean_grad_pen_loss += grad_pen_loss.item()
+            mean_policy_pred += policy_d.mean().item()
+            mean_expert_pred += expert_d.mean().item()
             mean_vel_loss += vel_loss.item()
             mean_op_vel_loss += op_vel_loss.item()
             mean_vp_vel_loss += vp_vel_loss.item()
@@ -825,6 +695,7 @@ class AMPPPO:
                 mean_symmetry_loss += symmetry_loss.item()
 
         # -- For PPO
+        num_updates = self.num_learning_epochs * self.num_mini_batches
         mean_value_loss /= num_updates
         mean_surrogate_loss /= num_updates
         mean_entropy /= num_updates
@@ -835,8 +706,10 @@ class AMPPPO:
         if mean_symmetry_loss is not None:
             mean_symmetry_loss /= num_updates
         # -- Clear the storage
-        amp_metrics = {key: value / num_updates for key, value in amp_metric_sums.items()}
-        value_metrics = {key: value / num_updates for key, value in value_metric_sums.items()}
+        mean_amp_loss /= num_updates
+        mean_grad_pen_loss /= num_updates
+        mean_policy_pred /= num_updates
+        mean_expert_pred /= num_updates
         mean_vel_loss /= num_updates
         mean_op_vel_loss /= num_updates
         mean_vp_vel_loss /= num_updates
@@ -851,9 +724,11 @@ class AMPPPO:
             "value_function": mean_value_loss,
             "surrogate": mean_surrogate_loss,
             "entropy": mean_entropy,
+            "amp": mean_amp_loss,
+            "amp_grad_pen": mean_grad_pen_loss,
+            "amp_policy_pred": mean_policy_pred,
+            "amp_expert_pred": mean_expert_pred,
         }
-        loss_dict.update(amp_metrics)
-        loss_dict.update(value_metrics)
         if self.rnd:
             loss_dict["rnd"] = mean_rnd_loss
         if self.symmetry:
@@ -872,9 +747,6 @@ class AMPPPO:
         if self.feet_height_coef > 0:
             loss_dict["feet_height"] = mean_feet_height_loss
             loss_dict["feet_height_coef_current"] = feet_height_weight
-        if auxiliary_mask_seen:
-            loss_dict["Auxiliary/loco_samples"] = auxiliary_loco_samples / num_updates
-            loss_dict["Auxiliary/recovery_samples"] = auxiliary_recovery_samples / num_updates
 
         self.current_iteration += 1
         return loss_dict
@@ -885,50 +757,41 @@ class AMPPPO:
 
     def broadcast_parameters(self):
         """Broadcast model parameters to all GPUs."""
-        modules = self._modules_for_parameter_sync()
-        model_params = [module.state_dict() for module in modules]
+        # obtain the model parameters on current GPU
+        model_params = [self.policy.state_dict(), self.discriminator.state_dict()]
+        if self.rnd:
+            model_params.append(self.rnd.predictor.state_dict())
         # broadcast the model parameters
         torch.distributed.broadcast_object_list(model_params, src=0)
         # load the model parameters on all GPUs from source GPU
-        for module, state_dict in zip(modules, model_params):
-            module.load_state_dict(state_dict)
-
-    def _modules_for_parameter_sync(self):
-        modules = [self.policy, self.discriminator]
+        self.policy.load_state_dict(model_params[0])
+        #
+        self.discriminator.load_state_dict(model_params[1])
+        #
         if self.rnd:
-            modules.append(self.rnd.predictor)
-        return modules
-
-    def _parameters_for_gradient_reduction(self):
-        parameters = chain(self.policy.parameters(), self.discriminator.parameters())
-        if self.rnd:
-            parameters = chain(parameters, self.rnd.parameters())
-        return parameters
+            self.rnd.predictor.load_state_dict(model_params[2])
 
     def reduce_parameters(self):
         """Collect gradients from all GPUs and average them."""
-        all_params = list(self._parameters_for_gradient_reduction())
-        # Ranks may observe different routed modes. Use zero placeholders for
-        # locally unused branches so every rank reduces an identical vector.
-        grad_flags = torch.tensor(
-            [param.grad is not None for param in all_params],
-            dtype=torch.int32,
-            device=self.device,
-        )
-        grads = [
-            param.grad.view(-1) if param.grad is not None else torch.zeros_like(param).view(-1)
-            for param in all_params
-        ]
+        # 1. 包含判别器的梯度
+        grads = [param.grad.view(-1) for param in self.policy.parameters() if param.grad is not None]
+        grads += [param.grad.view(-1) for param in self.discriminator.parameters() if param.grad is not None]
+        if self.rnd:
+            grads += [param.grad.view(-1) for param in self.rnd.parameters() if param.grad is not None]
+
         all_grads = torch.cat(grads)
         torch.distributed.all_reduce(all_grads, op=torch.distributed.ReduceOp.SUM)
-        torch.distributed.all_reduce(grad_flags, op=torch.distributed.ReduceOp.MAX)
         all_grads /= self.gpu_world_size
 
+        # 2. 包含判别器的参数
+        from itertools import chain
+        all_params = chain(self.policy.parameters(), self.discriminator.parameters())
+        if self.rnd:
+            all_params = chain(all_params, self.rnd.parameters())
+
         offset = 0
-        for param, has_global_grad in zip(all_params, grad_flags):
-            numel = param.numel()
-            if has_global_grad:
-                if param.grad is None:
-                    param.grad = torch.zeros_like(param)
+        for param in all_params:
+            if param.grad is not None:
+                numel = param.numel()
                 param.grad.data.copy_(all_grads[offset : offset + numel].view_as(param.grad.data))
-            offset += numel
+                offset += numel
