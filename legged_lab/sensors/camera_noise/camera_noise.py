@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 import torch
 import torch.nn.functional as F
@@ -13,6 +14,7 @@ from torchvision.transforms import GaussianBlur
 if TYPE_CHECKING:
     from .camera_noise_cfg import (
         DepthSteroNoiseCfg,
+        DistanceDependentGaussianNoiseCfg,
         GaussianBlurNoiseCfg,
         ImageNoiseCfg,
         SensorDeadNoiseCfg,
@@ -467,6 +469,77 @@ def range_based_gaussian_noise(
     noisy_data = data + noise * apply_mask
 
     return noisy_data
+
+
+def compute_distance_dependent_gaussian_std(
+    depth: torch.Tensor,
+    min_distance: float,
+    max_distance: float,
+    near_std: float,
+    far_std: float,
+    exponent: float,
+) -> torch.Tensor:
+    """Return a metric-depth noise standard deviation for every pixel.
+
+    The standard deviation grows continuously from ``near_std`` at
+    ``min_distance`` to ``far_std`` at ``max_distance``. Values outside the
+    configured camera range use the corresponding endpoint value.
+    """
+    scalar_parameters = {
+        "min_distance": min_distance,
+        "max_distance": max_distance,
+        "near_std": near_std,
+        "far_std": far_std,
+        "exponent": exponent,
+    }
+    for name, value in scalar_parameters.items():
+        if not math.isfinite(float(value)):
+            raise ValueError(f"{name} must be finite, got {value}.")
+    if float(max_distance) <= float(min_distance):
+        raise ValueError("max_distance must be greater than min_distance.")
+    if float(near_std) < 0.0:
+        raise ValueError("near_std cannot be negative.")
+    if float(far_std) < float(near_std):
+        raise ValueError("far_std cannot be smaller than near_std.")
+    if float(exponent) <= 0.0:
+        raise ValueError("exponent must be positive.")
+
+    normalized_distance = ((depth - min_distance) / (max_distance - min_distance)).clamp(0.0, 1.0)
+    return near_std + (far_std - near_std) * normalized_distance.pow(exponent)
+
+
+def distance_dependent_gaussian_noise(
+    data: torch.Tensor,
+    cfg: DistanceDependentGaussianNoiseCfg,
+    env_ids: torch.Tensor | Sequence[int],
+    *,
+    min_distance: float,
+    max_distance: float,
+) -> torch.Tensor:
+    """Add zero-mean Gaussian noise whose standard deviation grows with depth.
+
+    ``data`` must contain metric depth and may be either ``(N, H, W)`` or
+    ``(N, H, W, C)``. The generated noise always inherits its shape, dtype and
+    device from ``data``.
+    """
+    if not data.is_floating_point():
+        raise TypeError(f"Depth data must use a floating-point dtype, got {data.dtype}.")
+    num_env_ids = env_ids.numel() if isinstance(env_ids, torch.Tensor) else len(env_ids)
+    if data.ndim == 0 or data.shape[0] != num_env_ids:
+        batch_size = data.shape[0] if data.ndim > 0 else 0
+        raise ValueError(f"Data batch shape {batch_size} does not match env_ids length {num_env_ids}.")
+
+    sigma = compute_distance_dependent_gaussian_std(
+        data,
+        min_distance=min_distance,
+        max_distance=max_distance,
+        near_std=cfg.near_std,
+        far_std=cfg.far_std,
+        exponent=cfg.distance_exponent,
+    )
+    if float(cfg.far_std) == 0.0:
+        return data.clone()
+    return data + torch.randn_like(data) * sigma
 
 
 def stereo_too_close_noise(

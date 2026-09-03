@@ -16,6 +16,7 @@ from .camera_noise import (
     depth_normalization,
     depth_sky_artifact_noise,
     depth_stero_noise,
+    distance_dependent_gaussian_noise,
     gaussian_blur_noise,
     random_gaussian_noise,
     range_based_gaussian_noise,
@@ -94,4 +95,18 @@ class RangeBasedGaussianNoiseCfg(ImageNoiseCfg):
 
     func = range_based_gaussian_noise
 
-    
+
+@configclass
+class DistanceDependentGaussianNoiseCfg(ImageNoiseCfg):
+    """Metric-depth Gaussian noise that becomes stronger with distance."""
+
+    near_std: float = 0.0
+    """Noise standard deviation in metres at the camera's minimum distance."""
+
+    far_std: float = 0.10
+    """Noise standard deviation in metres at the configured maximum depth."""
+
+    distance_exponent: float = 2.0
+    """Exponent controlling how quickly noise grows from near to far depth."""
+
+    func = distance_dependent_gaussian_noise

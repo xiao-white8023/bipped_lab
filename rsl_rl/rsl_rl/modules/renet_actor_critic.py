@@ -15,10 +15,10 @@ class RENetActorCritic(nn.Module):
     """Training-side RENet actor-critic.
 
     Actor observations are expected to be:
-        proprio_history | depth_history_flat | estimator_mask
+        proprio_history | lidar_height_flat | depth_history_flat | estimator_mask
 
     estimator_mask follows the paper convention used in the environment:
-        1 -> OP estimator, 0 -> VP estimator
+        1 -> LP estimator, 0 -> VP estimator
     """
 
     is_recurrent = False
@@ -34,12 +34,15 @@ class RENetActorCritic(nn.Module):
         init_noise_std=1.0,
         noise_std_type: str = "scalar",
         CnnMlp=None,
+        LidarCnnMlp=None,
         **kwargs,
     ):
         super().__init__()
 
         if CnnMlp is None:
             raise ValueError("RENetActorCritic requires a CnnMlp config for the VP estimator.")
+        if LidarCnnMlp is None:
+            raise ValueError("RENetActorCritic requires a LidarCnnMlp config for the LP estimator.")
 
         self.num_actor_obs = num_actor_obs
         self.num_critic_obs = num_critic_obs
@@ -50,7 +53,7 @@ class RENetActorCritic(nn.Module):
         self.estimator_latent_dim = kwargs.pop("estimator_latent_dim", 64)
         self.proprio_embed_dim = kwargs.pop("proprio_embed_dim", 64)
         proprio_embed_dims = kwargs.pop("proprio_embed_dims", [256, 128])
-        op_encoder_dims = kwargs.pop("op_encoder_dims", [128])
+        lp_encoder_dims = kwargs.pop("lp_encoder_dims", [128])
         vp_encoder_dims = kwargs.pop("vp_encoder_dims", [128])
         self.fusion_type = kwargs.pop("fusion_type", "attention")
         attention_num_heads = kwargs.pop("attention_num_heads", 1)
@@ -62,6 +65,7 @@ class RENetActorCritic(nn.Module):
 
         self.use_terrain_recon = kwargs.pop("use_terrain_recon", False)
         terrain_hidden_dim = kwargs.pop("terrain_hidden_dim", [256, 128])
+        lp_terrain_hidden_dim = kwargs.pop("lp_terrain_hidden_dim", [256, 128])
         terrain_activation_str = kwargs.pop("terrain_activation", "elu")
         terrain_scan_dim = kwargs.pop("terrain_scan_dim", 187)
         terrain_recon_front_only = kwargs.pop("terrain_recon_front_only", False)
@@ -102,11 +106,17 @@ class RENetActorCritic(nn.Module):
         self.cnn_h = CnnMlp["input_dim"][0]
         self.cnn_w = CnnMlp["input_dim"][1]
         self.depth_flat_dim = self.depth_history_frames * self.cnn_h * self.cnn_w
-        self.proprio_actor_dim = num_actor_obs - self.depth_flat_dim - self.estimator_mask_dim
+        self.lidar_h = LidarCnnMlp["input_dim"][0]
+        self.lidar_w = LidarCnnMlp["input_dim"][1]
+        self.lidar_flat_dim = self.lidar_h * self.lidar_w
+        self.proprio_actor_dim = (
+            num_actor_obs - self.lidar_flat_dim - self.depth_flat_dim - self.estimator_mask_dim
+        )
         if self.proprio_actor_dim <= 0:
             raise ValueError(
                 "Invalid RENet actor observation layout: "
-                f"num_actor_obs={num_actor_obs}, depth_flat_dim={self.depth_flat_dim}, "
+                f"num_actor_obs={num_actor_obs}, lidar_flat_dim={self.lidar_flat_dim}, "
+                f"depth_flat_dim={self.depth_flat_dim}, "
                 f"estimator_mask_dim={self.estimator_mask_dim}."
             )
         if self.proprio_actor_dim % self.single_proprio_dim != 0:
@@ -129,6 +139,11 @@ class RENetActorCritic(nn.Module):
         self.cnn = CnnMlpModule(**cnn_cfg)
         self.visual_latent_dim = self.cnn.output_dim
 
+        lidar_cnn_cfg = dict(LidarCnnMlp)
+        lidar_cnn_cfg["input_channels"] = 1
+        self.lidar_cnn = CnnMlpModule(**lidar_cnn_cfg)
+        self.lidar_latent_dim = self.lidar_cnn.output_dim
+
         if self.fusion_type not in ("mlp", "attention"):
             raise ValueError(f"Unsupported RENet fusion_type: {self.fusion_type}.")
         if self.fusion_type == "attention":
@@ -137,7 +152,12 @@ class RENetActorCritic(nn.Module):
                     "attention fusion expects visual_latent_dim == proprio_embed_dim, "
                     f"got {self.visual_latent_dim} and {self.proprio_embed_dim}."
                 )
-            self.op_attention = nn.MultiheadAttention(
+            if self.lidar_latent_dim != self.proprio_embed_dim:
+                raise ValueError(
+                    "attention fusion expects lidar_latent_dim == proprio_embed_dim, "
+                    f"got {self.lidar_latent_dim} and {self.proprio_embed_dim}."
+                )
+            self.lp_attention = nn.MultiheadAttention(
                 embed_dim=self.proprio_embed_dim,
                 num_heads=attention_num_heads,
                 batch_first=True,
@@ -147,9 +167,9 @@ class RENetActorCritic(nn.Module):
                 num_heads=attention_num_heads,
                 batch_first=True,
             )
-            self.op_encoder = self._build_mlp(
+            self.lp_encoder = self._build_mlp(
                 self.proprio_embed_dim,
-                op_encoder_dims,
+                lp_encoder_dims,
                 activation_fn,
                 self.estimator_latent_dim,
             )
@@ -160,9 +180,9 @@ class RENetActorCritic(nn.Module):
                 self.estimator_latent_dim,
             )
         else:
-            self.op_encoder = self._build_mlp(
-                self.proprio_embed_dim,
-                op_encoder_dims,
+            self.lp_encoder = self._build_mlp(
+                self.proprio_embed_dim + self.lidar_latent_dim,
+                lp_encoder_dims,
                 activation_fn,
                 self.estimator_latent_dim,
             )
@@ -173,7 +193,7 @@ class RENetActorCritic(nn.Module):
                 self.estimator_latent_dim,
             )
 
-        self.op_gru = nn.GRU(
+        self.lp_gru = nn.GRU(
             input_size=self.estimator_latent_dim,
             hidden_size=self.estimator_latent_dim,
             num_layers=1,
@@ -188,7 +208,7 @@ class RENetActorCritic(nn.Module):
 
         vel_activation_fn = resolve_nn_activation(vel_activation_str)
         if self.use_vel_estimation:
-            self.op_vel_estimator = self._build_mlp(
+            self.lp_vel_estimator = self._build_mlp(
                 self.estimator_latent_dim,
                 vel_hidden_dim,
                 vel_activation_fn,
@@ -220,6 +240,13 @@ class RENetActorCritic(nn.Module):
                 terrain_activation_fn,
                 self.terrain_output_dim,
             )
+            self.lp_terrain_output_dim = terrain_scan_dim
+            self.lp_terrain_decoder = self._build_mlp(
+                self.single_proprio_dim + self.estimator_latent_dim,
+                lp_terrain_hidden_dim,
+                terrain_activation_fn,
+                self.lp_terrain_output_dim,
+            )
 
         if self.use_feet_height_prediction:
             feet_height_activation_fn = resolve_nn_activation(feet_height_activation_str)
@@ -236,7 +263,8 @@ class RENetActorCritic(nn.Module):
 
         print(f"RENet proprio embedding: {self.proprio_embedding}")
         print(f"RENet fusion type: {self.fusion_type}")
-        print(f"RENet OP encoder: {self.op_encoder}")
+        print(f"RENet LP height encoder: {self.lidar_cnn}")
+        print(f"RENet LP encoder: {self.lp_encoder}")
         print(f"RENet VP encoder: {self.vp_encoder}")
         print(f"RENet Actor MLP: {self.actor}")
         print(f"RENet Critic MLP: {self.critic}")
@@ -253,7 +281,7 @@ class RENetActorCritic(nn.Module):
         Normal.set_default_validate_args(False)
 
         self._last_current_proprio: Optional[torch.Tensor] = None
-        self._last_op_latent: Optional[torch.Tensor] = None
+        self._last_lp_latent: Optional[torch.Tensor] = None
         self._last_vp_latent: Optional[torch.Tensor] = None
         self._last_estimator_mask: Optional[torch.Tensor] = None
 
@@ -307,8 +335,16 @@ class RENetActorCritic(nn.Module):
         return len(front_indices), torch.tensor(front_indices, dtype=torch.long)
 
     def _split_actor_obs(self, observations: torch.Tensor):
+        if observations.ndim != 2 or observations.shape[1] != self.num_actor_obs:
+            raise ValueError(
+                "RENet actor observations must have shape "
+                f"(batch, {self.num_actor_obs}), got {tuple(observations.shape)}."
+            )
         proprio_history = observations[:, : self.proprio_actor_dim]
-        depth_start = self.proprio_actor_dim
+        lidar_start = self.proprio_actor_dim
+        lidar_end = lidar_start + self.lidar_flat_dim
+        lidar_flat = observations[:, lidar_start:lidar_end]
+        depth_start = lidar_end
         depth_end = depth_start + self.depth_flat_dim
         depth_flat = observations[:, depth_start:depth_end]
         if self.estimator_mask_dim > 0:
@@ -317,7 +353,7 @@ class RENetActorCritic(nn.Module):
             estimator_mask = torch.zeros(observations.shape[0], 1, device=observations.device)
         estimator_mask = estimator_mask[:, :1].clamp(0.0, 1.0)
         current_proprio = proprio_history[:, -self.single_proprio_dim :]
-        return proprio_history, depth_flat, estimator_mask, current_proprio
+        return proprio_history, lidar_flat, depth_flat, estimator_mask, current_proprio
 
     def _embed_proprio_history(self, proprio_history: torch.Tensor):
         batch_size = proprio_history.shape[0]
@@ -332,6 +368,11 @@ class RENetActorCritic(nn.Module):
         depth_embed = self.cnn(depth_img)
         return depth_embed.view(batch_size, self.depth_history_frames, self.visual_latent_dim)
 
+    def _embed_lidar_height(self, lidar_flat: torch.Tensor):
+        batch_size = lidar_flat.shape[0]
+        lidar_height = lidar_flat.view(batch_size, 1, self.lidar_h, self.lidar_w)
+        return self.lidar_cnn(lidar_height)
+
     def _align_depth_to_proprio_history(self, depth_embed: torch.Tensor):
         batch_size = depth_embed.shape[0]
         depth_context = torch.zeros(
@@ -345,15 +386,23 @@ class RENetActorCritic(nn.Module):
         depth_context[:, -frames:, :] = depth_embed[:, -frames:, :]
         return depth_context
 
-    def _fuse_op_features(self, proprio_embed: torch.Tensor):
+    def _fuse_lp_features(self, proprio_embed: torch.Tensor, lidar_embed: torch.Tensor):
         batch_size = proprio_embed.shape[0]
         if self.fusion_type == "attention":
-            fused_tokens, _ = self.op_attention(proprio_embed, proprio_embed, proprio_embed, need_weights=False)
-            fused = fused_tokens.reshape(batch_size * self.history_len, self.proprio_embed_dim)
+            lidar_token = lidar_embed.unsqueeze(1)
+            tokens = torch.cat([proprio_embed, lidar_token], dim=1)
+            fused_tokens, _ = self.lp_attention(tokens, tokens, tokens, need_weights=False)
+            fused = fused_tokens[:, : self.history_len, :]
+            fused = fused.reshape(batch_size * self.history_len, self.proprio_embed_dim)
         else:
-            fused = proprio_embed.reshape(batch_size * self.history_len, self.proprio_embed_dim)
-        op_features = self.op_encoder(fused)
-        return op_features.view(batch_size, self.history_len, self.estimator_latent_dim)
+            lidar_context = lidar_embed.unsqueeze(1).expand(-1, self.history_len, -1)
+            fused = torch.cat([proprio_embed, lidar_context], dim=-1)
+            fused = fused.reshape(
+                batch_size * self.history_len,
+                self.proprio_embed_dim + self.lidar_latent_dim,
+            )
+        lp_features = self.lp_encoder(fused)
+        return lp_features.view(batch_size, self.history_len, self.estimator_latent_dim)
 
     def _fuse_vp_features(
         self,
@@ -374,22 +423,25 @@ class RENetActorCritic(nn.Module):
         return vp_features.view(batch_size, self.history_len, self.estimator_latent_dim)
 
     def _process_actor_obs(self, observations: torch.Tensor):
-        proprio_history, depth_flat, estimator_mask, current_proprio = self._split_actor_obs(observations)
+        proprio_history, lidar_flat, depth_flat, estimator_mask, current_proprio = self._split_actor_obs(
+            observations
+        )
 
         proprio_embed = self._embed_proprio_history(proprio_history)
+        lidar_embed = self._embed_lidar_height(lidar_flat)
         depth_embed = self._embed_depth_history(depth_flat)
         depth_context = self._align_depth_to_proprio_history(depth_embed)
 
-        op_features = self._fuse_op_features(proprio_embed)
+        lp_features = self._fuse_lp_features(proprio_embed, lidar_embed)
         vp_features = self._fuse_vp_features(proprio_embed, depth_embed, depth_context)
-        _, op_hidden = self.op_gru(op_features)
+        _, lp_hidden = self.lp_gru(lp_features)
         _, vp_hidden = self.vp_gru(vp_features)
-        op_latent = op_hidden[-1]
+        lp_latent = lp_hidden[-1]
         vp_latent = vp_hidden[-1]
 
         renet_latent = torch.cat(
             [
-                op_latent * estimator_mask,
+                lp_latent * estimator_mask,
                 vp_latent * (1.0 - estimator_mask),
             ],
             dim=-1,
@@ -397,7 +449,7 @@ class RENetActorCritic(nn.Module):
         actor_input = torch.cat([current_proprio, renet_latent], dim=-1)
 
         self._last_current_proprio = current_proprio
-        self._last_op_latent = op_latent
+        self._last_lp_latent = lp_latent
         self._last_vp_latent = vp_latent
         self._last_estimator_mask = estimator_mask
         return actor_input
@@ -453,12 +505,20 @@ class RENetActorCritic(nn.Module):
     def predict_velocity(self):
         if not self.use_vel_estimation:
             return None
-        if self._last_op_latent is None or self._last_vp_latent is None or self._last_estimator_mask is None:
+        if self._last_lp_latent is None or self._last_vp_latent is None or self._last_estimator_mask is None:
             return None
-        op_vel = self.op_vel_estimator(self._last_op_latent)
+        lp_vel = self.lp_vel_estimator(self._last_lp_latent)
         vp_vel = self.vp_vel_estimator(self._last_vp_latent)
-        active_vel = op_vel * self._last_estimator_mask + vp_vel * (1.0 - self._last_estimator_mask)
-        return {"op": op_vel, "vp": vp_vel, "active": active_vel}
+        active_vel = lp_vel * self._last_estimator_mask + vp_vel * (1.0 - self._last_estimator_mask)
+        return {"lp": lp_vel, "vp": vp_vel, "active": active_vel}
+
+    def predict_lp_terrain(self):
+        if not self.use_terrain_recon:
+            return None
+        if self._last_current_proprio is None or self._last_lp_latent is None:
+            return None
+        terrain_input = torch.cat([self._last_current_proprio, self._last_lp_latent], dim=-1)
+        return self.lp_terrain_decoder(terrain_input)
 
     def predict_terrain(self):
         if not self.use_terrain_recon:

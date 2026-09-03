@@ -21,7 +21,7 @@ from isaaclab.sensors.ray_caster import RayCasterCfg
 
 from isaaclab.sensors.ray_caster.patterns import PinholeCameraPatternCfg
 
-from legged_lab.sensors.grouped_ray_caster import get_link_prim_targets
+from legged_lab.sensors.grouped_ray_caster import Mid360PatternCfg, get_link_prim_targets
 
 import legged_lab.mdp as mdp
 from legged_lab.assets.tienkung2_lite import TIENKUNG2LITE_CFG
@@ -49,6 +49,8 @@ from legged_lab.terrains import GRAVEL_TERRAINS_CFG, ROUGH_TERRAINS_CFG, Flat_te
 from legged_lab.assets.g1.g1_29 import G1_29CFG,G1_29DOF_LINKS,G1_23CFG,G1_23DOF_LINKS
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCameraCfg
+from legged_lab.sensors.camera_noise import DistanceDependentGaussianNoiseCfg
+from legged_lab.sensors.lidar import LidarCfg, LidarNoiseCfg
 import os
 import legged_lab
 LEGGED_LAB_ROOT = os.path.dirname(legged_lab.__file__)
@@ -67,14 +69,33 @@ class GaitCfg:
 class RENetTrainCfg:
     """Training-time estimator mask.
 
-    mask=1 selects the OP estimator, mask=0 selects the VP estimator.
+    mask=1 selects the LP estimator, mask=0 selects the VP estimator.
     The deployment selector can later replace this random training mask.
     """
     mask_mode: str = "alternate"
-    op_probability: float = 0.5
+    lp_probability: float = 0.5
     alternate_interval_iters: int = 20
-    force_vp_terrain_names: list[str] = ["gap", "high_platform", "hf_stepping_stones", "star_terrain"]
-    force_vp_terrain_level: int = -1
+
+
+@configclass
+class LidarElevationMapCfg:
+    """Raw MID-360 rolling elevation-map configuration.
+
+    Robot self-returns are deliberately retained.  The height channel is the
+    LP exteroceptive input; confidence remains diagnostic-only.
+    """
+
+    enable: bool = True
+    history_frames: int = 8
+    history_seconds: float = 0.8
+    resolution: float = 0.1
+    internal_size: tuple[float, float] = (3.2, 3.2)# **内部高程栅格的范围**：`internal_size = (3.2, 3.2)` 米，对应坐标区间 [-1.6, 1.6]，意思是**我们只把激光点云中、落在机器人周围 3.2 米 ×3.2 米这块方形区域内的点，拿来构建高程图**，超出这个方形的激光点会被直接丢弃，不参与高程图的计算与融合。
+    output_size: tuple[float, float] = (1.6, 1.0)
+    aggregation: str = "max_height"
+    keep_self_hits: bool = True
+    invalid_height: float = -1.0
+    height_clip: tuple[float, float] = (-1.0, 1.0)
+    reprojection_chunk_size: int = 512
 
 @configclass
 class Reward:
@@ -129,11 +150,11 @@ class Reward:
         },
     )
 
-    # feet_stumble = RewTerm(
-    #     func=mdp.feet_stumble,
-    #     weight=-2.0,
-    #     params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=[".*ankle_roll.*"])},
-    # )
+    feet_stumble = RewTerm(
+        func=mdp.feet_stumble,
+        weight=-2.0,
+        params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=[".*ankle_roll.*"])},
+    )
 
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-2.0)
 
@@ -184,48 +205,20 @@ class Reward:
         params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=".*ankle_roll.*"), "threshold": 0.4},
     )
 
-    # gait_phase_contact = RewTerm(
-    #     func=mdp.new_gait_phase_contact,
-    #     weight=0.2,
-    #     params={
-    #         "sensor_cfg": SceneEntityCfg(
-    #             "contact_sensor",
-    #             body_names=[
-    #                 "left_ankle_roll.*",
-    #                 "right_ankle_roll.*",
-    #             ],
-    #         ),
-    #         "stance_threshold": 0.55,
-    #         "command_threshold": 0.1,
-    #     },
-    # )
-
-    # stair_edge_penalty_L = RewTerm(
-    #     func=mdp.single_foot_contact_area_penalty,
-    #     weight=-0.1,  # 权重可以根据训练效果调整
-    #     params={
-    #         "contact_sensor_cfg": SceneEntityCfg("contact_sensor", body_names="left_ankle_roll_link"),
-    #         "ray_sensor_cfg": SceneEntityCfg("left_feet_ray_caster"), # 在 SceneCfg 中定义的左脚射线
-    #         "threshold": 0.04
-    #     }
-    # )
-    # stair_edge_penalty_R = RewTerm(
-    #     func=mdp.single_foot_contact_area_penalty,
-    #     weight=-0.1,
-    #     params={
-    #         "contact_sensor_cfg": SceneEntityCfg("contact_sensor", body_names="right_ankle_roll_link"),
-    #         "ray_sensor_cfg": SceneEntityCfg("right_feet_ray_caster"), # 在 SceneCfg 中定义的右脚射线
-    #         "threshold": 0.04
-    #     }
-    # )
-
 @configclass
 class G1RENETENVCFG:
     amp_motion_files_display=[f'{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_visualization/stand_to_walk.txt']
     device: str = "cuda:0"
+    depth_noise: DistanceDependentGaussianNoiseCfg = DistanceDependentGaussianNoiseCfg(
+        near_std=0.0,
+        far_std=0.10,
+        distance_exponent=2.0,
+    )
     scene: BaseSceneCfg = BaseSceneCfg(  
         max_episode_length_s=20.0,
-        num_envs=4096,
+        # Bring up the 10 Hz self-occluding LiDAR progressively.  Increase to
+        # 512 only after profiling the Warp ray cast on the training GPU.
+        num_envs=128,
         env_spacing=2.5,
         robot=G1_23CFG,
         terrain_type="generator",
@@ -239,8 +232,34 @@ class G1RENETENVCFG:
             debug_vis=False,
             drift_range=(0.0, 0.0),
         ),
+        lidar=LidarCfg(
+            enable_lidar=True,
+            body_name="torso_link",
+            offset_pos=(0.0002835, 0.00003, 0.428434),
+            offset_rot=(0.0, 0.9996733521, 0.0, -0.0255575638),
+            ray_alignment="base",
+            update_period=0.1,
+            pattern_cfg=Mid360PatternCfg(
+                point_rate_hz=200_000,
+                scan_period=0.1,
+                downsample=5,
+                randomize_phase=True,
+            ),
+            debug_vis=True,
+            min_distance=0.1,
+            max_distance=5.0,
+            noise=LidarNoiseCfg(
+                enable=True,
+                range_std_range_m=(0.01, 0.03),
+                point_dropout_prob_range=(0.0, 0.05),
+                translation_bias_range_m=(-0.005, 0.005),
+                rotation_bias_range_deg=(-0.2, 0.2),
+            ),
+            mesh_prim_paths=["/World/ground"]
+            + get_link_prim_targets(G1_23DOF_LINKS, is_shared=True),
+        ),
         camera=CameraCfg(
-            add_camera_noise=False,
+            add_camera_noise=True,
             add_camera=True,
             camera = GroupedRayCasterCameraCfg(
                 prim_path="/World/envs/env_.*/Robot/torso_link", 
@@ -311,6 +330,8 @@ class G1RENETENVCFG:
     gait=GaitCfg()
 
     renet=RENetTrainCfg()
+
+    lidar_elevation_map=LidarElevationMapCfg()
 
     robot: RobotCfg = RobotCfg(
         actor_obs_history_length=10,
@@ -454,6 +475,8 @@ class CustomRslRlPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
     vel_estimation_warmup_iters:int=0
     vel_estimation_coef: float = 1.0
     terrain_recon_coef: float = 0.5
+    lp_terrain_recon_coef: float = 0.5
+    lp_terrain_recon_warmup_iters: int = 500
     use_moe_balance_loss: bool = False
     moe_balance_coef: float = 0.0
     use_moe_gate_entropy_loss: bool = False
@@ -479,6 +502,7 @@ class CustomRslRlPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
 @configclass
 class CustomRslRlPpoActorCriticCfg(RslRlPpoActorCriticCfg):
     CnnMlp: CnnMlpCfg = None  # 告诉配置系统，我们多加了一个 CnnMlp 的参数
+    LidarCnnMlp: CnnMlpCfg = None
     single_proprio_dim: int = 78
     estimator_mask_dim: int = 1
     estimator_latent_dim: int = 64
@@ -486,7 +510,7 @@ class CustomRslRlPpoActorCriticCfg(RslRlPpoActorCriticCfg):
     proprio_embed_dims: list[int] = [256, 128]
     fusion_type: str = "attention"
     attention_num_heads: int = 1
-    op_encoder_dims: list[int] = [128]
+    lp_encoder_dims: list[int] = [128]
     vp_encoder_dims: list[int] = [128]
     use_vel_estimation: bool = True
     vel_activation: str = "elu"
@@ -495,6 +519,7 @@ class CustomRslRlPpoActorCriticCfg(RslRlPpoActorCriticCfg):
     use_terrain_recon: bool = True
     terrain_activation: str = "elu"
     terrain_hidden_dim: list[int] = [256, 128]
+    lp_terrain_hidden_dim: list[int] = [256, 128]
     terrain_scan_dim: int = 187
     terrain_recon_front_only: bool = True
     terrain_recon_grid_cols: int = 17
@@ -526,7 +551,7 @@ class G1RENETAGENTCFG:
         proprio_embed_dims=[256, 128],
         fusion_type="attention",
         attention_num_heads=1,
-        op_encoder_dims=[128],
+        lp_encoder_dims=[128],
         vp_encoder_dims=[128],
         use_vel_estimation=True,
         vel_activation="elu",
@@ -535,6 +560,7 @@ class G1RENETAGENTCFG:
         use_terrain_recon=True,
         terrain_activation="elu",
         terrain_hidden_dim=[256, 128],
+        lp_terrain_hidden_dim=[256, 128],
         terrain_scan_dim=187,
         terrain_recon_front_only=True,
         terrain_recon_grid_cols=17,
@@ -561,6 +587,23 @@ class G1RENETAGENTCFG:
             mlp_output_dim=64,
             mlp_activation="elu",
         ),
+        LidarCnnMlp=CnnMlpCfg(
+            input_dim=(11,17),
+            input_channels=1,
+            output_channels=[8,16],
+            kernel_size=[3,3],
+            stride=[1,1],
+            dilation=[1,1],
+            padding="zeros",
+            norm="none",
+            activation="elu",
+            max_pool=[True,False],
+            global_pool="none",
+            flatten=True,
+            mlp_hidden_dim=[128],
+            mlp_output_dim=64,
+            mlp_activation="elu",
+        ),
     )
     algorithm = CustomRslRlPpoAlgorithmCfg(
         class_name="RENetAMPPPO",
@@ -581,6 +624,8 @@ class G1RENETAGENTCFG:
         rnd_cfg=None,  # RslRlRndCfg()
         vel_estimation_coef=1.0,
         terrain_recon_coef=0.5,
+        lp_terrain_recon_coef=0.5,
+        lp_terrain_recon_warmup_iters=500,
         terrain_scan_dim=187,
         terrain_recon_front_only=True,
         terrain_recon_grid_cols=17,
@@ -625,7 +670,7 @@ class G1RENETAGENTCFG:
         "motion_amp_expert_no_ankle/walk_turn_right.txt",]
     amp_num_preload_transitions = 200000 
     '''
-    Taskfinal​=Taskraw​×[0.7+(1−0.7)×D] 判别器输入的就是0或1 如果任务奖励100分 完成的很好 但是不像专家数据 判别器打0分 则作中的任务奖励只有70分 
+    Taskfinal​=Taskraw​×[0.7+(1−0.7)×D] 判别器输入的就是0或1 如果任务奖励100分 完成的很好 但是不像专家数据 判别器打0分 则作中的任务奖励只有70分
     '''
     amp_task_reward_lerp = 0.6  # 这是一个惩罚机制。它把“任务奖励”和“动作质量”挂钩了
     amp_discr_hidden_dims = [1024, 512, 256]

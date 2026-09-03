@@ -2,9 +2,9 @@
 
 The RENet actor observation layout is::
 
-    proprio_history | depth_history | estimator_mask
+    proprio_history | lidar_height | depth_history | estimator_mask
 
-The estimator mask uses 0 for VP and 1 for OP.
+The estimator mask uses 0 for VP and 1 for LP.
 """
 
 import argparse
@@ -36,8 +36,8 @@ parser.add_argument(
     "--estimator",
     type=str,
     default="vp",
-    choices=("op", "vp"),
-    help="Initial locomotion estimator: OP uses proprioception, VP also uses depth.",
+    choices=("lp", "vp"),
+    help="Initial locomotion estimator: LP uses LiDAR elevation, VP uses depth.",
 )
 parser.add_argument(
     "--terrain",
@@ -47,6 +47,7 @@ parser.add_argument(
     help="Optional terrain override; the task terrain is used when omitted.",
 )
 parser.add_argument("--depth_noise", action="store_true", help="Keep the configured training-time depth noise.")
+parser.add_argument("--lidar_noise", action="store_true", help="Keep the configured training-time LiDAR noise.")
 parser.add_argument("--depth_debug_vis", action="store_true", help="Visualize depth-camera rays.")
 parser.add_argument(
     "--no_export",
@@ -128,12 +129,11 @@ def configure_playback(env_cfg):
     env_cfg.scene.height_scanner.drift_range = (0.0, 0.0)
     env_cfg.scene.camera.add_camera_noise = bool(args_cli.depth_noise)
     env_cfg.scene.camera.camera.debug_vis = bool(args_cli.depth_debug_vis)
+    if hasattr(env_cfg.scene.lidar, "noise"):
+        env_cfg.scene.lidar.noise.enable = bool(args_cli.lidar_noise)
 
-    # Playback owns the OP/VP choice.  Do not silently force individual terrain
-    # cells back to VP when the user explicitly selected OP.
+    # Playback owns the LP/VP choice for every terrain cell.
     env_cfg.renet.mask_mode = args_cli.estimator
-    env_cfg.renet.force_vp_terrain_names = []
-    env_cfg.renet.force_vp_terrain_level = -1
 
     if args_cli.terrain is not None:
         env_cfg.scene.terrain_generator = TERRAINS[args_cli.terrain]
@@ -166,7 +166,7 @@ def create_gamepad(env):
         AXIS_LEFT_X = evdev.ecodes.ABS_X
         AXIS_RIGHT_X = evdev.ecodes.ABS_RX
         BTN_RESET = {evdev.ecodes.BTN_SOUTH, evdev.ecodes.BTN_START}
-        BTN_OP = getattr(evdev.ecodes, "BTN_TL", 310)
+        BTN_LP = getattr(evdev.ecodes, "BTN_TL", 310)
         BTN_VP = getattr(evdev.ecodes, "BTN_TR", 311)
         DEAD_ZONE = 0.08
         VX_SENSITIVITY = 1.0
@@ -187,7 +187,7 @@ def create_gamepad(env):
             self._thread = threading.Thread(target=self._read_loop, daemon=True)
             self._thread.start()
             print(f"[INFO] 手柄已连接: {self._device.name} ({self._device.path})")
-            print("[INFO] 左摇杆=vx/vy，右摇杆=wz，L1=OP，R1=VP，A/Start=重置。")
+            print("[INFO] 左摇杆=vx/vy，右摇杆=wz，L1=LP，R1=VP，A/Start=重置。")
 
         def _read_loop(self):
             try:
@@ -200,8 +200,8 @@ def create_gamepad(env):
                         elif event.type == evdev.ecodes.EV_KEY and event.value == 1:
                             if event.code in self.BTN_RESET:
                                 self._reset_requested = True
-                            elif event.code == self.BTN_OP:
-                                self._estimator_requested = "op"
+                            elif event.code == self.BTN_LP:
+                                self._estimator_requested = "lp"
                             elif event.code == self.BTN_VP:
                                 self._estimator_requested = "vp"
             except (OSError, ValueError) as exc:
@@ -271,13 +271,17 @@ def patch_current_command(obs, command, env, policy_model):
 
 
 def patch_estimator_mode(obs, estimator, env, policy_model):
-    """Switch OP/VP in both the environment scheduler and current raw obs."""
+    """Switch LP/VP in both the environment scheduler and current raw obs."""
 
-    mask_value = 1.0 if estimator == "op" else 0.0
+    mask_value = 1.0 if estimator == "lp" else 0.0
     env.cfg.renet.mask_mode = estimator
     env.renet_estimator_mask.fill_(mask_value)
 
-    estimator_mask_index = policy_model.proprio_actor_dim + policy_model.depth_flat_dim
+    estimator_mask_index = (
+        policy_model.proprio_actor_dim
+        + policy_model.lidar_flat_dim
+        + policy_model.depth_flat_dim
+    )
     obs[:, estimator_mask_index : estimator_mask_index + 1] = mask_value
     print(f"[INFO] RENet locomotion estimator switched to {estimator.upper()} (mask={mask_value:.1f}).")
     return obs
@@ -389,11 +393,11 @@ def play():
                 if step_counter % 100 == 0:
                     estimator_mask = extras["observations"]["renet_mask"].squeeze(-1)
                     vp_count = int((estimator_mask == 0.0).sum().item())
-                    op_count = int((estimator_mask == 1.0).sum().item())
+                    lp_count = int((estimator_mask == 1.0).sum().item())
                     print(
                         f"[DEBUG] step={step_counter}, cmd={command.detach().cpu().numpy()}, "
                         f"requested={estimator.upper()}, "
-                        f"modes(VP/OP)={vp_count}/{op_count}"
+                        f"modes(VP/LP)={vp_count}/{lp_count}"
                     )
 
                 step_counter += 1

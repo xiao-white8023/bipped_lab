@@ -27,10 +27,7 @@ from .renet_amp_on_policy_runner import RENetAmpOnPolicyRunner
 
 class _RemovedRunner:
     def __init__(self, *args, **kwargs):
-        raise RuntimeError(
-            "This runner implementation was removed when keeping only "
-            "g1_rough, g1_film, and g1_squart training tasks."
-        )
+        raise RuntimeError("This runner implementation has been removed.")
 
 
 DWAQAmpOnPolicyRunner = _RemovedRunner

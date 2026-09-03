@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
-import numpy as np
-import torch
+import math
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+import numpy as np
 import regex
+import torch
 
 import isaaclab.sim as sim_utils
 import isaaclab.utils.math as math_utils
@@ -15,6 +16,13 @@ from isaaclab.sensors.ray_caster.ray_cast_utils import obtain_world_pose_from_vi
 from isaaclab.sim.views import XformPrimView
 
 from legged_lab.utils.raycast import raycast_mesh_grouped
+
+from .mid360_pattern import (
+    Mid360PatternCfg,
+    load_mid360_sequence_directions,
+    sampled_point_offsets,
+    source_points_per_scan,
+)
 
 if TYPE_CHECKING:
     from .grouped_ray_caster_cfg import GroupedRayCasterCfg
@@ -31,6 +39,17 @@ class GroupedRayCaster(MultiMeshRayCaster):
 
     def __init__(self, cfg: GroupedRayCasterCfg):
         super().__init__(cfg)  # 调用父类的初始化方法 并将配置类传给这个初始化方法
+
+    @property
+    def scan_counts(self) -> torch.Tensor:
+        """Number of completed ray-cast packets for every sensor instance.
+
+        The returned tensor is owned by the sensor and must be treated as
+        read-only.  Consumers can compare it against their last processed
+        value to avoid ingesting the same lazily-updated packet more than once.
+        """
+
+        return self._scan_counts
 
     def _initialize_warp_meshes(self):
         super()._initialize_warp_meshes()
@@ -100,8 +119,104 @@ class GroupedRayCaster(MultiMeshRayCaster):
 
     def _initialize_rays_impl(self):
         super()._initialize_rays_impl()
+        self._scan_counts = torch.zeros(
+            self._view.count, dtype=torch.long, device=self._device
+        )
         # 创建缓冲区以存储光线碰撞组
         self._create_ray_collision_groups()
+        self._initialize_temporal_pattern()
+
+    def _initialize_temporal_pattern(self):
+        """Initialize optional time-ordered ray directions."""
+
+        self._mid360_sequence_directions = None
+        self._mid360_scan_cursors = None
+        self.ray_time_offsets = None
+        if not isinstance(self.cfg.pattern_cfg, Mid360PatternCfg):
+            return
+
+        pattern_cfg = self.cfg.pattern_cfg
+        if not math.isclose(self.cfg.update_period, pattern_cfg.scan_period, rel_tol=0.0, abs_tol=1.0e-6):
+            raise ValueError(
+                "GroupedRayCaster update_period must match Mid360PatternCfg.scan_period: "
+                f"{self.cfg.update_period} != {pattern_cfg.scan_period}."
+            )
+
+        self._mid360_sequence_directions = load_mid360_sequence_directions(pattern_cfg, self._device)
+        self._mid360_sample_offsets = sampled_point_offsets(pattern_cfg, self._device)
+        self._mid360_source_points_per_scan = source_points_per_scan(pattern_cfg)
+        if len(self._mid360_sample_offsets) != self.num_rays:
+            raise RuntimeError(
+                "MID-360 pattern ray count changed after sensor initialization: "
+                f"{len(self._mid360_sample_offsets)} != {self.num_rays}."
+            )
+
+        self._mid360_scan_cursors = torch.full(
+            (self._view.count,),
+            pattern_cfg.phase_offset % self._mid360_sequence_directions.shape[0],
+            dtype=torch.long,
+            device=self._device,
+        )
+        self.ray_time_offsets = self._mid360_sample_offsets.to(torch.float32) / pattern_cfg.point_rate_hz
+        all_env_ids = torch.arange(self._view.count, dtype=torch.long, device=self._device)
+        self._reset_mid360_phase(all_env_ids)
+        self._set_mid360_frame(all_env_ids)
+
+    def _reset_mid360_phase(self, env_ids: torch.Tensor):
+        if self._mid360_scan_cursors is None:
+            return
+        pattern_cfg = self.cfg.pattern_cfg
+        if pattern_cfg.randomize_phase:
+            self._mid360_scan_cursors[env_ids] = torch.randint(
+                0,
+                self._mid360_sequence_directions.shape[0],
+                (len(env_ids),),
+                device=self._device,
+            )
+        else:
+            self._mid360_scan_cursors[env_ids] = (
+                pattern_cfg.phase_offset % self._mid360_sequence_directions.shape[0]
+            )
+
+    def _set_mid360_frame(self, env_ids: torch.Tensor):
+        """Select one scan packet for each environment and apply the sensor offset rotation."""
+
+        if self._mid360_scan_cursors is None:
+            return
+        sequence_indices = (
+            self._mid360_scan_cursors[env_ids, None] + self._mid360_sample_offsets[None, :]
+        ) % self._mid360_sequence_directions.shape[0]
+        frame_directions = self._mid360_sequence_directions[sequence_indices]
+
+        offset_quat = torch.tensor(self.cfg.offset.rot, dtype=torch.float32, device=self._device)
+        flat_directions = frame_directions.reshape(-1, 3)
+        rotated_directions = math_utils.quat_apply(
+            offset_quat.expand(flat_directions.shape[0], -1), flat_directions
+        ).view_as(frame_directions)
+        self.ray_directions[env_ids] = rotated_directions
+
+    def _advance_mid360_frame(self, env_ids: torch.Tensor):
+        if self._mid360_scan_cursors is None:
+            return
+        self._mid360_scan_cursors[env_ids] = (
+            self._mid360_scan_cursors[env_ids] + self._mid360_source_points_per_scan
+        ) % self._mid360_sequence_directions.shape[0]
+
+    def reset(self, env_ids: Sequence[int] | None = None):
+        super().reset(env_ids)
+        if env_ids is None:
+            resolved_env_ids = torch.arange(self._view.count, dtype=torch.long, device=self._device)
+        else:
+            resolved_env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self._device)
+        # GroupedRayCasterCamera shares this reset implementation through its
+        # multiple-inheritance MRO, but camera rays are initialized by
+        # RayCasterCamera and do not expose LiDAR packet counters.
+        scan_counts = getattr(self, "_scan_counts", None)
+        if scan_counts is not None:
+            scan_counts[resolved_env_ids] = 0
+        if getattr(self, "_mid360_scan_cursors", None) is None:
+            return
+        self._reset_mid360_phase(resolved_env_ids)
 
     def _create_ray_collision_groups(self):
         '''
@@ -321,6 +436,8 @@ Plaintext
         参数：
             env_ids：需要更新缓冲区的环境ID。
         """
+        env_ids = torch.as_tensor(env_ids, dtype=torch.long, device=self._device)
+        self._set_mid360_frame(env_ids)
         self._update_ray_infos(env_ids)
         self._update_mesh_transforms(env_ids)
 
@@ -340,3 +457,5 @@ Plaintext
             max_dist=self.cfg.max_distance,
             min_dist=self.cfg.min_distance,
         )
+        self._advance_mid360_frame(env_ids)
+        self._scan_counts[env_ids] += 1

@@ -1,9 +1,11 @@
-# ======================================================
-# L1 OP模式
-# R1 VP模式
-# ========================================================
+"""G1 23DOF LP/VP RENet deployment in MuJoCo.
+
+Observation layout: proprio[780] | LiDAR elevation[187] | depth[1152] | mask[1].
+The estimator mask is 1 for LP and 0 for VP.
+"""
 
 import argparse
+import math
 import os
 import shutil
 import sys
@@ -11,6 +13,7 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 from collections import deque
+from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
 import mujoco
@@ -21,8 +24,12 @@ import torchvision.transforms as T
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../.."))
+for path in (REPO_ROOT, SCRIPT_DIR):
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+from legged_lab.perception.rolling_elevation_map import RollingElevationMap  # noqa: E402
 
 try:
     from joystick import JoyStick, JoystickButton  # noqa: E402
@@ -88,6 +95,22 @@ LAB_DOF_NAMES = [
     "right_wrist_roll_joint",
 ]
 
+# Keep the same self-return set as the IsaacLab GroupedRayCaster training scene.
+G1_23DOF_LINKS = [
+    "left_hip_roll_link",
+    "left_hip_yaw_link",
+    "left_knee_link",
+    "left_ankle_pitch_link",
+    "left_ankle_roll_link",
+    "right_hip_roll_link",
+    "right_hip_yaw_link",
+    "right_knee_link",
+    "right_ankle_pitch_link",
+    "right_ankle_roll_link",
+    "left_elbow_link",
+    "right_elbow_link",
+]
+
 
 class G1RENetSim2SimCfg:
     class sim:
@@ -115,7 +138,7 @@ class G1RENetSim2SimCfg:
 
     class robot:
         init_height = 0.793
-        joint_armature = 0.1
+        joint_armature = 0.01
         joint_damping = 0.001
         joint_frictionloss = 0.1
 
@@ -135,10 +158,199 @@ class G1RENetSim2SimCfg:
         debug_depth = False
         auto_patch_camera = True
 
+    class lidar:
+        body_name = "torso_link"
+        offset_pos = (0.0002835, 0.00003, 0.428434)
+        # WXYZ quaternion for URDF rpy=(pi, 0.0511207, 0).
+        offset_quat_wxyz = (0.0, 0.9996733521, 0.0, -0.0255575638)
+        point_rate = 200_000
+        scan_period = 0.1
+        downsample = 5
+        min_distance = 0.1
+        max_distance = 5.0
+        random_phase = True
+        angle_file = os.path.join(
+            REPO_ROOT,
+            "legged_lab/sensors/grouped_ray_caster/data/mid360_angles.npy",
+        )
+
+    class elevation_map:
+        history_frames = 8
+        history_seconds = 0.8
+        resolution = 0.1
+        internal_size = (3.2, 3.2)
+        output_size = (1.6, 1.0)
+        invalid_height = -1.0
+        height_clip = (-1.0, 1.0)
+        height_scan_offset = 0.5
+        height_scale = 1.0
+
+    class odometry:
+        delay_seconds = 0.04
+        position_white_std = 0.01
+        yaw_white_std = math.radians(0.5)
+        xy_random_walk = 0.005
+        z_random_walk = 0.002
+        yaw_random_walk = math.radians(0.2)
+
     class renet:
-        # Paper/env convention: 1.0 = OP, 0.0 = VP.
+        # Current convention: 1.0 = LP, 0.0 = VP.
         estimator_mask_dim = 1
-        default_estimator = "vp"
+        default_estimator = "lp"
+
+
+def quat_wxyz_to_matrix(quat: np.ndarray | tuple[float, ...]) -> np.ndarray:
+    """Convert a WXYZ quaternion to a 3x3 rotation matrix."""
+
+    w, x, y, z = np.asarray(quat, dtype=np.float64)
+    norm = math.sqrt(w * w + x * x + y * y + z * z)
+    if norm <= 0.0:
+        raise ValueError("Quaternion norm must be positive.")
+    w, x, y, z = w / norm, x / norm, y / norm, z / norm
+    return np.array(
+        [
+            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+            [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+            [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
+        ],
+        dtype=np.float64,
+    )
+
+
+def yaw_rotation(yaw: float) -> np.ndarray:
+    cosine = math.cos(yaw)
+    sine = math.sin(yaw)
+    return np.array(
+        [[cosine, -sine, 0.0], [sine, cosine, 0.0], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+
+
+def rotation_yaw(rotation: np.ndarray) -> float:
+    return math.atan2(float(rotation[1, 0]), float(rotation[0, 0]))
+
+
+@dataclass
+class TorsoPose:
+    position: np.ndarray
+    rotation: np.ndarray
+
+    @property
+    def yaw(self) -> float:
+        return rotation_yaw(self.rotation)
+
+    def clone(self) -> "TorsoPose":
+        return TorsoPose(self.position.copy(), self.rotation.copy())
+
+
+class Mid360ScanPattern:
+    """Time-ordered, downsampled MID-360 direction packets."""
+
+    def __init__(self, cfg: G1RENetSim2SimCfg, seed: int):
+        self.cfg = cfg
+        quantized = np.load(cfg.lidar.angle_file, allow_pickle=False)
+        if quantized.ndim != 2 or quantized.shape[1] != 2 or quantized.dtype != np.uint16:
+            raise RuntimeError(
+                "MID-360 angle resource must be uint16 with shape (num_samples, 2)."
+            )
+        angles = np.deg2rad(quantized.astype(np.float64) / 100.0)
+        azimuth = angles[:, 0]
+        zenith = angles[:, 1]
+        sin_zenith = np.sin(zenith)
+        self.sequence = np.column_stack(
+            (
+                sin_zenith * np.cos(azimuth),
+                sin_zenith * np.sin(azimuth),
+                np.cos(zenith),
+            )
+        )
+        exact_source_count = cfg.lidar.point_rate * cfg.lidar.scan_period
+        self.source_points_per_scan = int(round(exact_source_count))
+        if not math.isclose(exact_source_count, self.source_points_per_scan):
+            raise ValueError("LiDAR point_rate * scan_period must be an integer.")
+        self.sample_offsets = np.arange(
+            0,
+            self.source_points_per_scan,
+            cfg.lidar.downsample,
+            dtype=np.int64,
+        )
+        self.rays_per_scan = int(self.sample_offsets.size)
+        self._rng = np.random.default_rng(seed)
+        self.cursor = 0
+        self.reset()
+
+    def reset(self) -> None:
+        self.cursor = (
+            int(self._rng.integers(0, self.sequence.shape[0]))
+            if self.cfg.lidar.random_phase
+            else 0
+        )
+
+    def next_directions(self) -> np.ndarray:
+        indices = (self.cursor + self.sample_offsets) % self.sequence.shape[0]
+        directions = self.sequence[indices]
+        self.cursor = (self.cursor + self.source_points_per_scan) % self.sequence.shape[0]
+        return directions
+
+
+class PoseSourceManager:
+    """Provide ground-truth or a reproducible delayed/noisy odometry pose."""
+
+    def __init__(self, cfg: G1RENetSim2SimCfg, dt: float, seed: int, source: str):
+        self.cfg = cfg
+        self.dt = float(dt)
+        self.delay_steps = max(0, int(round(cfg.odometry.delay_seconds / self.dt)))
+        self._rng = np.random.default_rng(seed)
+        self.source = "truth"
+        self._history = deque(maxlen=self.delay_steps + 1)
+        self._position_walk = np.zeros(3, dtype=np.float64)
+        self._yaw_walk = 0.0
+        self._initialized = False
+        self.set_source(source)
+
+    def set_source(self, source: str, truth_pose: TorsoPose | None = None) -> None:
+        source = source.lower()
+        if source not in {"truth", "noisy_odom"}:
+            raise ValueError("Pose source must be 'truth' or 'noisy_odom'.")
+        self.source = source
+        if truth_pose is not None:
+            self.reset(truth_pose)
+
+    def reset(self, truth_pose: TorsoPose) -> None:
+        self._history.clear()
+        for _ in range(self.delay_steps + 1):
+            self._history.append(truth_pose.clone())
+        self._position_walk.fill(0.0)
+        self._yaw_walk = 0.0
+        self._initialized = True
+
+    def step(self, truth_pose: TorsoPose) -> TorsoPose:
+        if not self._initialized:
+            self.reset(truth_pose)
+        self._history.append(truth_pose.clone())
+        delayed = self._history[0]
+
+        walk_scale = math.sqrt(self.dt)
+        self._position_walk[:2] += self._rng.normal(
+            0.0, self.cfg.odometry.xy_random_walk * walk_scale, size=2
+        )
+        self._position_walk[2] += self._rng.normal(
+            0.0, self.cfg.odometry.z_random_walk * walk_scale
+        )
+        self._yaw_walk += float(
+            self._rng.normal(0.0, self.cfg.odometry.yaw_random_walk * walk_scale)
+        )
+
+        if self.source == "truth":
+            return truth_pose.clone()
+
+        white_position = self._rng.normal(
+            0.0, self.cfg.odometry.position_white_std, size=3
+        )
+        white_yaw = float(self._rng.normal(0.0, self.cfg.odometry.yaw_white_std))
+        position = delayed.position + self._position_walk + white_position
+        rotation = yaw_rotation(self._yaw_walk + white_yaw) @ delayed.rotation
+        return TorsoPose(position, rotation)
 
 
 def _read_mjcf_text(xml_path: str) -> tuple[str, bool]:
@@ -311,11 +523,32 @@ def prepare_mjcf_with_depth_camera(model_path: str, cfg: G1RENetSim2SimCfg) -> t
 
 
 class G1RENetMujocoRunner:
-    def __init__(self, cfg: G1RENetSim2SimCfg, policy_path: str, model_path: str):
+    def __init__(
+        self,
+        cfg: G1RENetSim2SimCfg,
+        policy_path: str,
+        model_path: str,
+        *,
+        estimator: str | None = None,
+        pose_source: str = "truth",
+        seed: int = 0,
+        lidar_dropout: bool = False,
+        depth_collapse: bool = False,
+        show_lidar_map: bool = False,
+        debug_lidar: bool = False,
+        headless: bool = False,
+    ):
         self.cfg = cfg
-        self.estimator = self.cfg.renet.default_estimator.lower()
-        if self.estimator not in {"op", "vp"}:
-            raise ValueError("Default RENet estimator must be 'op' or 'vp'.")
+        self.seed = int(seed)
+        self.headless = bool(headless)
+        self.pose_source_name = pose_source.lower()
+        self.lidar_dropout = bool(lidar_dropout)
+        self.depth_collapse = bool(depth_collapse)
+        self.show_lidar_map = bool(show_lidar_map)
+        self.debug_lidar = bool(debug_lidar)
+        self.estimator = (estimator or self.cfg.renet.default_estimator).lower()
+        if self.estimator not in {"lp", "vp"}:
+            raise ValueError("Default RENet estimator must be 'lp' or 'vp'.")
         self.estimator_mask_value = self.estimator_to_mask(self.estimator)
         self._temp_mjcf_dir = None
 
@@ -327,6 +560,7 @@ class G1RENetMujocoRunner:
         self.model = mujoco.MjModel.from_xml_path(load_model_path)
         self.model.opt.timestep = self.cfg.sim.dt
         self.data = mujoco.MjData(self.model)
+        self.configure_sensor_geom_groups()
 
         print(f"[INFO] Loading policy: {policy_path}")
         self.policy = torch.jit.load(policy_path, map_location="cpu")
@@ -335,29 +569,35 @@ class G1RENetMujocoRunner:
         self.init_variables()
         self.build_joint_mappings()
         self.set_initial_pose()
+        self.init_lidar()
         self.init_depth_camera()
         self.init_joystick()
+        self.validate_policy_contract()
 
         control_hz = 1.0 / (self.cfg.sim.dt * self.cfg.sim.decimation)
         proprio_dim = self.cfg.sim.num_obs_per_step * self.cfg.sim.actor_obs_history_length
+        lidar_dim = self.elevation_map.output_rows * self.elevation_map.output_cols
         depth_dim = self.cfg.robot.depth_history_frames * self.depth_height * self.depth_width
-        total_actor_dim = proprio_dim + depth_dim + self.cfg.renet.estimator_mask_dim
+        total_actor_dim = proprio_dim + lidar_dim + depth_dim + self.cfg.renet.estimator_mask_dim
         print(f"[INFO] Control frequency: {control_hz:.1f} Hz")
         print(f"[INFO] RENet estimator: {self.estimator.upper()} (mask={self.estimator_mask_value:.1f})")
-        print(f"[INFO] Actor obs: proprio={proprio_dim}, depth={depth_dim}, mask=1, total={total_actor_dim}")
+        print(
+            f"[INFO] Actor obs: proprio={proprio_dim}, LiDAR={lidar_dim}, "
+            f"depth={depth_dim}, mask=1, total={total_actor_dim}"
+        )
 
     @staticmethod
     def estimator_to_mask(estimator: str) -> float:
-        return 1.0 if estimator == "op" else 0.0
+        return 1.0 if estimator == "lp" else 0.0
 
     def set_estimator(self, estimator: str, announce: bool = True) -> None:
         estimator = estimator.lower()
-        if estimator not in {"op", "vp"}:
-            raise ValueError("RENet estimator must be 'op' or 'vp'.")
+        if estimator not in {"lp", "vp"}:
+            raise ValueError("RENet estimator must be 'lp' or 'vp'.")
         if estimator == "vp" and self.renderer is None:
             if announce:
-                print("[WARNING] VP requested, but depth renderer is unavailable. Staying on OP.")
-            estimator = "op"
+                print("[WARNING] VP requested, but depth renderer is unavailable. Staying on LP.")
+            estimator = "lp"
         if estimator == self.estimator:
             return
         self.estimator = estimator
@@ -365,8 +605,185 @@ class G1RENetMujocoRunner:
         if announce:
             print(f"[INFO] RENet estimator switched to {self.estimator.upper()} (mask={self.estimator_mask_value:.1f})")
 
+    def set_pose_source(self, source: str, announce: bool = True) -> None:
+        truth_pose = self.get_truth_torso_pose()
+        self.pose_provider.set_source(source, truth_pose)
+        self.pose_source_name = self.pose_provider.source
+        self.current_map_pose = truth_pose.clone()
+        self.elevation_map.reset()
+        self.scan_count = 0
+        if announce:
+            print(f"[INFO] Elevation-map pose source switched to {self.pose_source_name}; map history cleared.")
+
     def current_mode_text(self) -> str:
         return f"{self.estimator.upper()} mask={self.estimator_mask_value:.1f}"
+
+    def configure_sensor_geom_groups(self) -> None:
+        """Expose terrain plus the training-time G1 self-return link visuals."""
+
+        free_joints = np.flatnonzero(self.model.jnt_type == mujoco.mjtJoint.mjJNT_FREE)
+        if free_joints.size == 0:
+            raise RuntimeError("G1 MuJoCo model has no free joint/root body.")
+        robot_root_body = int(self.model.jnt_bodyid[int(free_joints[0])])
+
+        def is_robot_body(body_id: int) -> bool:
+            current = int(body_id)
+            while current > 0:
+                if current == robot_root_body:
+                    return True
+                current = int(self.model.body_parentid[current])
+            return False
+
+        allowed = set(G1_23DOF_LINKS)
+        visible_robot_geoms = 0
+        hidden_robot_geoms = 0
+        static_geoms = 0
+        visible_bodies = set()
+        for geom_id in range(self.model.ngeom):
+            body_id = int(self.model.geom_bodyid[geom_id])
+            if not is_robot_body(body_id):
+                self.model.geom_group[geom_id] = 0
+                static_geoms += 1
+                continue
+            body_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, body_id) or ""
+            if body_name in allowed and int(self.model.geom_group[geom_id]) == 1:
+                self.model.geom_group[geom_id] = 1
+                visible_robot_geoms += 1
+                visible_bodies.add(body_name)
+            else:
+                # Group 5 stays collision-active, but is hidden from LiDAR and depth.
+                self.model.geom_group[geom_id] = 5
+                hidden_robot_geoms += 1
+
+        self.sensor_geomgroup = np.array([1, 1, 0, 0, 0, 0], dtype=np.uint8)
+        self.sensor_scene_option = mujoco.MjvOption()
+        self.sensor_scene_option.geomgroup[:] = 0
+        self.sensor_scene_option.geomgroup[0:2] = 1
+        self.ray_visible_body_names = visible_bodies
+        print(
+            "[INFO] Sensor geom groups: "
+            f"terrain/static={static_geoms}, allowed self visuals={visible_robot_geoms}, "
+            f"hidden robot geoms={hidden_robot_geoms}."
+        )
+
+    def init_lidar(self) -> None:
+        self.torso_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, self.cfg.lidar.body_name
+        )
+        if self.torso_body_id < 0:
+            raise RuntimeError(f"MuJoCo body '{self.cfg.lidar.body_name}' is missing.")
+        self.lidar_offset_pos = np.asarray(self.cfg.lidar.offset_pos, dtype=np.float64)
+        self.lidar_offset_rotation = quat_wxyz_to_matrix(self.cfg.lidar.offset_quat_wxyz)
+        self.lidar_pattern = Mid360ScanPattern(self.cfg, self.seed)
+        expected_rays = int(
+            round(self.cfg.lidar.point_rate * self.cfg.lidar.scan_period)
+            // self.cfg.lidar.downsample
+        )
+        if self.lidar_pattern.rays_per_scan != expected_rays:
+            raise RuntimeError(
+                f"Expected {expected_rays} MID-360 rays, got {self.lidar_pattern.rays_per_scan}."
+            )
+        self.lidar_scan_interval = int(round(self.cfg.lidar.scan_period / self.dt))
+        if not math.isclose(
+            self.lidar_scan_interval * self.dt,
+            self.cfg.lidar.scan_period,
+            rel_tol=0.0,
+            abs_tol=1.0e-9,
+        ):
+            raise ValueError("LiDAR scan period must be divisible by the control period.")
+        self.elevation_map = RollingElevationMap(
+            num_envs=1,
+            device="cpu",
+            history_frames=self.cfg.elevation_map.history_frames,
+            history_seconds=self.cfg.elevation_map.history_seconds,
+            resolution=self.cfg.elevation_map.resolution,
+            internal_size=self.cfg.elevation_map.internal_size,
+            output_size=self.cfg.elevation_map.output_size,
+            invalid_height=self.cfg.elevation_map.invalid_height,
+            height_clip=self.cfg.elevation_map.height_clip,
+        )
+        self.pose_provider = PoseSourceManager(
+            self.cfg, self.dt, self.seed + 1, self.pose_source_name
+        )
+        truth_pose = self.get_truth_torso_pose()
+        self.pose_provider.reset(truth_pose)
+        self.current_truth_pose = truth_pose
+        self.current_map_pose = truth_pose.clone()
+        self.scan_count = 0
+        self.latest_lidar_height = torch.full(
+            (self.elevation_map.output_rows, self.elevation_map.output_cols),
+            self.cfg.elevation_map.invalid_height,
+            dtype=torch.float32,
+        )
+        self.latest_lidar_confidence = torch.zeros_like(self.latest_lidar_height)
+        self.latest_lidar_valid_fraction = 0.0
+        self.last_lidar_hit_count = 0
+        self.lidar_geomid = np.empty(self.lidar_pattern.rays_per_scan, dtype=np.int32)
+        self.lidar_distance = np.empty(self.lidar_pattern.rays_per_scan, dtype=np.float64)
+        print(
+            f"[INFO] MID-360: {self.lidar_pattern.rays_per_scan} rays/scan, "
+            f"period={self.cfg.lidar.scan_period:.3f}s, range="
+            f"[{self.cfg.lidar.min_distance:.1f}, {self.cfg.lidar.max_distance:.1f}]m."
+        )
+        if self.show_lidar_map:
+            plt.ion()
+            self.lidar_fig, self.lidar_axes = plt.subplots(1, 2, figsize=(8, 3))
+            self.lidar_fig.suptitle("G1 MID-360 rolling elevation map")
+
+    def validate_policy_contract(self) -> None:
+        """Reject stale exports and verify the current LP/VP deployment contract."""
+
+        proprio_dim = self.cfg.sim.num_obs_per_step * self.cfg.sim.actor_obs_history_length
+        lidar_dim = self.elevation_map.output_rows * self.elevation_map.output_cols
+        depth_dim = self.cfg.robot.depth_history_frames * self.depth_height * self.depth_width
+        obs_dim = proprio_dim + lidar_dim + depth_dim + self.cfg.renet.estimator_mask_dim
+        mask_index = obs_dim - 1
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(17)
+        base = 0.05 * torch.randn(1, obs_dim, generator=generator)
+        lp_obs = base.clone()
+        lp_obs[:, mask_index] = 1.0
+        vp_obs = base.clone()
+        vp_obs[:, mask_index] = 0.0
+        lp_depth_changed = lp_obs.clone()
+        lp_depth_changed[:, proprio_dim + lidar_dim : mask_index] += 0.5
+        vp_lidar_changed = vp_obs.clone()
+        vp_lidar_changed[:, proprio_dim : proprio_dim + lidar_dim] += 0.5
+        lp_lidar_changed = lp_obs.clone()
+        lp_lidar_changed[:, proprio_dim : proprio_dim + lidar_dim] += 0.5
+        vp_depth_changed = vp_obs.clone()
+        vp_depth_changed[:, proprio_dim + lidar_dim : mask_index] += 0.5
+        try:
+            with torch.inference_mode():
+                lp_action = self.policy(lp_obs)
+                vp_action = self.policy(vp_obs)
+                lp_depth_action = self.policy(lp_depth_changed)
+                vp_lidar_action = self.policy(vp_lidar_changed)
+                lp_lidar_action = self.policy(lp_lidar_changed)
+                vp_depth_action = self.policy(vp_depth_changed)
+        except Exception as exc:
+            raise RuntimeError(
+                "Policy does not accept the current 2120-dimensional LP/VP observation. "
+                "Re-export it with play_new_renet.py or export.py."
+            ) from exc
+        if tuple(lp_action.shape) != (1, self.num_actions) or not torch.isfinite(lp_action).all():
+            raise RuntimeError(
+                f"Policy output must be finite with shape (1, {self.num_actions}), "
+                f"got {tuple(lp_action.shape)}."
+            )
+        if torch.allclose(lp_action, vp_action, rtol=1.0e-7, atol=1.0e-8):
+            raise RuntimeError(
+                "Policy ignores the current estimator mask; this is likely a stale export."
+            )
+        if not torch.allclose(lp_action, lp_depth_action, rtol=1.0e-5, atol=1.0e-6):
+            raise RuntimeError("LP action depends on inactive depth input; export contract is invalid.")
+        if not torch.allclose(vp_action, vp_lidar_action, rtol=1.0e-5, atol=1.0e-6):
+            raise RuntimeError("VP action depends on inactive LiDAR input; export contract is invalid.")
+        if torch.allclose(lp_action, lp_lidar_action, rtol=1.0e-6, atol=1.0e-7):
+            raise RuntimeError("LP action is insensitive to LiDAR; export contract is invalid.")
+        if torch.allclose(vp_action, vp_depth_action, rtol=1.0e-6, atol=1.0e-7):
+            raise RuntimeError("VP action is insensitive to depth; export contract is invalid.")
+        print(f"[INFO] Policy contract validated: input={obs_dim}, output={self.num_actions}, LP/VP dynamic mask.")
 
     def init_variables(self) -> None:
         self.dt = self.cfg.sim.decimation * self.cfg.sim.dt
@@ -521,8 +938,13 @@ class G1RENetMujocoRunner:
         self.fig = None
         self.ax = None
         self.im = None
+        self.lidar_fig = None
+        self.lidar_axes = None
+        self.lidar_images = None
         self.joystick = None
         self.use_joystick = False
+        self._joystick_lidar_dropout = False
+        self._joystick_depth_collapse = False
 
     def build_joint_mappings(self) -> None:
         real_mujoco_names = []
@@ -604,7 +1026,7 @@ class G1RENetMujocoRunner:
         camera_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, self.cfg.robot.camera_name)
         if camera_id < 0:
             print(f"[WARNING] MuJoCo camera '{self.cfg.robot.camera_name}' is missing. VP is unavailable.")
-            self.set_estimator("op", announce=False)
+            self.set_estimator("lp", announce=False)
             return
 
         print(
@@ -624,6 +1046,9 @@ class G1RENetMujocoRunner:
             self.ax.set_title("G1 RENet Depth Camera")
 
     def init_joystick(self) -> None:
+        if self.headless:
+            self.use_joystick = False
+            return
         if JoyStick is None:
             self.use_joystick = False
             print(f"[WARNING] Controller support is unavailable: {JOYSTICK_IMPORT_ERROR}. Command will stay zero.")
@@ -654,6 +1079,141 @@ class G1RENetMujocoRunner:
             dtype=np.float32,
         )
 
+    def get_truth_torso_pose(self) -> TorsoPose:
+        position = np.asarray(self.data.xpos[self.torso_body_id], dtype=np.float64).copy()
+        rotation = np.asarray(self.data.xmat[self.torso_body_id], dtype=np.float64).reshape(3, 3).copy()
+        return TorsoPose(position, rotation)
+
+    def refresh_pose_estimate(self) -> None:
+        self.current_truth_pose = self.get_truth_torso_pose()
+        self.current_map_pose = self.pose_provider.step(self.current_truth_pose)
+
+    def _raycast_mid360(self, directions_sensor: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Cast one physical packet and return world hits, sensor origin, and geom IDs."""
+
+        truth = self.current_truth_pose
+        sensor_position = truth.position + truth.rotation @ self.lidar_offset_pos
+        directions_world = directions_sensor @ self.lidar_offset_rotation.T @ truth.rotation.T
+        self.lidar_geomid.fill(-1)
+        self.lidar_distance.fill(np.inf)
+        mujoco.mj_multiRay(
+            self.model,
+            self.data,
+            sensor_position,
+            np.ascontiguousarray(directions_world.reshape(-1), dtype=np.float64),
+            self.sensor_geomgroup,
+            1,
+            -1,
+            self.lidar_geomid,
+            self.lidar_distance,
+            directions_world.shape[0],
+            self.cfg.lidar.max_distance,
+        )
+        valid = (
+            (self.lidar_geomid >= 0)
+            & np.isfinite(self.lidar_distance)
+            & (self.lidar_distance >= self.cfg.lidar.min_distance)
+            & (self.lidar_distance <= self.cfg.lidar.max_distance)
+        )
+        hits_world = np.full((directions_world.shape[0], 3), np.inf, dtype=np.float64)
+        hits_world[valid] = (
+            sensor_position[None, :]
+            + self.lidar_distance[valid, None] * directions_world[valid]
+        )
+        return hits_world, sensor_position, self.lidar_geomid.copy()
+
+    @staticmethod
+    def _transform_points_between_pose_frames(
+        hits_world: np.ndarray,
+        truth_pose: TorsoPose,
+        map_pose: TorsoPose,
+    ) -> np.ndarray:
+        """Express physical hits in the selected odometry/world frame."""
+
+        transformed = np.full_like(hits_world, np.inf)
+        valid = np.isfinite(hits_world).all(axis=1)
+        local = (hits_world[valid] - truth_pose.position) @ truth_pose.rotation
+        transformed[valid] = local @ map_pose.rotation.T + map_pose.position
+        return transformed
+
+    def update_lidar_scan(self, dropout_active: bool = False) -> bool:
+        """Advance the scan phase and ingest one packet unless it is dropped."""
+
+        directions_sensor = self.lidar_pattern.next_directions()
+        if dropout_active:
+            return False
+        hits_world, _, geom_ids = self._raycast_mid360(directions_sensor)
+        hits_map = self._transform_points_between_pose_frames(
+            hits_world,
+            self.current_truth_pose,
+            self.current_map_pose,
+        )
+        sensor_position_map = (
+            self.current_map_pose.position
+            + self.current_map_pose.rotation @ self.lidar_offset_pos
+        )
+        self.scan_count += 1
+        self.elevation_map.update_from_point_cloud(
+            torch.from_numpy(hits_map.astype(np.float32, copy=False)).unsqueeze(0),
+            torch.from_numpy(sensor_position_map.astype(np.float32, copy=False)).unsqueeze(0),
+            torch.from_numpy(self.current_map_pose.position.astype(np.float32, copy=False)).unsqueeze(0),
+            torch.tensor([self.current_map_pose.yaw], dtype=torch.float32),
+            torch.tensor([self.scan_count], dtype=torch.long),
+            torch.tensor([self.data.time], dtype=torch.float32),
+            min_distance=self.cfg.lidar.min_distance,
+            max_distance=self.cfg.lidar.max_distance,
+        )
+        self.last_lidar_hit_count = int(np.isfinite(hits_map).all(axis=1).sum())
+        if self.debug_lidar:
+            names = []
+            for geom_id in np.unique(geom_ids[geom_ids >= 0]):
+                body_id = int(self.model.geom_bodyid[int(geom_id)])
+                names.append(mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_BODY, body_id) or "world")
+            sensor_z = float(sensor_position_map[2])
+            print(
+                f"[LIDAR] scan={self.scan_count}, hits={self.last_lidar_hit_count}/"
+                f"{self.lidar_pattern.rays_per_scan}, sensor_z={sensor_z:.3f}, "
+                f"bodies={sorted(set(names))}"
+            )
+        return True
+
+    def get_lidar_observation(self) -> torch.Tensor:
+        pose = self.current_map_pose
+        height, confidence = self.elevation_map.get_observation(
+            torch.from_numpy(pose.position.astype(np.float32, copy=False)).unsqueeze(0),
+            torch.tensor([pose.yaw], dtype=torch.float32),
+            torch.tensor([self.data.time], dtype=torch.float32),
+            height_offset=self.cfg.elevation_map.height_scan_offset,
+            height_scale=self.cfg.elevation_map.height_scale,
+        )
+        self.latest_lidar_height = height[0]
+        self.latest_lidar_confidence = confidence[0]
+        self.latest_lidar_valid_fraction = float((confidence[0] > 0.0).float().mean().item())
+        if not torch.isfinite(self.latest_lidar_height).all():
+            raise RuntimeError("LiDAR elevation observation contains NaN/Inf.")
+        self.update_lidar_visualization()
+        return self.latest_lidar_height
+
+    def update_lidar_visualization(self) -> None:
+        if not self.show_lidar_map or self.lidar_axes is None:
+            return
+        arrays = (
+            self.latest_lidar_height.detach().cpu().numpy(),
+            (self.latest_lidar_confidence > 0.0).detach().cpu().numpy(),
+        )
+        titles = ("relative height", "validity")
+        cmaps = ("terrain", "gray")
+        if self.lidar_images is None:
+            self.lidar_images = []
+            for axis, array, title, cmap in zip(self.lidar_axes, arrays, titles, cmaps):
+                image = axis.imshow(array, origin="lower", cmap=cmap, vmin=-1.0 if title == "relative height" else 0.0, vmax=1.0)
+                axis.set_title(title)
+                self.lidar_images.append(image)
+        else:
+            for image, array in zip(self.lidar_images, arrays):
+                image.set_data(array)
+        self.lidar_fig.canvas.flush_events()
+
     def get_proprio_obs(self) -> np.ndarray:
         dof_pos_mj = self.data.qpos[self.qpos_addr_mj].copy()
         dof_vel_mj = self.data.qvel[self.qvel_addr_mj].copy()
@@ -682,27 +1242,35 @@ class G1RENetMujocoRunner:
         self.obs_history[-self.cfg.sim.num_obs_per_step :] = obs
         return np.clip(self.obs_history, -self.cfg.sim.clip_observations, self.cfg.sim.clip_observations)
 
-    def build_policy_obs(self) -> tuple[torch.Tensor, np.ndarray, torch.Tensor]:
+    def build_policy_obs(self) -> tuple[torch.Tensor, np.ndarray, torch.Tensor, torch.Tensor]:
         proprio_history = self.get_proprio_obs()
         proprio_tensor = torch.from_numpy(proprio_history).float()
+        lidar_flat = self.get_lidar_observation().reshape(-1).float()
         depth_flat = torch.stack(list(self.depth_buffer)).reshape(-1).float()
         estimator_mask = torch.tensor([self.estimator_mask_value], dtype=torch.float32)
-        policy_obs = torch.cat([proprio_tensor, depth_flat, estimator_mask], dim=-1).unsqueeze(0)
+        policy_obs = torch.cat(
+            [proprio_tensor, lidar_flat, depth_flat, estimator_mask], dim=-1
+        ).unsqueeze(0)
 
         expected_dim = (
             self.cfg.sim.num_obs_per_step * self.cfg.sim.actor_obs_history_length
+            + self.elevation_map.output_rows * self.elevation_map.output_cols
             + self.cfg.robot.depth_history_frames * self.depth_height * self.depth_width
             + self.cfg.renet.estimator_mask_dim
         )
         if policy_obs.shape[-1] != expected_dim:
             raise RuntimeError(f"Expected RENet actor obs dim {expected_dim}, got {policy_obs.shape[-1]}.")
-        return policy_obs, proprio_history, depth_flat
+        return policy_obs, proprio_history, lidar_flat, depth_flat
 
     def update_depth_vision(self, noise_active: bool = False) -> None:
         if self.renderer is None:
             return
 
-        self.renderer.update_scene(self.data, camera=self.cfg.robot.camera_name)
+        self.renderer.update_scene(
+            self.data,
+            camera=self.cfg.robot.camera_name,
+            scene_option=self.sensor_scene_option,
+        )
         raw_depth = self.renderer.render()
         if self.cfg.robot.debug_depth:
             print(f"[DEBUG] Raw depth min={raw_depth.min():.3f}, max={raw_depth.max():.3f}")
@@ -750,7 +1318,7 @@ class G1RENetMujocoRunner:
         self.depth_buffer.append(depth_normalized)
 
     def apply_depth_collapse(self, depth_tensor: torch.Tensor) -> torch.Tensor:
-        # Y is used as an explicit visual-collapse test. OP/VP selection itself
+        # Y is used as an explicit visual-collapse test. LP/VP selection itself
         # still comes only from the estimator mask.
         return torch.zeros_like(depth_tensor)
 
@@ -767,14 +1335,14 @@ class G1RENetMujocoRunner:
     def apply_deadzone(self, value: float) -> float:
         return 0.0 if abs(value) < self.cfg.command.deadzone else value
 
-    def update_command_from_joystick(self) -> tuple[bool, bool]:
+    def update_command_from_joystick(self) -> tuple[bool, bool, bool]:
         if not self.use_joystick:
-            return False, False
+            return False, self.depth_collapse, self.lidar_dropout
 
         self.joystick.update()
         if self.joystick.is_button_pressed(JoystickButton.SELECT):
             print("[INFO] Controller SELECT pressed, exiting.")
-            return True, False
+            return True, self.depth_collapse, self.lidar_dropout
 
         if self.joystick.is_button_pressed(JoystickButton.A):
             self.command_vel[:] = 0.0
@@ -784,9 +1352,12 @@ class G1RENetMujocoRunner:
             self.reset_robot()
 
         if self.joystick.is_button_pressed(JoystickButton.L1):
-            self.set_estimator("op")
+            self.set_estimator("lp")
         if self.joystick.is_button_pressed(JoystickButton.R1):
             self.set_estimator("vp")
+        if self.joystick.is_button_released(JoystickButton.B):
+            next_source = "noisy_odom" if self.pose_source_name == "truth" else "truth"
+            self.set_pose_source(next_source)
 
         ax1 = self.apply_deadzone(self.joystick.get_axis_value(1))
         ax0 = self.apply_deadzone(self.joystick.get_axis_value(0))
@@ -795,8 +1366,9 @@ class G1RENetMujocoRunner:
         self.command_vel[0] = np.clip(-ax1 * 1.0, *self.cfg.command.lin_vel_x)
         self.command_vel[1] = np.clip(-ax0 * 0.5, *self.cfg.command.lin_vel_y)
         self.command_vel[2] = np.clip(-ax3 * 1.57, *self.cfg.command.ang_vel_z)
-        depth_noise_active = self.estimator == "vp" and self.joystick.is_button_pressed(JoystickButton.Y)
-        return False, depth_noise_active
+        depth_noise_active = self.depth_collapse or self.joystick.is_button_pressed(JoystickButton.Y)
+        lidar_dropout_active = self.lidar_dropout or self.joystick.is_button_pressed(JoystickButton.X)
+        return False, depth_noise_active, lidar_dropout_active
 
     def position_control(self) -> np.ndarray:
         actions_scaled = self.action * self.cfg.sim.action_scale
@@ -817,10 +1389,19 @@ class G1RENetMujocoRunner:
         for frame in self.depth_buffer:
             frame.zero_()
         self.set_initial_pose()
+        self.lidar_pattern.reset()
+        self.elevation_map.reset()
+        self.scan_count = 0
+        truth_pose = self.get_truth_torso_pose()
+        self.pose_provider.reset(truth_pose)
+        self.current_truth_pose = truth_pose
+        self.current_map_pose = self.pose_provider.step(truth_pose)
         for _ in range(self.cfg.sim.actor_obs_history_length):
             self.get_proprio_obs()
         for _ in range(self.cfg.robot.depth_history_frames):
-            self.update_depth_vision()
+            self.update_depth_vision(noise_active=self.depth_collapse)
+        self.update_lidar_scan(dropout_active=self.lidar_dropout)
+        self.get_lidar_observation()
 
     def stabilize_robot(self, duration: float = 2.0) -> None:
         target_pos = self.default_dof_pos.copy()
@@ -840,32 +1421,54 @@ class G1RENetMujocoRunner:
                 time.sleep(self.cfg.sim.dt)
 
         self.obs_history[:] = 0.0
+        self.elevation_map.reset()
+        self.scan_count = 0
+        self.lidar_pattern.reset()
+        truth_pose = self.get_truth_torso_pose()
+        self.pose_provider.reset(truth_pose)
+        self.current_truth_pose = truth_pose
+        self.current_map_pose = self.pose_provider.step(truth_pose)
         for _ in range(self.cfg.sim.actor_obs_history_length):
             self.get_proprio_obs()
         for _ in range(self.cfg.robot.depth_history_frames):
-            self.update_depth_vision()
+            self.update_depth_vision(noise_active=self.depth_collapse)
+        self.update_lidar_scan(dropout_active=self.lidar_dropout)
+        self.get_lidar_observation()
         print(f"[INFO] Stabilized height: {self.data.qpos[2]:.4f} m")
 
     def run(self) -> None:
-        self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+        if not self.headless:
+            self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
         self.stabilize_robot()
 
-        print("\n[INFO] Xbox: left stick = vx/vy, right stick X = yaw rate, A = stop, START = reset, SELECT = exit")
-        print("[INFO] RENet: L1 = OP/mask 1, R1 = VP/mask 0. Hold Y in VP mode to feed collapsed depth.")
+        print("\n[INFO] Xbox: left stick=vx/vy, right stick X=yaw rate, A=stop, START=reset, SELECT=exit")
+        print("[INFO] RENet: L1=LP/mask 1, R1=VP/mask 0, B=truth/noisy_odom.")
+        print("[INFO] Fault injection: hold X=drop LiDAR packets, hold Y=zero depth frames.")
         print(f"[INFO] Current RENet mode: {self.current_mode_text()}")
-        print("[INFO] Press Ctrl+C in terminal to exit.\n")
+        print(f"[INFO] Map pose source: {self.pose_source_name}")
+        print(f"[INFO] Duration: {self.cfg.sim.sim_duration:.1f}s after stabilization. Press Ctrl+C to exit.\n")
 
         debug_counter = 0
+        control_start_time = float(self.data.time)
         try:
-            while self.viewer.is_running():
-                should_exit, depth_noise_active = self.update_command_from_joystick()
+            while (
+                float(self.data.time) - control_start_time < self.cfg.sim.sim_duration
+                and (self.viewer is None or self.viewer.is_running())
+            ):
+                should_exit, depth_noise_active, lidar_dropout_active = self.update_command_from_joystick()
                 if should_exit:
                     break
 
+                self.refresh_pose_estimate()
                 if self.episode_length_buf % self.cfg.robot.depth_update_interval == 0:
                     self.update_depth_vision(noise_active=depth_noise_active)
+                if (
+                    self.episode_length_buf > 0
+                    and self.episode_length_buf % self.lidar_scan_interval == 0
+                ):
+                    self.update_lidar_scan(dropout_active=lidar_dropout_active)
 
-                policy_obs, proprio_history, depth_flat = self.build_policy_obs()
+                policy_obs, proprio_history, lidar_flat, depth_flat = self.build_policy_obs()
                 with torch.inference_mode():
                     action_tensor = self.policy(policy_obs)
                 self.action[:] = action_tensor.squeeze(0).detach().cpu().numpy()[: self.num_actions]
@@ -878,6 +1481,10 @@ class G1RENetMujocoRunner:
                     print(f"  policy obs shape: {tuple(policy_obs.shape)}")
                     print(f"  estimator: {self.estimator.upper()}, mask={self.estimator_mask_value:.1f}")
                     print(f"  latest proprio first 9: {latest_obs[:9]}")
+                    print(
+                        f"  LiDAR flat shape: {tuple(lidar_flat.shape)}, "
+                        f"valid={self.latest_lidar_valid_fraction:.1%}, scans={self.scan_count}"
+                    )
                     print(f"  depth flat shape: {tuple(depth_flat.shape)}, mean={depth_flat.mean().item():.3f}")
                     print(f"  command: {self.command_vel}")
                     print(f"  action first 6 (Isaac order): {self.action[:6]}")
@@ -889,10 +1496,11 @@ class G1RENetMujocoRunner:
                     self.data.ctrl[:] = 0.0
                     self.data.ctrl[self.ctrl_addr_mj] = tau
                     mujoco.mj_step(self.model, self.data)
-                    self.viewer.sync()
+                    if self.viewer is not None:
+                        self.viewer.sync()
 
                     elapsed = time.time() - step_start
-                    if self.cfg.sim.dt - elapsed > 0:
+                    if self.viewer is not None and self.cfg.sim.dt - elapsed > 0:
                         time.sleep(self.cfg.sim.dt - elapsed)
 
                 self.episode_length_buf += 1
@@ -902,6 +1510,7 @@ class G1RENetMujocoRunner:
                     print(
                         f"[INFO] t={self.data.time:.1f}s, "
                         f"mode={self.current_mode_text()}, "
+                        f"pose={self.pose_source_name}, lidar_valid={self.latest_lidar_valid_fraction:.1%}, "
                         f"cmd=[{self.command_vel[0]:.2f}, {self.command_vel[1]:.2f}, {self.command_vel[2]:.2f}], "
                         f"phase=[{self.leg_phase[0]:.2f}, {self.leg_phase[1]:.2f}], "
                         f"h={self.data.qpos[2]:.3f}m"
@@ -916,6 +1525,8 @@ class G1RENetMujocoRunner:
                 self.renderer.close()
             if self.fig is not None:
                 plt.close(self.fig)
+            if self.lidar_fig is not None:
+                plt.close(self.lidar_fig)
             if self._temp_mjcf_dir is not None:
                 self._temp_mjcf_dir.cleanup()
             print("[INFO] Simulation finished.")
@@ -954,7 +1565,10 @@ def main() -> None:
     scene_names = list(available_scenes.keys())
 
     parser = argparse.ArgumentParser(
-        description="G1 RENet 23DOF Sim2Sim. Observation layout: proprio history | depth history | estimator mask.",
+        description=(
+            "G1 RENet 23DOF Sim2Sim. Observation layout: "
+            "proprio history | LiDAR elevation | depth history | estimator mask."
+        ),
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("--policy", type=str, default=default_policy, help="Path to exported g1_renet policy.pt")
@@ -968,6 +1582,24 @@ def main() -> None:
     )
     parser.add_argument("--scene-file", type=str, default=None, help="Custom scene XML path, higher priority than --scene")
     parser.add_argument("--duration", type=float, default=100.0, help="Simulation duration in seconds")
+    parser.add_argument(
+        "--estimator",
+        choices=("lp", "vp"),
+        default="lp",
+        help="Initial control branch: LP uses LiDAR and VP uses depth",
+    )
+    parser.add_argument(
+        "--pose-source",
+        choices=("truth", "noisy_odom"),
+        default="truth",
+        help="Pose source used by the rolling elevation map",
+    )
+    parser.add_argument("--seed", type=int, default=0, help="Seed for LiDAR phase and noisy odometry")
+    parser.add_argument("--lidar-dropout", action="store_true", help="Persistently drop new LiDAR packets")
+    parser.add_argument("--depth-collapse", action="store_true", help="Persistently feed zero depth frames")
+    parser.add_argument("--show-lidar-map", action="store_true", help="Show LiDAR height and validity maps")
+    parser.add_argument("--debug-lidar", action="store_true", help="Print per-packet LiDAR diagnostics")
+    parser.add_argument("--headless", action="store_true", help="Run without the interactive MuJoCo viewer")
     parser.add_argument("--list-scenes", action="store_true", help="List available scene XML files")
     parser.add_argument("--check-mapping", action="store_true", help="Print joint/actuator mapping and exit")
     parser.add_argument("--no-depth-view", action="store_true", help="Disable matplotlib depth image window")
@@ -978,6 +1610,11 @@ def main() -> None:
         help="Do not create a temporary depth_camera when the 23DOF XML lacks one",
     )
     args = parser.parse_args()
+
+    if args.duration <= 0.0:
+        parser.error("--duration must be positive")
+    if args.headless and args.show_lidar_map:
+        parser.error("--show-lidar-map cannot be used together with --headless")
 
     if args.list_scenes:
         print("\nAvailable scenes:")
@@ -1005,7 +1642,7 @@ def main() -> None:
     cfg = G1RENetSim2SimCfg()
     cfg.sim.sim_duration = args.duration
     cfg.sim.print_mapping = args.check_mapping
-    cfg.robot.show_depth = not args.no_depth_view
+    cfg.robot.show_depth = not args.no_depth_view and not args.headless
     cfg.robot.debug_depth = args.debug_depth
     cfg.robot.auto_patch_camera = not args.no_auto_camera
 
@@ -1014,7 +1651,8 @@ def main() -> None:
     print("=" * 60)
     print(f"Policy: {args.policy}")
     print(f"MuJoCo XML: {model_path}")
-    print(f"Initial estimator: {cfg.renet.default_estimator.upper()} (controller L1=OP, R1=VP)")
+    print(f"Initial estimator: {args.estimator.upper()} (controller L1=LP, R1=VP)")
+    print(f"Elevation-map pose source: {args.pose_source}")
     if args.scene:
         print(f"Scene: {args.scene}")
     print("=" * 60)
@@ -1023,6 +1661,14 @@ def main() -> None:
         cfg=cfg,
         policy_path=args.policy,
         model_path=model_path,
+        estimator=args.estimator,
+        pose_source=args.pose_source,
+        seed=args.seed,
+        lidar_dropout=args.lidar_dropout,
+        depth_collapse=args.depth_collapse,
+        show_lidar_map=args.show_lidar_map,
+        debug_lidar=args.debug_lidar,
+        headless=args.headless,
     )
     if args.check_mapping:
         print("[INFO] Mapping check finished; viewer was not launched.")

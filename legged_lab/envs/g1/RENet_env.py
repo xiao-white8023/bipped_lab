@@ -1,3 +1,5 @@
+import math
+
 import isaaclab.sim as sim_utils
 import isaacsim.core.utils.torch as torch_utils  # type: ignore
 import numpy as np
@@ -17,7 +19,10 @@ from isaaclab.utils.math import quat_apply, quat_conjugate, quat_rotate
 from scipy.spatial.transform import Rotation
 
 from legged_lab.envs.g1.RENet_cfg import G1RENETENVCFG
-from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
+from legged_lab.perception import RollingElevationMap
+from legged_lab.sensors.camera_noise import distance_dependent_gaussian_noise
+from legged_lab.sensors.grouped_ray_caster import GroupedRayCaster, GroupedRayCasterCamera
+from legged_lab.sensors.lidar import LidarNoiseModel, validate_lidar_noise_cfg
 from legged_lab.utils.env_utils.scene import SceneCfg
 
 from rsl_rl.env import VecEnv
@@ -81,6 +86,10 @@ class G1RENetEnv(VecEnv):
         self.contact_sensor: ContactSensor = self.scene.sensors["contact_sensor"]
         if self.cfg.scene.height_scanner.enable_height_scan:
             self.height_scanner: RayCaster = self.scene.sensors["height_scanner"]
+
+        self.lidar: GroupedRayCaster | None = (
+            self.scene.sensors["lidar"] if "lidar" in self.scene.sensors else None
+        )
 
         if "camera" in self.scene.sensors:
             self.camera: GroupedRayCasterCamera = self.scene.sensors["camera"]
@@ -332,7 +341,6 @@ class G1RENetEnv(VecEnv):
         # 为每一个环境创建一个mask
         self.renet_estimator_mask = torch.zeros(self.num_envs, 1, dtype=torch.float, device=self.device)
         self.renet_training_iteration = 0
-        self.renet_hard_terrain_type_ids = self.resolve_renet_hard_terrain_type_ids()
     
         #
         if self.camera is not None:
@@ -393,6 +401,76 @@ class G1RENetEnv(VecEnv):
             name_keys=['left_wrist_roll_rubber_hand', 'right_wrist_roll_rubber_hand'],
             preserve_order=True,
         )
+        self.torso_link_ids, torso_link_names = self.robot.find_bodies(
+            name_keys=["torso_link"], preserve_order=True
+        )
+        if len(self.torso_link_ids) != 1:
+            raise RuntimeError(
+                "MID-360 elevation mapping requires exactly one torso_link, "
+                f"found {torso_link_names}."
+            )
+
+        self.lidar_elevation_map = None
+        self.lidar_height_map = None
+        self.lidar_confidence = None
+        self.lidar_map_observation = None
+        self.lidar_noise_model = None
+        # 高程图的配置
+        lidar_map_cfg = self.cfg.lidar_elevation_map
+        if lidar_map_cfg.enable:
+            if self.lidar is None:
+                raise RuntimeError("LiDAR elevation mapping is enabled but the scene has no lidar sensor.")
+            if lidar_map_cfg.aggregation != "max_height":
+                raise ValueError(
+                    "Only max_height LiDAR elevation aggregation is implemented, "
+                    f"got {lidar_map_cfg.aggregation!r}."
+                )
+            if not lidar_map_cfg.keep_self_hits:
+                raise ValueError(
+                    "The current g1_renet raw-cloud stage requires keep_self_hits=True."
+                )
+            lidar_noise_cfg = self.cfg.scene.lidar.noise
+            validate_lidar_noise_cfg(lidar_noise_cfg)
+            print(
+                "[LiDARNoise] "
+                f"enabled={lidar_noise_cfg.enable}, "
+                f"range_std_m={lidar_noise_cfg.range_std_range_m}, "
+                f"point_dropout={lidar_noise_cfg.point_dropout_prob_range}, "
+                f"translation_bias_m={lidar_noise_cfg.translation_bias_range_m}, "
+                f"rotation_bias_deg={lidar_noise_cfg.rotation_bias_range_deg}"
+            )
+            if lidar_noise_cfg.enable:
+                self.lidar_noise_model = LidarNoiseModel(
+                    lidar_noise_cfg,
+                    num_envs=self.num_envs,
+                    device=self.device,
+                )
+            expected_history_seconds = (
+                lidar_map_cfg.history_frames * self.cfg.scene.lidar.update_period
+            )
+            if not math.isclose(
+                lidar_map_cfg.history_seconds,
+                expected_history_seconds,
+                rel_tol=0.0,
+                abs_tol=1.0e-6,
+            ):
+                raise ValueError(
+                    "LiDAR rolling history must span exactly history_frames packets: "
+                    f"{lidar_map_cfg.history_seconds} != "
+                    f"{lidar_map_cfg.history_frames} * {self.cfg.scene.lidar.update_period}."
+                )
+            self.lidar_elevation_map = RollingElevationMap(
+                num_envs=self.num_envs,
+                device=self.device,
+                history_frames=lidar_map_cfg.history_frames,
+                history_seconds=lidar_map_cfg.history_seconds,
+                resolution=lidar_map_cfg.resolution,
+                internal_size=lidar_map_cfg.internal_size,
+                output_size=lidar_map_cfg.output_size,
+                invalid_height=lidar_map_cfg.invalid_height,
+                height_clip=lidar_map_cfg.height_clip,
+                reprojection_chunk_size=lidar_map_cfg.reprojection_chunk_size,
+            )
         # 左腿关节索引
         self.left_leg_ids, _ = self.robot.find_joints(
             name_keys=[
@@ -525,76 +603,63 @@ class G1RENetEnv(VecEnv):
 
     def set_training_iteration(self, iteration: int):
         self.renet_training_iteration = int(iteration)
+        return self.sample_renet_estimator_mask()
 
-    def resolve_renet_hard_terrain_type_ids(self):
-        terrain_generator = getattr(self.cfg.scene, "terrain_generator", None)
-        hard_names = set(getattr(self.cfg.renet, "force_vp_terrain_names", []))
-        if terrain_generator is None or not hard_names or not getattr(terrain_generator, "curriculum", False):
-            return torch.empty(0, dtype=torch.long, device=self.device)
+    def apply_renet_estimator_mask(self, actor_obs):
+        """Return observations with the current iteration mask in the final column.
 
-        sub_terrains = getattr(terrain_generator, "sub_terrains", {})
-        if not sub_terrains:
-            return torch.empty(0, dtype=torch.long, device=self.device)
+        The runner keeps the observation produced by the final step of the
+        previous rollout.  Updating that tensor here avoids one stale LP/VP
+        action at a 20-iteration boundary without appending observation history
+        a second time.
+        """
 
-        sub_terrain_names = list(sub_terrains.keys())
-        proportions = np.array([sub_terrains[name].proportion for name in sub_terrain_names], dtype=np.float64)
-        if proportions.sum() <= 0.0:
-            return torch.empty(0, dtype=torch.long, device=self.device)
-        proportions /= proportions.sum()
-        cumulative = np.cumsum(proportions)
-
-        hard_type_ids = []
-        num_cols = int(getattr(terrain_generator, "num_cols", 0))
-        for col_idx in range(num_cols):
-            matches = np.where(col_idx / num_cols + 0.001 < cumulative)[0]
-            if len(matches) == 0:
-                continue
-            sub_index = int(np.min(matches))
-            if sub_terrain_names[sub_index] in hard_names:
-                hard_type_ids.append(col_idx)
-
-        return torch.tensor(hard_type_ids, dtype=torch.long, device=self.device)
-
-    def get_renet_force_vp_envs(self):
-        force_vp = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-        terrain = getattr(self.scene, "terrain", None)
-        if terrain is None:
-            return force_vp
-
-        if self.renet_hard_terrain_type_ids.numel() > 0 and hasattr(terrain, "terrain_types"):
-            terrain_types = terrain.terrain_types.to(self.device)
-            force_vp |= (terrain_types.unsqueeze(1) == self.renet_hard_terrain_type_ids.unsqueeze(0)).any(dim=1)
-
-        level_threshold = int(getattr(self.cfg.renet, "force_vp_terrain_level", -1))
-        if level_threshold >= 0 and hasattr(terrain, "terrain_levels"):
-            force_vp |= terrain.terrain_levels.to(self.device) >= level_threshold
-
-        return force_vp
+        if actor_obs.ndim != 2 or actor_obs.shape[0] != self.num_envs:
+            raise ValueError(
+                "RENet actor observations must have shape (num_envs, obs_dim), "
+                f"got {tuple(actor_obs.shape)}."
+            )
+        patched_obs = actor_obs.clone()
+        patched_obs[:, -1:] = self.renet_estimator_mask.to(
+            device=patched_obs.device, dtype=patched_obs.dtype
+        )
+        return patched_obs
 
     def sample_renet_estimator_mask(self):
         mask_mode = getattr(self.cfg.renet, "mask_mode", "alternate")
         if mask_mode == "alternate":
             interval = max(1, int(getattr(self.cfg.renet, "alternate_interval_iters", 20)))
-            use_op = (self.renet_training_iteration // interval) % 2 == 0
-            self.renet_estimator_mask[:] = 1.0 if use_op else 0.0
+            use_lp = (self.renet_training_iteration // interval) % 2 == 0
+            self.renet_estimator_mask[:] = 1.0 if use_lp else 0.0
         elif mask_mode == "random":
-            op_probability = float(getattr(self.cfg.renet, "op_probability", 0.5))
-            op_probability = max(0.0, min(1.0, op_probability))
+            lp_probability = float(getattr(self.cfg.renet, "lp_probability", 0.5))
+            lp_probability = max(0.0, min(1.0, lp_probability))
             self.renet_estimator_mask = (
-                torch.rand(self.num_envs, 1, device=self.device) < op_probability
+                torch.rand(self.num_envs, 1, device=self.device) < lp_probability
             ).float()
-        elif mask_mode == "op":
+        elif mask_mode == "lp":
             self.renet_estimator_mask[:] = 1.0
         elif mask_mode == "vp":
             self.renet_estimator_mask[:] = 0.0
         else:
             raise ValueError(f"Unsupported RENet mask_mode: {mask_mode}")
 
-        force_vp_envs = self.get_renet_force_vp_envs()
-        self.renet_estimator_mask[force_vp_envs] = 0.0
         return self.renet_estimator_mask
 
     def append_renet_training_inputs(self, actor_obs):
+        self.update_lidar_elevation_map_diagnostics()
+
+        if self.lidar_height_map is None:
+            raise RuntimeError("LP training requires a valid LiDAR elevation map.")
+        flat_lidar_height = self.lidar_height_map.reshape(self.num_envs, -1)
+        expected_lidar_dim = 11 * 17
+        if flat_lidar_height.shape[1] != expected_lidar_dim:
+            raise RuntimeError(
+                "LP LiDAR height input must contain 11x17 cells, "
+                f"got {tuple(self.lidar_height_map.shape)}."
+            )
+        actor_obs = torch.cat([actor_obs, flat_lidar_height], dim=-1)
+
         if self.camera is not None:
             depth_obs = self.get_deepcamera_history()
             flat_depth = depth_obs.view(self.num_envs, -1)
@@ -605,6 +670,63 @@ class G1RENetEnv(VecEnv):
         self.extras["observations"]["renet_mask"] = estimator_mask
         actor_obs = torch.cat([actor_obs, estimator_mask], dim=-1)
         return actor_obs
+
+    def update_lidar_elevation_map_diagnostics(self):
+        """Update the raw-cloud rolling map and its diagnostic channels."""
+
+        if self.lidar_elevation_map is None or self.lidar is None:
+            return
+
+        torso_state_w = self.robot.data.body_state_w[:, self.torso_link_ids[0]]
+        torso_pos_w = torso_state_w[:, :3]
+        torso_quat_w = torso_state_w[:, 3:7]
+        torso_yaw_w = RollingElevationMap.yaw_from_quat_wxyz(torso_state_w[:, 3:7])
+        episode_time = self.episode_length_buf.to(torch.float32) * self.step_dt
+
+        # Accessing data performs IsaacLab's lazy sensor update.  scan_counts
+        # changes only when a new ray-cast packet was actually computed.
+        lidar_data = self.lidar.data
+        ray_hits_w = lidar_data.ray_hits_w
+        sensor_pos_w = lidar_data.pos_w
+        if self.lidar_noise_model is not None:
+            ray_hits_w, sensor_pos_w, _ = self.lidar_noise_model.apply_new_scans(
+                ray_hits_w,
+                sensor_pos_w,
+                torso_pos_w,
+                torso_quat_w,
+                self.lidar.scan_counts,
+                min_distance=self.cfg.scene.lidar.min_distance,
+                max_distance=self.cfg.scene.lidar.max_distance,
+            )
+        self.lidar_elevation_map.update_from_point_cloud(
+            ray_hits_w,
+            sensor_pos_w,
+            torso_pos_w,
+            torso_yaw_w,
+            self.lidar.scan_counts,
+            episode_time,
+            min_distance=self.cfg.scene.lidar.min_distance,
+            max_distance=self.cfg.scene.lidar.max_distance,
+        )
+        height_map, confidence = self.lidar_elevation_map.get_observation(
+            torso_pos_w,
+            torso_yaw_w,
+            episode_time,
+            height_offset=self.cfg.normalization.height_scan_offset,
+            height_scale=self.obs_scales.height_scan,
+        )
+        valid_ratio = (confidence > 0.0).to(torch.float32).mean(dim=(1, 2), keepdim=False).unsqueeze(-1)
+
+        self.lidar_height_map = height_map
+        self.lidar_confidence = confidence
+        self.lidar_map_observation = torch.stack((height_map, confidence), dim=1)
+        observations = self.extras["observations"]
+        observations["lidar_elevation_map"] = self.lidar_map_observation
+        observations["lidar_height_map"] = height_map
+        observations["lidar_confidence"] = confidence
+        observations["lidar_valid_ratio"] = valid_ratio
+        observations["lidar_no_return_ratio"] = 1.0 - valid_ratio
+        observations["lidar_scan_count"] = self.lidar.scan_counts.clone().unsqueeze(-1)
     
     def obs_noisy_vec_and_buffer(self):
         if self.add_noise:
@@ -704,6 +826,11 @@ class G1RENetEnv(VecEnv):
         self.critic_obs_buffer.reset(env_ids)
         self.action_buffer.reset(env_ids)
         self.episode_length_buf[env_ids] = 0
+
+        if self.lidar_elevation_map is not None:
+            self.lidar_elevation_map.reset(env_ids)
+        if self.lidar_noise_model is not None:
+            self.lidar_noise_model.reset(env_ids)
 
         #
         if self.camera is not None:
@@ -994,6 +1121,18 @@ class G1RENetEnv(VecEnv):
         blur_transform = T.GaussianBlur(kernel_size=3, sigma=1.0)
         depth_blurred = blur_transform(depth_cropped)
         depth_blurred = depth_blurred.squeeze(1) # 恢复为 (N, H, W)
+
+        # Apply stochastic noise while depth is still in metres. Keeping this
+        # after the deterministic blur preserves the configured per-pixel std.
+        if self.cfg.scene.camera.add_camera_noise:
+            camera_env_ids = torch.arange(depth_blurred.shape[0], device=depth_blurred.device)
+            depth_blurred = distance_dependent_gaussian_noise(
+                depth_blurred,
+                self.cfg.depth_noise,
+                camera_env_ids,
+                min_distance=self.cfg.scene.camera.camera.min_distance,
+                max_distance=self.cfg.robot.depth_max,
+            )
         
         # 截断到 2.5 米
         depth_clipped = torch.clip(depth_blurred, min=self.cfg.scene.camera.camera.min_distance, max=self.cfg.robot.depth_max)

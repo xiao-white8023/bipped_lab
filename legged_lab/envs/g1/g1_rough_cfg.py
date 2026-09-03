@@ -44,7 +44,12 @@ from legged_lab.envs.base.base_config import (
     left_feet_ray_caster_cfg,
     right_feet_ray_caster_cfg
 )
-from legged_lab.terrains import GRAVEL_TERRAINS_CFG, ROUGH_TERRAINS_CFG,Flat_terrain  # noqa:F401
+from legged_lab.terrains import (  # noqa:F401
+    EXTREME_PARKOUR_TERRAINS_CFG,
+    Flat_terrain,
+    GRAVEL_TERRAINS_CFG,
+    ROUGH_TERRAINS_CFG,
+)
 from legged_lab.assets.g1.g1_29 import G1_29CFG,G1_29DOF_LINKS,G1_23CFG,G1_23DOF_LINKS
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCamera
 from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCameraCfg
@@ -213,7 +218,7 @@ class G129WALK_ROUGHENVCFG:
         env_spacing=2.5,
         robot=G1_23CFG,
         terrain_type="generator",
-        terrain_generator=Flat_terrain,
+        terrain_generator=ROUGH_TERRAINS_CFG,# EXTREME_PARKOUR_TERRAINS_CFG,
         max_init_terrain_level=5,
         height_scanner=HeightScannerCfg(
             enable_height_scan=False,

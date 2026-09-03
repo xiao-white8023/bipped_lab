@@ -51,6 +51,8 @@ class AMPPPO:
         vel_estimation_warmup_iters: int = 0,
         terrain_recon_coef: float = 0.0,
         terrain_recon_warmup_iters: int = 0,
+        lp_terrain_recon_coef: float = 0.0,
+        lp_terrain_recon_warmup_iters: int = 0,
         terrain_recon_target_clip: float = 1.0,
         terrain_scan_dim: int = 187,
         vel_dim: int = 3,
@@ -164,6 +166,8 @@ class AMPPPO:
         self.vel_estimation_warmup_iters = vel_estimation_warmup_iters
         self.terrain_recon_coef = terrain_recon_coef
         self.terrain_recon_warmup_iters = terrain_recon_warmup_iters
+        self.lp_terrain_recon_coef = lp_terrain_recon_coef
+        self.lp_terrain_recon_warmup_iters = lp_terrain_recon_warmup_iters
         self.terrain_recon_target_clip = terrain_recon_target_clip
         self.terrain_scan_dim = terrain_scan_dim
         self.vel_dim = vel_dim
@@ -201,6 +205,13 @@ class AMPPPO:
             print("[AMPPPO] Terrain reconstruction AUX TASK enabled:")
             print(f"  - coef: {terrain_recon_coef}, warmup: {terrain_recon_warmup_iters} iters")
             print(f"  - front_only: {terrain_recon_front_only}, predict {self.terrain_recon_target_dim} points")
+        if lp_terrain_recon_coef > 0:
+            print("[AMPPPO] LP full terrain reconstruction AUX TASK enabled:")
+            print(
+                f"  - coef: {lp_terrain_recon_coef}, "
+                f"warmup: {lp_terrain_recon_warmup_iters} iters"
+            )
+            print(f"  - fixed target range: [-{terrain_recon_target_clip}, {terrain_recon_target_clip}]")
         if feet_height_coef > 0:
             print("[AMPPPO] Feet height AUX TASK enabled:")
             print(f"  - coef: {feet_height_coef}, warmup: {feet_height_warmup_iters} iters")
@@ -363,18 +374,24 @@ class AMPPPO:
         else:
             mean_symmetry_loss = None
         mean_vel_loss = 0
-        mean_op_vel_loss = 0
+        mean_lp_vel_loss = 0
         mean_vp_vel_loss = 0
-        mean_op_supervised_loss = 0
+        mean_lp_supervised_loss = 0
         mean_vp_supervised_loss = 0
         uses_renet_separate_supervision = False
         mean_terrain_recon_loss = 0
+        mean_lp_terrain_recon_loss = 0
         mean_feet_height_loss = 0
         vel_weight = self._get_warmup_weight(
             self.current_iteration, self.vel_estimation_warmup_iters, self.vel_estimation_coef
         )
         terrain_weight = self._get_warmup_weight(
             self.current_iteration, self.terrain_recon_warmup_iters, self.terrain_recon_coef
+        )
+        lp_terrain_weight = self._get_warmup_weight(
+            self.current_iteration,
+            self.lp_terrain_recon_warmup_iters,
+            self.lp_terrain_recon_coef,
         )
         feet_height_weight = self._get_warmup_weight(
             self.current_iteration, self.feet_height_warmup_iters, self.feet_height_coef
@@ -519,7 +536,7 @@ class AMPPPO:
             loss = surrogate_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy_batch.mean()
 
             vel_loss = torch.tensor(0.0, device=self.device)
-            op_vel_loss = torch.tensor(0.0, device=self.device)
+            lp_vel_loss = torch.tensor(0.0, device=self.device)
             vp_vel_loss = torch.tensor(0.0, device=self.device)
             use_renet_separate_supervision = False
             if vel_weight > 0 and hasattr(self.policy, "use_vel_estimation") and self.policy.use_vel_estimation:
@@ -531,11 +548,11 @@ class AMPPPO:
                     if isinstance(vel_estimate, dict):
                         use_renet_separate_supervision = True
                         uses_renet_separate_supervision = True
-                        if "op" in vel_estimate:
-                            op_vel_loss = nn.functional.mse_loss(vel_estimate["op"], vel_target)
+                        if "lp" in vel_estimate:
+                            lp_vel_loss = nn.functional.mse_loss(vel_estimate["lp"], vel_target)
                         if "vp" in vel_estimate:
                             vp_vel_loss = nn.functional.mse_loss(vel_estimate["vp"], vel_target)
-                        vel_loss = op_vel_loss + vp_vel_loss
+                        vel_loss = lp_vel_loss + vp_vel_loss
                     else:
                         vel_loss = nn.functional.mse_loss(vel_estimate, vel_target)
 
@@ -558,6 +575,25 @@ class AMPPPO:
                     terrain_target_norm = (terrain_target - target_mean) / target_std
                     terrain_recon_loss = nn.functional.mse_loss(terrain_pred, terrain_target_norm)
 
+            lp_terrain_recon_loss = torch.tensor(0.0, device=self.device)
+            if (
+                lp_terrain_weight > 0
+                and hasattr(self.policy, "predict_lp_terrain")
+                and self.policy.use_terrain_recon
+            ):
+                lp_terrain_pred = self.policy.predict_lp_terrain()
+                if lp_terrain_pred is not None:
+                    lp_terrain_target = critic_obs_batch[:, -self.terrain_scan_dim :].detach()
+                    if self.terrain_recon_target_clip > 0:
+                        lp_terrain_target = lp_terrain_target.clamp(
+                            -self.terrain_recon_target_clip,
+                            self.terrain_recon_target_clip,
+                        )
+                    lp_terrain_recon_loss = nn.functional.mse_loss(
+                        lp_terrain_pred,
+                        lp_terrain_target,
+                    )
+
             feet_height_loss = torch.tensor(0.0, device=self.device)
             if (
                 feet_height_weight > 0
@@ -572,18 +608,22 @@ class AMPPPO:
                     ].detach()
                     feet_height_loss = nn.functional.mse_loss(feet_height_pred, feet_height_target)
 
-            op_supervised_loss = torch.tensor(0.0, device=self.device)
+            lp_supervised_loss = torch.tensor(0.0, device=self.device)
             vp_supervised_loss = torch.tensor(0.0, device=self.device)
             if use_renet_separate_supervision:
-                op_supervised_loss = vel_weight * op_vel_loss
+                lp_supervised_loss = (
+                    vel_weight * lp_vel_loss
+                    + lp_terrain_weight * lp_terrain_recon_loss
+                )
                 vp_supervised_loss = (
                     vel_weight * vp_vel_loss
                     + terrain_weight * terrain_recon_loss
                     + feet_height_weight * feet_height_loss
                 )
-                loss += op_supervised_loss + vp_supervised_loss
+                loss += lp_supervised_loss + vp_supervised_loss
             else:
                 loss += vel_weight * vel_loss + terrain_weight * terrain_recon_loss
+                loss += lp_terrain_weight * lp_terrain_recon_loss
                 loss += feet_height_weight * feet_height_loss
 
             # Symmetry loss
@@ -681,11 +721,12 @@ class AMPPPO:
             mean_policy_pred += policy_d.mean().item()
             mean_expert_pred += expert_d.mean().item()
             mean_vel_loss += vel_loss.item()
-            mean_op_vel_loss += op_vel_loss.item()
+            mean_lp_vel_loss += lp_vel_loss.item()
             mean_vp_vel_loss += vp_vel_loss.item()
-            mean_op_supervised_loss += op_supervised_loss.item()
+            mean_lp_supervised_loss += lp_supervised_loss.item()
             mean_vp_supervised_loss += vp_supervised_loss.item()
             mean_terrain_recon_loss += terrain_recon_loss.item()
+            mean_lp_terrain_recon_loss += lp_terrain_recon_loss.item()
             mean_feet_height_loss += feet_height_loss.item()
             # -- RND loss
             if mean_rnd_loss is not None:
@@ -711,11 +752,12 @@ class AMPPPO:
         mean_policy_pred /= num_updates
         mean_expert_pred /= num_updates
         mean_vel_loss /= num_updates
-        mean_op_vel_loss /= num_updates
+        mean_lp_vel_loss /= num_updates
         mean_vp_vel_loss /= num_updates
-        mean_op_supervised_loss /= num_updates
+        mean_lp_supervised_loss /= num_updates
         mean_vp_supervised_loss /= num_updates
         mean_terrain_recon_loss /= num_updates
+        mean_lp_terrain_recon_loss /= num_updates
         mean_feet_height_loss /= num_updates
         self.storage.clear()
 
@@ -737,13 +779,16 @@ class AMPPPO:
             loss_dict["vel_estimation"] = mean_vel_loss
             loss_dict["vel_estimation_coef_current"] = vel_weight
             if uses_renet_separate_supervision:
-                loss_dict["vel_estimation/op"] = mean_op_vel_loss
+                loss_dict["vel_estimation/lp"] = mean_lp_vel_loss
                 loss_dict["vel_estimation/vp"] = mean_vp_vel_loss
-                loss_dict["renet/op_supervised"] = mean_op_supervised_loss
+                loss_dict["renet/lp_supervised"] = mean_lp_supervised_loss
                 loss_dict["renet/vp_supervised"] = mean_vp_supervised_loss
         if self.terrain_recon_coef > 0:
             loss_dict["terrain_recon"] = mean_terrain_recon_loss
             loss_dict["terrain_recon_coef_current"] = terrain_weight
+        if self.lp_terrain_recon_coef > 0:
+            loss_dict["terrain_recon/lp_full"] = mean_lp_terrain_recon_loss
+            loss_dict["terrain_recon/lp_full_coef_current"] = lp_terrain_weight
         if self.feet_height_coef > 0:
             loss_dict["feet_height"] = mean_feet_height_loss
             loss_dict["feet_height_coef_current"] = feet_height_weight

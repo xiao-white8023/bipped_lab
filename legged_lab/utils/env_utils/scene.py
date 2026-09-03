@@ -27,6 +27,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 
 from legged_lab.sensors.camera import TiledCameraCfg
+from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCfg
 from legged_lab.terrains.ray_caster_cfg import RayCasterCfg
 
 if TYPE_CHECKING:
@@ -94,14 +95,16 @@ class SceneCfg(InteractiveSceneCfg):
             )
 
         if config.lidar.enable_lidar:
-            self.lidar = RayCasterCfg(
-                prim_path="{ENV_REGEX_NS}/Robot/" + config.lidar.prim_body_name,
-                offset=RayCasterCfg.OffsetCfg(pos=config.lidar.offset, rot=config.lidar.rotation),
-                ray_alignment="yaw",
+            self.lidar = GroupedRayCasterCfg(
+                prim_path="{ENV_REGEX_NS}/Robot/" + config.lidar.body_name,
+                offset=GroupedRayCasterCfg.OffsetCfg(pos=config.lidar.offset_pos, rot=config.lidar.offset_rot),
+                ray_alignment=config.lidar.ray_alignment,
                 pattern_cfg=config.lidar.pattern_cfg,
                 debug_vis=config.lidar.debug_vis,
                 mesh_prim_paths=config.lidar.mesh_prim_paths,
+                min_distance=config.lidar.min_distance,
                 max_distance=config.lidar.max_distance,
+                update_period=config.lidar.update_period,
             )
 
         if config.depth_camera.enable_depth_camera:

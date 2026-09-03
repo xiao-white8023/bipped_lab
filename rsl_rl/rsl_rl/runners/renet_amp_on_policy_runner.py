@@ -204,6 +204,9 @@ class RENetAmpOnPolicyRunner:
             )
 
         # start learning
+        start_iter = self.current_learning_iteration
+        if hasattr(self.env, "set_training_iteration"):
+            self.env.set_training_iteration(start_iter)
         obs, extras = self.env.get_observations()
         privileged_obs = extras["observations"].get(self.privileged_obs_type, obs)
         amp_obs = self.env.get_amp_obs_for_expert_trans()
@@ -232,11 +235,12 @@ class RENetAmpOnPolicyRunner:
             #   Right now: No, because they all should converge to the same values "asymptotically".
 
         # Start training
-        start_iter = self.current_learning_iteration
         tot_iter = start_iter + num_learning_iterations
         for it in range(start_iter, tot_iter):
             if hasattr(self.env, "set_training_iteration"):
                 self.env.set_training_iteration(it)
+            if hasattr(self.env, "apply_renet_estimator_mask"):
+                obs = self.env.apply_renet_estimator_mask(obs)
             start = time.time()
             # Rollout
             with torch.inference_mode():

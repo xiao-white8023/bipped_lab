@@ -1,0 +1,23 @@
+Extreme Parkour terrain adaptation
+==================================
+
+This directory contains an Isaac Lab adaptation of terrain-generation code from:
+
+  Extreme Parkour with Legged Robots
+  Copyright (c) 2023 Xuxin Cheng, Kexin Shi, Deepak Pathak
+  https://github.com/chengxuxin/extreme-parkour
+
+Source revision:
+  d2ffe27ba59a3229fad22a9fc94c38010bb1f519
+  legged_gym/legged_gym/utils/terrain.py
+
+Changes:
+  - Replaced Isaac Gym SubTerrain mutation with Isaac Lab mesh-return interfaces.
+  - Added configuration classes, deterministic local random generators, scaling,
+    input validation, bounds checking, and tests.
+  - Omitted route goals, task observations, rewards, and policy code.
+
+The files in this directory are licensed separately from the surrounding BSD
+project under Creative Commons Attribution-NonCommercial 4.0 International.
+See LICENSE in this directory. They may not be used for commercial purposes.
+

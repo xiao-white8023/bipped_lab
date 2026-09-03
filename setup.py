@@ -16,13 +16,19 @@
 # with additional modifications by the TienKung-Lab Project,
 # and is distributed under the BSD-3-Clause license.
 
-from distutils.core import setup
-
-from setuptools import find_packages
+from setuptools import find_packages, setup
 
 setup(
     name="LeggedLab",
     packages=find_packages(),
+    package_data={
+        "legged_lab.sensors.grouped_ray_caster": [
+            "data/*.npy",
+            "data/*.md",
+            "data/LICENSE*",
+        ],
+        "legged_lab.terrains.extreme_parkour": ["LICENSE", "NOTICE"],
+    },
     version="0.1.0",
     install_requires=["IsaacLab", "pynput", "mujoco==3.3.2", "mujoco-python-viewer", "matplotlib"],
 )

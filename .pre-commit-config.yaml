@@ -46,6 +46,7 @@ repos:
     hooks:
       - id: insert-license
         files: \.py$
+        exclude: ^legged_lab/terrains/extreme_parkour/
         args:
           # - --remove-header    # Remove existing license headers. Useful when updating license.
           - --license-filepath

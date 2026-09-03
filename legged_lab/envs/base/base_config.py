@@ -311,15 +311,3 @@ class SimCfg:
     dt: float = 0.005  # # 物理仿真步长（0.005秒=200Hz）
     decimation: int = 4  # 控制频率抽取系数（200/4=50Hz控制频率）
     physx: PhysxCfg = PhysxCfg()  # PhysX物理引擎配置
-
-@configclass
-class HeightCommandRangeCfg():
-    height: tuple[float, float] = (0.45,0.76)
-
-@configclass
-class HeightCommandCfg:
-    resampling_time_range: tuple = (10.0, 10.0)
-    rel_standing_envs: float = 0.2
-    stand_height: float = 0.76
-    debug_vis:bool =True
-    ranges:HeightCommandRangeCfg=HeightCommandRangeCfg()

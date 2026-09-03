@@ -28,7 +28,7 @@ class FullPolicyExporter(nn.Module):
 
 
 class RENetPolicyExporter(nn.Module):
-    """Export-safe RENet policy with dynamic VP/OP routing.
+    """Export-safe RENet policy with dynamic LP/VP routing.
 
     This wrapper evaluates both estimators and selects their latents with tensor
     operations, so the estimator mask remains a runtime input after tracing.
@@ -44,30 +44,31 @@ class RENetPolicyExporter(nn.Module):
 
     def forward(self, x):
         observations = self.normalizer(x)
-        proprio_history, depth_flat, estimator_mask, current_proprio = (
+        proprio_history, lidar_flat, depth_flat, estimator_mask, current_proprio = (
             self.policy._split_actor_obs(observations)
         )
 
         proprio_embed = self.policy._embed_proprio_history(proprio_history)
+        lidar_embed = self.policy._embed_lidar_height(lidar_flat)
         depth_embed = self.policy._embed_depth_history(depth_flat)
         depth_context = self.policy._align_depth_to_proprio_history(depth_embed)
 
-        op_features = self.policy._fuse_op_features(proprio_embed)
+        lp_features = self.policy._fuse_lp_features(proprio_embed, lidar_embed)
         vp_features = self.policy._fuse_vp_features(
             proprio_embed,
             depth_embed,
             depth_context,
         )
-        _, op_hidden = self.policy.op_gru(op_features)
+        _, lp_hidden = self.policy.lp_gru(lp_features)
         _, vp_hidden = self.policy.vp_gru(vp_features)
-        op_latent = op_hidden[-1]
+        lp_latent = lp_hidden[-1]
         vp_latent = vp_hidden[-1]
 
         estimator_mask = estimator_mask.clamp(0.0, 1.0)
         actor_input = torch.cat(
             [
                 current_proprio,
-                op_latent * estimator_mask,
+                lp_latent * estimator_mask,
                 vp_latent * (1.0 - estimator_mask),
             ],
             dim=-1,
@@ -84,7 +85,8 @@ def _is_renet_policy(policy):
         hasattr(policy, name)
         for name in (
             "estimator_mask_dim",
-            "op_gru",
+            "lidar_cnn",
+            "lp_gru",
             "vp_gru",
             "_split_actor_obs",
         )
@@ -98,13 +100,25 @@ def _make_policy_exporter(policy, normalizer):
 
 
 def _validate_renet_torchscript(policy, normalizer, traced_model, obs_dim):
-    """Check that the exported graph matches eager RENet in VP and OP modes."""
+    """Check eager parity and LP/VP runtime routing of an exported policy."""
+
+    expected_obs_dim = (
+        policy.proprio_actor_dim
+        + policy.lidar_flat_dim
+        + policy.depth_flat_dim
+        + policy.estimator_mask_dim
+    )
+    if obs_dim != expected_obs_dim:
+        raise RuntimeError(
+            f"RENet observation layout mismatch: exporter got {obs_dim}, "
+            f"policy fields describe {expected_obs_dim}."
+        )
 
     generator = torch.Generator(device="cpu")
     generator.manual_seed(0)
     sample = 0.05 * torch.randn(2, obs_dim, generator=generator)
-    control_start = policy.proprio_actor_dim + policy.depth_flat_dim
-    sample[:, control_start] = torch.tensor([0.0, 1.0])
+    mask_index = policy.proprio_actor_dim + policy.lidar_flat_dim + policy.depth_flat_dim
+    sample[:, mask_index] = torch.tensor([0.0, 1.0])
 
     reference = FullPolicyExporter(policy, normalizer).to("cpu").eval()
     with torch.inference_mode():
@@ -113,10 +127,52 @@ def _validate_renet_torchscript(policy, normalizer, traced_model, obs_dim):
     if not torch.allclose(actual, expected, rtol=1.0e-4, atol=1.0e-5):
         max_error = (actual - expected).abs().max().item()
         raise RuntimeError(
-            "RENet TorchScript validation failed for VP/OP; "
+            "RENet TorchScript validation failed for LP/VP; "
             f"maximum absolute error: {max_error:.6g}."
         )
-    print("[SUCCESS] TorchScript VP/OP routing validation passed.")
+
+    # The inactive sensor branch must not leak into the selected action path.
+    base = 0.05 * torch.randn(1, obs_dim, generator=generator)
+    lidar_slice = slice(policy.proprio_actor_dim, policy.proprio_actor_dim + policy.lidar_flat_dim)
+    depth_slice = slice(
+        policy.proprio_actor_dim + policy.lidar_flat_dim,
+        mask_index,
+    )
+    lp_base = base.clone()
+    lp_base[:, mask_index] = 1.0
+    lp_depth_changed = lp_base.clone()
+    lp_depth_changed[:, depth_slice] += 0.5
+    lp_lidar_changed = lp_base.clone()
+    lp_lidar_changed[:, lidar_slice] += 0.5
+    vp_base = base.clone()
+    vp_base[:, mask_index] = 0.0
+    vp_lidar_changed = vp_base.clone()
+    vp_lidar_changed[:, lidar_slice] += 0.5
+    vp_depth_changed = vp_base.clone()
+    vp_depth_changed[:, depth_slice] += 0.5
+
+    with torch.inference_mode():
+        lp_action = traced_model(lp_base)
+        lp_depth_action = traced_model(lp_depth_changed)
+        lp_lidar_action = traced_model(lp_lidar_changed)
+        vp_action = traced_model(vp_base)
+        vp_lidar_action = traced_model(vp_lidar_changed)
+        vp_depth_action = traced_model(vp_depth_changed)
+
+    if lp_action.ndim != 2 or lp_action.shape[1] != int(policy.num_actions):
+        raise RuntimeError(
+            f"RENet TorchScript action shape must be (N, {policy.num_actions}), "
+            f"got {tuple(lp_action.shape)}."
+        )
+    if not torch.allclose(lp_action, lp_depth_action, rtol=1.0e-5, atol=1.0e-6):
+        raise RuntimeError("LP action unexpectedly depends on the inactive depth input.")
+    if not torch.allclose(vp_action, vp_lidar_action, rtol=1.0e-5, atol=1.0e-6):
+        raise RuntimeError("VP action unexpectedly depends on the inactive LiDAR input.")
+    if torch.allclose(lp_action, lp_lidar_action, rtol=1.0e-6, atol=1.0e-7):
+        raise RuntimeError("LP action is insensitive to the LiDAR input; refusing to export.")
+    if torch.allclose(vp_action, vp_depth_action, rtol=1.0e-6, atol=1.0e-7):
+        raise RuntimeError("VP action is insensitive to the depth input; refusing to export.")
+    print("[SUCCESS] TorchScript LP/VP routing validation passed.")
 
 
 def _get_policy_obs_dim(policy):
@@ -124,6 +180,7 @@ def _get_policy_obs_dim(policy):
         return int(policy.num_actor_obs)
     return int(
         getattr(policy, "proprio_actor_dim", 0)
+        + getattr(policy, "lidar_flat_dim", 0)
         + getattr(policy, "depth_flat_dim", 0)
         + getattr(policy, "estimator_mask_dim", 0)
     )

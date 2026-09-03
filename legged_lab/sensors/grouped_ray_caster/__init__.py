@@ -2,3 +2,4 @@ from .grouped_ray_caster import GroupedRayCaster
 from .grouped_ray_caster_camera import GroupedRayCasterCamera
 from .grouped_ray_caster_camera_cfg import GroupedRayCasterCameraCfg
 from .grouped_ray_caster_cfg import GroupedRayCasterCfg, get_link_prim_targets
+from .mid360_pattern import Mid360PatternCfg

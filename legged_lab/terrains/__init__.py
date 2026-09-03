@@ -17,5 +17,7 @@
 # and is distributed under the BSD-3-Clause license.
 
 from .terrain_generator_cfg import *
+from .mesh_gap_terrain import *
 from .hf_terrain import *
 from .hf_terrain_cfg import *
+from .extreme_parkour import *

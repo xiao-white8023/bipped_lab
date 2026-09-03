@@ -7,6 +7,8 @@ from isaaclab.terrains.height_field.utils import height_field_to_mesh
 from isaaclab.terrains.terrain_generator_cfg import TerrainGeneratorCfg
 from isaaclab.utils import configclass
 
+from .mesh_gap_terrain import MeshGapWithFloorTerrainCfg
+
 Flat_terrain=TerrainGeneratorCfg(
     curriculum=False,
     size=(8.0, 8.0),
@@ -123,8 +125,11 @@ ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
                 platform_width=3,
                 inverted = True
         ),
-        "gap": terrain_gen.MeshGapTerrainCfg(
-            proportion=0.2, gap_width_range=(0.05, 0.5), platform_width=3.0
+        "gap": MeshGapWithFloorTerrainCfg(
+            proportion=0.2,
+            gap_width_range=(0.1, 0.5),
+            gap_depth_range=(0.5, 1.0),
+            platform_width=3.0,
         )
     },
 )
@@ -180,7 +185,120 @@ ROUGH_PERLIN_TERRAINS_CFG=TerrainGeneratorCfg(
         # ),
     },
 )
+ROUGH_PERLIN_TERRAINS_CFGG=TerrainGeneratorCfg(
+    seed=0,
+    size=(8.0, 8.0),
+    border_width=3,
+    num_rows=10,
+    num_cols=20,
+    horizontal_scale=0.05,
+    vertical_scale=0.005,
+    slope_threshold=1.0,
+    use_cache=False,
+    curriculum=True,
+    sub_terrains={
+        "pyramid_stairs_0.3_perlin": terrain_gen_perlin.PerlinPyramidStairsTerrainCfg(
+            proportion=0.1,
+            step_height_range=(0.05, 0.23),
+            step_width=0.3,
+            platform_width=2.5,
+            border_width=1.0,
 
+            perlin_cfg=terrain_gen_perlin.PerlinPlaneTerrainCfg(
+                noise_scale=0.05,
+                noise_frequency=20,
+                fractal_octaves=2,
+                fractal_lacunarity=2.0,
+                fractal_gain=0.25,
+                centering=True,
+            )
+        ),        
+        "pyramid_stairs_inv_0.3_perlin": terrain_gen_perlin.PerlinInvertedPyramidStairsTerrainCfg(
+            proportion=0.1,
+            step_height_range=(0.05, 0.23),
+            step_width=0.3,
+            platform_width=3,
+            border_width=1.0,
+            perlin_cfg=terrain_gen_perlin.PerlinPlaneTerrainCfg(
+                noise_scale=0.05,
+                noise_frequency=20,
+                fractal_octaves=2,
+                fractal_lacunarity=2.0,
+                fractal_gain=0.25,
+                centering=True,
+            )
+        ),
+        "pyramid_stairs_28": terrain_gen.MeshPyramidStairsTerrainCfg(                  
+            proportion=0.1,
+            step_height_range=(0.0, 0.23),
+            step_width=0.28,
+            platform_width=3.0,
+            border_width=1.0,
+            holes=False,
+        ),
+
+        "pyramid_stairs_inv_0.28_perlin": terrain_gen_perlin.PerlinInvertedPyramidStairsTerrainCfg(
+            proportion=0.1,
+            step_height_range=(0.05, 0.23),
+            step_width=0.28,
+            platform_width=3,
+            border_width=1.0,
+            perlin_cfg=terrain_gen_perlin.PerlinPlaneTerrainCfg(
+                noise_scale=0.05,
+                noise_frequency=20,
+                fractal_octaves=2,
+                fractal_lacunarity=2.0,
+                fractal_gain=0.25,
+                centering=True,
+            )
+        ),
+        "boxes": terrain_gen_perlin.PerlinDiscreteObstaclesTerrainCfg(
+            proportion=0.10,
+            num_obstacles=20,
+            obstacle_height_mode="fixed",
+            obstacle_width_range=(0.8, 1.5),
+            obstacle_height_range=(0.05, 0.45),
+            platform_width=3,
+            border_width=0.0,
+            perlin_cfg=terrain_gen_perlin.PerlinPlaneTerrainCfg(
+                noise_scale=0.05,
+                noise_frequency=20,
+                fractal_octaves=2,
+                fractal_lacunarity=2.0,
+                fractal_gain=0.25,
+                centering=True,
+            )
+        ),
+        "high_platform": terrain_gen.MeshPitTerrainCfg(
+            proportion=0.15, pit_depth_range=(0.07, 0.5), platform_width=2.0, double_pit=True
+        ),
+        "up_slope_terrain":terrain_gen.HfPyramidSlopedTerrainCfg(
+                proportion=0.1,
+                slope_range=(0.0837,0.576),
+                platform_width=3,
+                inverted = False
+        ),
+        "hf_pyramid_slope_inv": terrain_gen_perlin.PerlinInvertedPyramidSlopedTerrainCfg(
+            proportion=0.10,
+            slope_range=(0.0837,0.576),
+            platform_width=3,
+            border_width=1.0,
+            perlin_cfg=terrain_gen_perlin.PerlinPlaneTerrainCfg(
+                noise_scale=0.00,
+                noise_frequency=20,
+                fractal_octaves=2,
+                fractal_lacunarity=2.0,
+                fractal_gain=0.25,
+                centering=True,
+            )
+        ),
+        "gap_easy": terrain_gen.MeshGapTerrainCfg(
+            proportion=0.15,
+            gap_width_range=(0.05, 0.7),
+            platform_width=3.0,
+        ),
+    },
+)
 flex_terrain_CFG = TerrainGeneratorCfg(
     curriculum=True,
     size=(8.0, 8.0),
