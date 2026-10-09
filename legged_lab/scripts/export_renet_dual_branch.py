@@ -1,6 +1,6 @@
 # 中文导读
 # 文件用途：无需启动 Isaac Sim，将 model_60000 单独导出为冻结 RENet 双分支 TorchScript。
-# 使用位置：用户单独准备双分支模型时运行；采集脚本还提供自己的 export_dual_branch 导出流程。
+# 使用位置：用户单独准备双分支模型时运行；采集脚本与此脚本共用 artifacts.py 的导出流程。
 # 说明：生成六个输出：LP/VP 特征、LP/VP 速度估计和 LP/VP 动作；在线运行与 selector 模型配合使用。
 # 说明：会校验原部署 policy.pt，并拒绝覆盖输入模型或已有输出文件。
 #
@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 import sys
 
@@ -31,10 +30,9 @@ import torch  # noqa: E402
 from legged_lab.selector.config import (  # noqa: E402
     DEFAULT_CHECKPOINT_PATH, DEFAULT_REFERENCE_POLICY_PATH, DEFAULT_RUN_DIR,
 )
+from legged_lab.selector.artifacts import export_dual_branch_artifact  # noqa: E402
 from legged_lab.selector.frozen_policy import (  # noqa: E402
-    ACTION_DIM, DEPTH_DIM, LIDAR_DIM, MASK_INDEX, OBS_DIM, PROPRIO_DIM,
-    build_frozen_policy, load_frozen_adapter, sha256, validate_actions,
-    validate_reference_weights, validation_inputs,
+    load_frozen_adapter, sha256, validate_actions, validation_inputs,
 )
 
 
@@ -76,63 +74,10 @@ def main() -> None:
         raise FileExistsError(output_path)
 
     adapter, reference, frozen_metadata = load_frozen_adapter(checkpoint_path, reference_path)
+    export_dual_branch_artifact(
+        adapter, output_path, frozen_metadata, reference=reference
+    )
     probes = validation_inputs()
-    eager_lp_error, eager_vp_error = validate_actions(adapter, reference, probes)
-
-    traced = torch.jit.trace(
-        adapter,
-        probes[1][:2],
-        strict=False,
-        check_trace=False,
-    )
-    traced_lp_error, traced_vp_error = validate_actions(traced, reference, probes)
-
-    metadata = {
-        "artifact": "g1_renet_dual_branch",
-        "version": 2,
-        "frozen_policy": frozen_metadata,
-        "source_checkpoint": str(checkpoint_path),
-        "source_checkpoint_sha256": sha256(checkpoint_path),
-        "source_iteration": 60000,
-        "reference_policy": str(reference_path),
-        "reference_policy_sha256": sha256(reference_path),
-        "input": {
-            "shape": ["batch", OBS_DIM],
-            "layout": [
-                "proprio_history_10x78",
-                "elevation_11x17",
-                "depth_history_2x18x32",
-                "compatibility_mask_unused",
-            ],
-        },
-        "branch_history": {"lp_raw_frames": 5, "vp_embedded_frames": 10},
-        "outputs": [
-            "lp_latent_64",
-            "vp_latent_64",
-            "lp_velocity_3",
-            "vp_velocity_3",
-            "lp_action_23",
-            "vp_action_23",
-        ],
-        "reference_mask_contract": {"vp": 0, "lp": 1},
-        "validation": {
-            "eager_lp_max_abs_error": eager_lp_error,
-            "eager_vp_max_abs_error": eager_vp_error,
-            "traced_lp_max_abs_error": traced_lp_error,
-            "traced_vp_max_abs_error": traced_vp_error,
-        },
-    }
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.jit.save(
-        traced,
-        str(output_path),
-        _extra_files={
-            "renet_dual_branch_contract.json": json.dumps(
-                metadata, ensure_ascii=False, sort_keys=True
-            )
-        },
-    )
 
     extra_files = {"renet_dual_branch_contract.json": ""}
     reloaded = torch.jit.load(

@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import argparse
 import copy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import hashlib
-import json
-import os
 from pathlib import Path
 import sys
 import traceback
@@ -78,6 +76,7 @@ import torch  # noqa: E402
 
 from legged_lab.envs import *  # noqa: F401,F403,E402
 from legged_lab.selector.collector import CounterfactualCollector  # noqa: E402
+from legged_lab.selector.artifacts import export_dual_branch_artifact  # noqa: E402
 from legged_lab.selector.config import (  # noqa: E402
     CollectionConfig,
     FaultConfig,
@@ -165,44 +164,9 @@ def run_terrain_prepass(
 def export_dual_branch(
     adapter, sample: torch.Tensor, output_dir: Path, frozen_metadata: dict
 ) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    sample = sample[: min(2, sample.shape[0])]
-    # Always export a CPU graph for the robot's CPU TorchScript backend.
-    cpu_adapter = copy.deepcopy(adapter).cpu().eval()
-    sample = sample.cpu()
-    reference = cpu_adapter(sample)
-    traced = torch.jit.trace(cpu_adapter, sample, check_trace=False)
-    actual = traced(sample)
-    for expected, observed in zip(reference, actual):
-        if not torch.allclose(expected, observed, rtol=1.0e-4, atol=1.0e-5):
-            raise RuntimeError("dual-branch TorchScript parity validation failed")
-    metadata = {
-        "version": 1,
-        "source_checkpoint": frozen_metadata["source_checkpoint"],
-        "frozen_policy": frozen_metadata,
-        "outputs": [
-            "lp_latent",
-            "vp_latent",
-            "lp_velocity",
-            "vp_velocity",
-            "lp_action",
-            "vp_action",
-        ],
-        "mask_contract": {"vp": 0, "lp": 1},
-    }
-    destination = output_dir / "renet_dual_branch.pt"
-    if destination.exists():
-        raise FileExistsError(
-            f"refusing to overwrite dual-branch artifact: {destination}"
-        )
-    torch.jit.save(
-        traced,
-        destination,
-        _extra_files={
-            "renet_dual_branch_contract.json": json.dumps(metadata, sort_keys=True)
-        },
+    return export_dual_branch_artifact(
+        adapter, output_dir / "renet_dual_branch.pt", frozen_metadata, sample=sample
     )
-    return destination
 
 
 def main() -> None:
@@ -298,6 +262,8 @@ def main() -> None:
     env_class = task_registry.get_task_class(args_cli.task)
     env_class.seed(args_cli.seed)
     env = env_class(env_cfg, args_cli.headless)
+    fault_cfg = replace(fault_cfg, lp_resolution_m=float(env.lp_runtime_cfg.resolution))
+    fault_cfg.validate()
     adapter = adapter.to(env.device).eval()
 
     parity_observations, parity_extras = env.get_observations()

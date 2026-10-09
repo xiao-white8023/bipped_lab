@@ -17,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from legged_lab.selector.config import SelectorConfig  # noqa: E402
 from legged_lab.selector.dataset import SelectorShardDataset  # noqa: E402
-from legged_lab.selector.metrics import selector_metrics  # noqa: E402
+from legged_lab.selector.metrics import evaluation_checks, json_safe_metrics, selector_metrics  # noqa: E402
 from legged_lab.selector.frozen_policy import assert_same_policy, dataset_policy_identity  # noqa: E402
 from legged_lab.selector.labels import dataset_safety_label_contract, validate_safety_label_contract  # noqa: E402
 from legged_lab.selector.feature_contract import dataset_feature_contract, validate_feature_contract  # noqa: E402
@@ -43,7 +43,13 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=8192)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--min-class-samples", type=int, default=20,
+                        help="Minimum positive AND negative samples for each of four heads.")
+    parser.add_argument("--min-contrast-samples", type=int, default=50,
+                        help="Minimum LP-only and VP-only long-horizon failures, each.")
     args = parser.parse_args()
+    if args.min_class_samples < 1 or args.min_contrast_samples < 1:
+        parser.error("coverage thresholds must be positive")
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     model = load_selector(args.checkpoint, device)
     dataset = SelectorShardDataset(args.dataset, args.split)
@@ -84,11 +90,8 @@ def main() -> None:
     levels = torch.cat(terrain_levels)
     for level in torch.unique(levels).tolist():
         add_breakdown(f"terrain_level_{int(level)}", levels == level)
-    checks = {
-        "all_auroc_at_least_0.85": metrics["auroc/min"] >= 0.85,
-        "all_ece_at_most_0.05": metrics["ece/max"] <= 0.05,
-        "dangerous_branch_rate_at_most_0.03": metrics["selection/dangerous_branch_rate"] <= 0.03,
-    }
+    checks = evaluation_checks(metrics, min_class_samples=args.min_class_samples,
+                               min_contrast_samples=args.min_contrast_samples)
     report = {
         "split": args.split,
         "frozen_policy": artifact["frozen_policy"],
@@ -98,8 +101,10 @@ def main() -> None:
         "metrics": metrics,
         "breakdown": breakdown,
         "checks": checks,
+        "coverage_thresholds": {"min_class_samples": args.min_class_samples,
+                                "min_contrast_samples": args.min_contrast_samples},
     }
-    rendered = json.dumps(report, indent=2, sort_keys=True)
+    rendered = json.dumps(json_safe_metrics(report), indent=2, sort_keys=True, allow_nan=False)
     print(rendered)
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)

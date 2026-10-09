@@ -6,7 +6,7 @@ from typing import Any
 
 def selector_feature_contract() -> dict[str, Any]:
     return {
-        "version": 2,
+        "version": 3,
         "feature_shape": [5, 283],
         "sample_period_s": 0.1,
         "candidate_boundary": "last_feature_snapshot_and_label_start_same_control_boundary",
@@ -15,6 +15,8 @@ def selector_feature_contract() -> dict[str, Any]:
         "transition": {"normal_steps": 5, "emergency_steps": 2, "control_dt_s": 0.02},
         "counterfactual": "hold_requested_branch_for_1s_with_snapshotted_action_blender",
         "randomness": "row_local_named_streams_v1",
+        "fault_geometry": "physical_xy_metres;bilinear_validity_weighted_height_and_support_v1",
+        "fault_ranges": "exact_configured_bounds_including_zero_v1",
     }
 
 
@@ -34,3 +36,4 @@ def dataset_feature_contract(manifest: dict[str, Any]) -> dict[str, Any]:
     return validate_feature_contract(
         manifest.get("metadata", {}).get("selector_feature_contract")
     )
+

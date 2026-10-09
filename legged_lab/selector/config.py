@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,7 @@ class FaultConfig:
     lp_block_fraction: tuple[float, float] = (0.10, 0.50)
     lp_height_bias_m_range: tuple[float, float] = (-0.15, 0.15)
     lp_translation_range_m: tuple[float, float] = (-0.20, 0.20)
+    lp_resolution_m: float = 0.1
     lp_yaw_range_deg: tuple[float, float] = (-5.0, 5.0)
     lp_drift_m_per_s: tuple[float, float] = (0.0, 0.05)
     lp_drift_deg_per_s: tuple[float, float] = (0.0, 1.0)
@@ -46,8 +48,12 @@ class FaultConfig:
     severity_probabilities: tuple[float, float, float] = (0.40, 0.40, 0.20)
 
     def validate(self) -> None:
-        if self.update_period_s <= 0:
-            raise ValueError("update_period_s must be positive")
+        for name in ("update_period_s", "lp_resolution_m", "vp_depth_max_m"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if type(self.vp_max_shift_pixels) is not int or self.vp_max_shift_pixels < 0:
+            raise ValueError("vp_max_shift_pixels must be a nonnegative integer")
         if not 1 <= self.max_delay_frames <= 5:
             raise ValueError("max_delay_frames must be in [1, 5]")
         if not 1 <= self.min_duration_frames <= self.max_duration_frames:
@@ -58,10 +64,12 @@ class FaultConfig:
             raise ValueError("max_start_delay_frames must be nonnegative")
         if self.max_dual_stagger_frames < 0:
             raise ValueError("max_dual_stagger_frames must be nonnegative")
-        if abs(sum(self.scenario_probabilities) - 1.0) > 1.0e-6:
-            raise ValueError("scenario_probabilities must sum to one")
-        if abs(sum(self.severity_probabilities) - 1.0) > 1.0e-6:
-            raise ValueError("severity_probabilities must sum to one")
+        for name, count in (("scenario_probabilities", 4), ("severity_probabilities", 3)):
+            probabilities = getattr(self, name)
+            if (len(probabilities) != count or
+                    any(not math.isfinite(p) or p < 0 for p in probabilities) or
+                    abs(sum(probabilities) - 1.0) > 1.0e-6):
+                raise ValueError(f"{name} must contain {count} nonnegative probabilities summing to one")
         for name in (
             "vp_occlusion_fraction",
             "vp_scale_range",
@@ -76,8 +84,19 @@ class FaultConfig:
             "lp_height_clip",
         ):
             lo, hi = getattr(self, name)
-            if lo > hi:
-                raise ValueError(f"{name} must be increasing")
+            if not math.isfinite(lo) or not math.isfinite(hi) or lo > hi:
+                raise ValueError(f"{name} must contain finite increasing bounds")
+        for name in ("vp_occlusion_fraction", "lp_dropout_fraction", "lp_block_fraction"):
+            lo, hi = getattr(self, name)
+            if not 0 <= lo <= hi <= 1:
+                raise ValueError(f"{name} must lie in [0, 1]")
+        if self.vp_scale_range[0] <= 0:
+            raise ValueError("vp_scale_range must be positive")
+        if self.lp_drift_m_per_s[0] < 0 or self.lp_drift_deg_per_s[0] < 0:
+            raise ValueError("drift speed ranges must be nonnegative")
+        if (not math.isfinite(self.lp_invalid_height) or
+                self.lp_height_clip[0] <= self.lp_invalid_height <= self.lp_height_clip[1]):
+            raise ValueError("lp_invalid_height must be finite and outside lp_height_clip")
 
 
 @dataclass(frozen=True)
@@ -236,3 +255,4 @@ class SelectorExperimentConfig:
         if not checkpoint.is_absolute():
             checkpoint = Path(repo_root) / checkpoint
         return checkpoint.resolve()
+

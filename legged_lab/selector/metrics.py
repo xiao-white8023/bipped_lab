@@ -28,15 +28,12 @@ def binary_auroc(probability: torch.Tensor, label: torch.Tensor) -> float:
         return float("nan")
     order = torch.argsort(probability, stable=True)
     sorted_probability = probability[order]
-    ranks_sorted = torch.arange(1, len(order) + 1, dtype=torch.float64)
     # Equal scores must receive their average rank; arbitrary ordering of ties
     # otherwise makes AUROC depend on input order.
     _, counts = torch.unique_consecutive(sorted_probability, return_counts=True)
-    offset = 0
-    for count in counts.tolist():
-        end = offset + count
-        ranks_sorted[offset:end] = ranks_sorted[offset:end].mean()
-        offset = end
+    ends = counts.cumsum(0)
+    starts = ends - counts + 1
+    ranks_sorted = torch.repeat_interleave((starts + ends).double() / 2, counts)
     ranks = torch.empty_like(ranks_sorted)
     ranks[order] = ranks_sorted
     positive_rank_sum = ranks[label].sum()
@@ -66,11 +63,21 @@ def expected_calibration_error(
 
 @torch.no_grad()
 def selector_metrics(probabilities: torch.Tensor, labels: torch.Tensor) -> dict[str, float]:
-    if probabilities.shape != labels.shape or probabilities.shape[-1] != 4:
+    if (probabilities.ndim != 2 or probabilities.shape != labels.shape
+            or probabilities.shape[1] != 4 or probabilities.shape[0] == 0):
         raise ValueError("probabilities and labels must have matching [samples, 4] shapes")
+    if (not torch.isfinite(probabilities).all() or
+            not ((probabilities >= 0) & (probabilities <= 1)).all()):
+        raise ValueError("risk probabilities must be finite and in [0, 1]")
+    if not ((labels == 0) | (labels == 1)).all():
+        raise ValueError("risk labels must be binary")
     names = ("lp_short", "lp_long", "vp_short", "vp_long")
     metrics: dict[str, float] = {}
+    metrics["coverage/samples"] = int(labels.shape[0])
     for index, name in enumerate(names):
+        positive = int(labels[:, index].sum())
+        metrics[f"coverage/{name}_positive"] = positive
+        metrics[f"coverage/{name}_negative"] = int(labels.shape[0]) - positive
         metrics[f"auroc/{name}"] = binary_auroc(probabilities[:, index], labels[:, index])
         metrics[f"ece/{name}"] = expected_calibration_error(
             probabilities[:, index], labels[:, index]
@@ -84,6 +91,10 @@ def selector_metrics(probabilities: torch.Tensor, labels: torch.Tensor) -> dict[
     oracle_failure = lp_failure & vp_failure
     one_safe = lp_failure ^ vp_failure
     dangerous_choice = one_safe & torch.where(choose_lp, lp_failure, vp_failure)
+    metrics["coverage/lp_only_failure"] = int((lp_failure & ~vp_failure).sum())
+    metrics["coverage/vp_only_failure"] = int((~lp_failure & vp_failure).sum())
+    contrasting_samples = int(one_safe.sum())
+    metrics["coverage/contrasting_samples"] = contrasting_samples
     metrics["failure/always_lp"] = float(lp_failure.float().mean())
     metrics["failure/always_vp"] = float(vp_failure.float().mean())
     metrics["failure/selector"] = float(selected_failure.float().mean())
@@ -95,11 +106,53 @@ def selector_metrics(probabilities: torch.Tensor, labels: torch.Tensor) -> dict[
         else 0.0
     )
     metrics["selection/dangerous_branch_rate"] = (
-        float(dangerous_choice.float().sum() / one_safe.float().sum().clamp_min(1.0))
+        float(dangerous_choice.sum()) / contrasting_samples
+        if contrasting_samples else float("nan")
     )
     metrics["selection/lp_fraction"] = float(choose_lp.float().mean())
     finite_aurocs = [value for key, value in metrics.items() if key.startswith("auroc/") and math.isfinite(value)]
     finite_eces = [value for key, value in metrics.items() if key.startswith("ece/") and math.isfinite(value)]
-    metrics["auroc/min"] = min(finite_aurocs) if finite_aurocs else float("nan")
-    metrics["ece/max"] = max(finite_eces) if finite_eces else float("nan")
+    metrics["auroc/min"] = min(finite_aurocs) if len(finite_aurocs) == 4 else float("nan")
+    metrics["ece/max"] = max(finite_eces) if len(finite_eces) == 4 else float("nan")
     return metrics
+
+
+def evaluation_checks(
+    metrics: dict[str, float], *, min_class_samples: int = 20, min_contrast_samples: int = 50
+) -> dict[str, bool]:
+    """Require measurable heads and both branch contrasts before passing gates.
+
+    Counts are minimum coverage checks, not statistical confidence guarantees.
+    """
+    if min_class_samples < 1 or min_contrast_samples < 1:
+        raise ValueError("evaluation coverage thresholds must be positive")
+    names = ("lp_short", "lp_long", "vp_short", "vp_long")
+    heads_covered = all(
+        metrics[f"coverage/{name}_{kind}"] >= min_class_samples
+        for name in names for kind in ("positive", "negative")
+    )
+    contrasts_covered = all(
+        metrics[f"coverage/{name}_only_failure"] >= min_contrast_samples
+        for name in ("lp", "vp")
+    )
+    return {
+        "all_heads_have_class_coverage": heads_covered,
+        "both_branch_contrasts_have_coverage": contrasts_covered,
+        "all_auroc_at_least_0.85": heads_covered and metrics["auroc/min"] >= 0.85,
+        "all_ece_at_most_0.05": heads_covered and metrics["ece/max"] <= 0.05,
+        "dangerous_branch_rate_at_most_0.03": (
+            contrasts_covered and metrics["selection/dangerous_branch_rate"] <= 0.03
+        ),
+    }
+
+
+def json_safe_metrics(value):
+    """Write undefined metrics as JSON null, never non-standard NaN literals."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: json_safe_metrics(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe_metrics(item) for item in value]
+    return value
+

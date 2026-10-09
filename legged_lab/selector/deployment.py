@@ -17,6 +17,7 @@ from .runtime import ActionBlender, SelectorStateMachine
 from .feature_contract import validate_feature_contract
 from .frozen_policy import assert_same_policy
 from .labels import validate_safety_label_contract
+from .artifacts import validate_dual_branch_contract
 
 
 @dataclass
@@ -59,6 +60,7 @@ class OnlineSelectorRuntime:
             raise ValueError(
                 "both TorchScript artifacts must embed their identity contracts"
             ) from error
+        validate_dual_branch_contract(dual_metadata)
         feature_contract = validate_feature_contract(
             selector_metadata.get("selector_feature_contract")
         )
@@ -403,3 +405,4 @@ class ShadowLogWriter:
 
     def __exit__(self, *exc_info: Any) -> None:
         self.close()
+

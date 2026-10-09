@@ -106,8 +106,6 @@ class SelectorFaultManager:
             "vp_delay",
             "vp_shift_x",
             "vp_shift_y",
-            "lp_shift_x",
-            "lp_shift_y",
             "schedule_count",
         )
         scalar = (
@@ -124,6 +122,7 @@ class SelectorFaultManager:
         for name in scalar:
             setattr(self, name, torch.zeros(n, device=self.device))
         self.lp_drift_xy = torch.zeros(n, 2, device=self.device)
+        self.lp_translation_xy = torch.zeros(n, 2, device=self.device)
         self.vp_occlusion_mask = torch.zeros(
             n, *vp_shape[-2:], device=self.device, dtype=torch.bool
         )
@@ -161,13 +160,29 @@ class SelectorFaultManager:
         )
         self.reset()
 
-    def _signed(self, ids, magnitude):
+    def _severity_strength(self, ids, shape=()):
         level = self.severity[ids]
-        lo = level.float() * 0.35
+        lo = level.float().reshape(-1, *([1] * len(shape))) * 0.35
+        level = level.reshape(-1, *([1] * len(shape)))
         hi = torch.where(level == 2, 1.0, lo + 0.35)
-        strength = lo + (hi - lo) * self.generator.uniform(ids)
-        sign = torch.where(self.generator.uniform(ids) < 0.5, -1.0, 1.0)
-        return magnitude * strength * sign
+        return lo + (hi - lo) * self.generator.uniform(ids, shape)
+
+    def _signed_range(self, ids, bounds, *, neutral=0.0, shape=()):
+        """Sample within exact bounds; severity measures distance from neutral.
+
+        The nearest allowed value is the anchor for one-sided bounds. Equal
+        bounds, including zero ranges, remain exact instead of adding a
+        hard-coded minimum fault.
+        """
+        low, high = bounds
+        anchor = min(max(neutral, low), high)
+        choose_low = self.generator.uniform(ids, shape) < 0.5
+        if anchor == low:
+            choose_low = torch.zeros_like(choose_low)
+        elif anchor == high:
+            choose_low = torch.ones_like(choose_low)
+        endpoint = torch.where(choose_low, low, high)
+        return anchor + self._severity_strength(ids, shape) * (endpoint - anchor)
 
     def _schedule(self, ids, initial=False):
         if len(ids) == 0:
@@ -228,9 +243,9 @@ class SelectorFaultManager:
             1 + torch.round(strength * (self.cfg.max_delay_frames - 1)).long()
         )
         self.vp_delay[ids] = self.lp_delay[ids]
-        self.vp_scale[ids] = 1.0 + self._signed(ids, 0.15)
-        self.vp_bias[ids] = self._signed(ids, 0.20) / self.cfg.vp_depth_max_m
-        shifts = (1 + strength * (self.cfg.vp_max_shift_pixels - 1)).round().long()
+        self.vp_scale[ids] = self._signed_range(ids, self.cfg.vp_scale_range, neutral=1.0)
+        self.vp_bias[ids] = self._signed_range(ids, self.cfg.vp_bias_m_range) / self.cfg.vp_depth_max_m
+        shifts = (strength * self.cfg.vp_max_shift_pixels).round().long()
         for name in ("vp_shift_x", "vp_shift_y"):
             getattr(self, name)[ids] = shifts * torch.where(
                 self.generator.uniform(ids) < 0.5, -1, 1
@@ -240,21 +255,18 @@ class SelectorFaultManager:
         )[self.generator.randint(0, 3, ids)]
         low, high = self.cfg.lp_dropout_fraction
         self.lp_dropout[ids] = low + strength * (high - low)
-        self.lp_bias[ids] = self._signed(ids, 0.15)
-        shifts = (1 + strength).round().long()
-        for name in ("lp_shift_x", "lp_shift_y"):
-            getattr(self, name)[ids] = shifts * torch.where(
-                self.generator.uniform(ids) < 0.5, -1, 1
-            )
-        self.lp_yaw[ids] = self._signed(
-            ids, max(abs(v) for v in self.cfg.lp_yaw_range_deg)
-        )
+        self.lp_bias[ids] = self._signed_range(ids, self.cfg.lp_height_bias_m_range)
+        self.lp_translation_xy[ids] = self._signed_range(ids, self.cfg.lp_translation_range_m, shape=(2,))
+        self.lp_yaw[ids] = self._signed_range(ids, self.cfg.lp_yaw_range_deg)
         angle = 2 * math.pi * self.generator.uniform(ids)
-        speed = self.cfg.lp_drift_m_per_s[1] * strength
+        low, high = self.cfg.lp_drift_m_per_s
+        speed = low + strength * (high - low)
         self.lp_drift_xy[ids] = torch.stack(
             (speed * angle.cos(), speed * angle.sin()), -1
         )
-        self.lp_drift_yaw[ids] = self._signed(ids, self.cfg.lp_drift_deg_per_s[1])
+        low, high = self.cfg.lp_drift_deg_per_s
+        yaw_speed = low + self._severity_strength(ids) * (high - low)
+        self.lp_drift_yaw[ids] = yaw_speed * torch.where(self.generator.uniform(ids) < 0.5, -1.0, 1.0)
         self.lp_freeze_initialized[ids] = False
         self.vp_freeze_initialized[ids] = False
         self.schedule_count[ids] += 1
@@ -275,6 +287,7 @@ class SelectorFaultManager:
                 & (yy < (top + rh)[:, None, None])
                 & (xx >= left[:, None, None])
                 & (xx < (left + rw)[:, None, None])
+                & (fraction > 0)[:, None, None]
             )
 
     def reset(self, env_ids=None):
@@ -376,36 +389,7 @@ class SelectorFaultManager:
         return torch.where(inside.reshape(n, 1, h * w), shifted, fill).reshape_as(data)
 
     def _rotate_lp(self, data: torch.Tensor, yaw_deg: torch.Tensor) -> torch.Tensor:
-        angle = torch.deg2rad(yaw_deg)
-        cosine, sine = angle.cos(), angle.sin()
-        theta = torch.zeros(self.num_envs, 2, 3, device=self.device, dtype=data.dtype)
-        theta[:, 0, 0] = cosine
-        theta[:, 0, 1] = -sine
-        theta[:, 1, 0] = sine
-        theta[:, 1, 1] = cosine
-        grid = F.affine_grid(
-            theta, (self.num_envs, 1, *self.lp_shape), align_corners=True
-        )
-        valid = (data != self.cfg.lp_invalid_height).to(data.dtype)
-        sampled = F.grid_sample(
-            data[:, None],
-            grid,
-            mode="bilinear",
-            padding_mode="zeros",
-            align_corners=True,
-        )[:, 0]
-        sampled_valid = F.grid_sample(
-            valid[:, None],
-            grid,
-            mode="nearest",
-            padding_mode="zeros",
-            align_corners=True,
-        )[:, 0]
-        return torch.where(
-            sampled_valid > 0.5,
-            sampled,
-            torch.full_like(sampled, self.cfg.lp_invalid_height),
-        )
+        return self._transform_lp(data, torch.zeros(data.shape[0], 2, device=data.device), yaw_deg)
 
     def _transform_lp(
         self,
@@ -413,44 +397,61 @@ class SelectorFaultManager:
         translation_m: torch.Tensor,
         yaw_deg: torch.Tensor,
         *,
-        resolution_m: float = 0.1,
-    ) -> torch.Tensor:
-        """Apply a continuous planar transform while preserving invalid cells."""
+        resolution_m: float | None = None,
+        valid_support: torch.Tensor | None = None,
+        return_support: bool = False,
+    ):
+        """Sample at R(yaw) * xy - translation, in physical metres.
+
+        Height and raw support use the same bilinear grid. Unknown heights
+        contribute zero weight; -1.1 is never part of a height average. A
+        rectangular map needs physical aspect factors in normalized coordinates.
+        Supports a subset of rows so unrelated environments need no warp.
+        """
+        n = data.shape[0]
+        resolution_m = self.cfg.lp_resolution_m if resolution_m is None else resolution_m
+        if not math.isfinite(resolution_m) or resolution_m <= 0:
+            raise ValueError("LP transform resolution must be finite and positive")
+        if data.shape != (n, *self.lp_shape) or translation_m.shape != (n, 2) or yaw_deg.shape != (n,):
+            raise ValueError("LP transform data, translation and yaw shapes must match")
+        if valid_support is not None and valid_support.shape != data.shape:
+            raise ValueError("LP transform support must match height")
 
         angle = torch.deg2rad(yaw_deg)
         cosine, sine = angle.cos(), angle.sin()
-        theta = torch.zeros(self.num_envs, 2, 3, device=self.device, dtype=data.dtype)
-        theta[:, 0, 0] = cosine
-        theta[:, 0, 1] = -sine
-        theta[:, 1, 0] = sine
-        theta[:, 1, 1] = cosine
+        theta = torch.zeros(n, 2, 3, device=data.device, dtype=data.dtype)
         width_m = max((self.lp_shape[1] - 1) * resolution_m, resolution_m)
         height_m = max((self.lp_shape[0] - 1) * resolution_m, resolution_m)
+        theta[:, 0, 0] = cosine
+        theta[:, 0, 1] = -sine * height_m / width_m
+        theta[:, 1, 0] = sine * width_m / height_m
+        theta[:, 1, 1] = cosine
         theta[:, 0, 2] = -2.0 * translation_m[:, 0] / width_m
         theta[:, 1, 2] = -2.0 * translation_m[:, 1] / height_m
         grid = F.affine_grid(
-            theta, (self.num_envs, 1, *self.lp_shape), align_corners=True
+            theta, (n, 2, *self.lp_shape), align_corners=True
         )
-        valid = (data != self.cfg.lp_invalid_height).to(data.dtype)
+        finite = torch.isfinite(data) & (data != self.cfg.lp_invalid_height)
+        weights = finite.to(data.dtype)
+        if valid_support is not None:
+            weights = weights * valid_support.to(data.dtype)
+        weighted_height = torch.where(finite, data, 0.0) * weights
         sampled = F.grid_sample(
-            data[:, None],
+            torch.stack((weighted_height, weights), 1),
             grid,
             mode="bilinear",
             padding_mode="zeros",
             align_corners=True,
-        )[:, 0]
-        sampled_valid = F.grid_sample(
-            valid[:, None],
-            grid,
-            mode="nearest",
-            padding_mode="zeros",
-            align_corners=True,
-        )[:, 0]
-        return torch.where(
-            sampled_valid > 0.5,
-            sampled,
-            torch.full_like(sampled, self.cfg.lp_invalid_height),
         )
+        support = sampled[:, 1].clamp(0, 1)
+        has_support = support > 1.0e-6
+        height = torch.where(
+            has_support,
+            sampled[:, 0] / support.clamp_min(1.0e-6),
+            torch.full_like(support, self.cfg.lp_invalid_height),
+        )
+        support = torch.where(has_support, support, 0.0)
+        return (height, support) if return_support else height
 
     def apply(
         self,
@@ -622,24 +623,20 @@ class SelectorFaultManager:
         out_lp[biased] = torch.where(
             lv[biased] > 0, candidate[biased], self.cfg.lp_invalid_height
         )
-        registered = la & (self.lp_kind == int(FaultKind.LP_REGISTRATION))
-        for data, fill in ((out_lp, self.cfg.lp_invalid_height), (lv, 0.0)):
-            changed = self._integer_shift(
-                self._rotate_lp(data, self.lp_yaw),
-                self.lp_shift_x,
-                self.lp_shift_y,
-                fill,
+        registered = (la & (self.lp_kind == int(FaultKind.LP_REGISTRATION))).nonzero().flatten()
+        if len(registered):
+            out_lp[registered], lv[registered] = self._transform_lp(
+                out_lp[registered], self.lp_translation_xy[registered], self.lp_yaw[registered],
+                valid_support=lv[registered], return_support=True,
             )
-            data[registered] = changed[registered]
-        drifting = la & (self.lp_kind == int(FaultKind.LP_DRIFT))
-        elapsed = (self.step_count - self.lp_start_frame).clamp_min(
-            0
-        ).float() * self.cfg.update_period_s
-        for data in (out_lp, lv):
-            changed = self._transform_lp(
-                data, self.lp_drift_xy * elapsed[:, None], self.lp_drift_yaw * elapsed
+        drifting = (la & (self.lp_kind == int(FaultKind.LP_DRIFT))).nonzero().flatten()
+        if len(drifting):
+            elapsed = ((self.step_count[drifting] - self.lp_start_frame[drifting]).clamp_min(0).float()
+                       * self.cfg.update_period_s)
+            out_lp[drifting], lv[drifting] = self._transform_lp(
+                out_lp[drifting], self.lp_drift_xy[drifting] * elapsed[:, None], self.lp_drift_yaw[drifting] * elapsed,
+                valid_support=lv[drifting], return_support=True,
             )
-            data[drifting] = changed[drifting]
         collapsed = la & (self.lp_kind == int(FaultKind.LP_COLLAPSE))
         out_lp[collapsed] = self.cfg.lp_invalid_height
         lv[collapsed] = 0.0
@@ -649,3 +646,4 @@ class SelectorFaultManager:
         return FaultBatch(
             out_lp, out_vp, lp_time, vp_time, la, va, lv, vv, lp_packet, vp_packet
         )
+

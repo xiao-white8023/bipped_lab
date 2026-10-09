@@ -12,6 +12,7 @@ import argparse
 import copy
 from dataclasses import asdict
 import json
+import math
 from pathlib import Path
 import random
 import shutil
@@ -27,8 +28,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from legged_lab.selector.config import SelectorConfig, TrainingConfig  # noqa: E402
-from legged_lab.selector.dataset import SelectorShardDataset, verify_dataset_no_group_leak  # noqa: E402
-from legged_lab.selector.metrics import selector_metrics  # noqa: E402
+from legged_lab.selector.dataset import ShardBatchSampler, SelectorShardDataset, verify_dataset_no_group_leak  # noqa: E402
+from legged_lab.selector.metrics import json_safe_metrics, selector_metrics  # noqa: E402
 from legged_lab.selector.frozen_policy import dataset_policy_identity  # noqa: E402
 from legged_lab.selector.labels import dataset_safety_label_contract  # noqa: E402
 from legged_lab.selector.feature_contract import dataset_feature_contract  # noqa: E402
@@ -71,12 +72,10 @@ def make_loader(
 ) -> DataLoader:
     return DataLoader(
         dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
+        batch_sampler=ShardBatchSampler(dataset, batch_size, shuffle=shuffle),
         num_workers=workers,
         pin_memory=device.type == "cuda",
         persistent_workers=workers > 0,
-        drop_last=False,
     )
 
 
@@ -106,6 +105,14 @@ def fit_normalizer_and_weights(
     normalizer = FeatureNormalizer(frame_dim)
     normalizer.set_statistics(mean.float(), variance.sqrt().float())
     negative = samples - positive
+    invalid_heads = (positive == 0) | (negative == 0)
+    if invalid_heads.any():
+        names = ("lp_short", "lp_long", "vp_short", "vp_long")
+        missing = [names[i] for i in invalid_heads.nonzero().flatten().tolist()]
+        raise ValueError(
+            f"training labels need both safe and failed samples for {missing}; "
+            "recollect data with more terrain and fault coverage"
+        )
     weights = (negative / positive.clamp_min(1.0)).clamp(1.0, 100.0).float()
     return normalizer, weights
 
@@ -244,7 +251,7 @@ def train_seed(
     path = output / f"selector_seed_{seed}.pt"
     torch.save(artifact, path)
     (output / f"selector_seed_{seed}.json").write_text(
-        json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8"
+        json.dumps(json_safe_metrics(metrics), indent=2, sort_keys=True, allow_nan=False), encoding="utf-8"
     )
     return path, metrics
 
@@ -304,7 +311,9 @@ def main() -> None:
         )
     results.sort(
         key=lambda item: (
-            item[1]["validation/selection/dangerous_branch_rate"],
+            (item[1]["validation/selection/dangerous_branch_rate"]
+             if math.isfinite(item[1]["validation/selection/dangerous_branch_rate"])
+             else float("inf")),
             item[1]["validation/loss"],
         )
     )
@@ -318,7 +327,7 @@ def main() -> None:
         "all_candidates": {path.name: metrics for path, metrics in results},
     }
     (args.output / "training_summary.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"
+        json.dumps(json_safe_metrics(summary), indent=2, sort_keys=True, allow_nan=False), encoding="utf-8"
     )
     print(f"[selector] selected {best_path.name}; wrote {final_path}")
 

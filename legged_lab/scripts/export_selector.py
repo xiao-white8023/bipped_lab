@@ -18,6 +18,7 @@ from legged_lab.selector.config import SelectorConfig  # noqa: E402
 from legged_lab.selector.frozen_policy import policy_identity  # noqa: E402
 from legged_lab.selector.labels import validate_safety_label_contract  # noqa: E402
 from legged_lab.selector.model import CalibratedSelector, FeatureNormalizer, SelectorNetwork  # noqa: E402
+from legged_lab.selector.metrics import json_safe_metrics  # noqa: E402
 from legged_lab.selector.feature_contract import validate_feature_contract  # noqa: E402
 
 
@@ -56,13 +57,13 @@ def main() -> None:
         "frozen_policy": frozen_metadata,
         "safety_label_contract": label_contract,
         "selector_feature_contract": feature_contract,
-        "metrics": artifact.get("metrics", {}),
+        "metrics": json_safe_metrics(artifact.get("metrics", {})),
     }
     destination = args.output_dir / "lp_vp_selector.pt"
     torch.jit.save(
         traced,
         destination,
-        _extra_files={"selector_contract.json": json.dumps(metadata, sort_keys=True)},
+        _extra_files={"selector_contract.json": json.dumps(metadata, sort_keys=True, allow_nan=False)},
     )
     reloaded = torch.jit.load(destination).eval()
     with torch.inference_mode():
@@ -70,7 +71,7 @@ def main() -> None:
     if not torch.allclose(reference, reloaded_output, rtol=1.0e-5, atol=1.0e-6):
         raise RuntimeError("reloaded selector artifact failed parity validation")
     (args.output_dir / "selector_contract.json").write_text(
-        json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8"
+        json.dumps(metadata, indent=2, sort_keys=True, allow_nan=False), encoding="utf-8"
     )
     print(f"[selector] exported {destination}")
 

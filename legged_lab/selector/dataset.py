@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 from .config import CollectionConfig, SelectorConfig
 from .labels import FUTURE_METRIC_ORDER
@@ -359,3 +359,59 @@ class SelectorShardDataset(Dataset):
         item["features"] = item["features"].float()
         item["labels"] = item["labels"].float()
         return item
+
+
+class ShardBatchSampler(Sampler[list[int]]):
+    """Shuffle shard order and rows without loading a shard for every row.
+
+    A batch visits each shard in contiguous runs. Small shard remainders are
+    carried into the next batch so batch size and sample coverage are preserved.
+    Each DataLoader worker retains its own one-shard cache; memory stays bounded.
+    """
+
+    def __init__(
+        self,
+        dataset: SelectorShardDataset,
+        batch_size: int,
+        *,
+        shuffle: bool,
+        drop_last: bool = False,
+        generator: torch.Generator | None = None,
+    ):
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        self.dataset = dataset
+        self.batch_size = int(batch_size)
+        self.shuffle = bool(shuffle)
+        self.drop_last = bool(drop_last)
+        self.generator = generator
+
+    def __len__(self) -> int:
+        samples = len(self.dataset)
+        return (samples // self.batch_size if self.drop_last else
+                (samples + self.batch_size - 1) // self.batch_size)
+
+    def __iter__(self):
+        shard_order = (torch.randperm(len(self.dataset.lengths), generator=self.generator).tolist()
+                       if self.shuffle else range(len(self.dataset.lengths)))
+        pending: list[int] = []
+        for shard_index in shard_order:
+            size = self.dataset.lengths[shard_index]
+            start = 0 if shard_index == 0 else self.dataset.cumulative[shard_index - 1]
+            rows = (torch.randperm(size, generator=self.generator) + start if self.shuffle
+                    else torch.arange(start, start + size)).tolist()
+            offset = 0
+            if pending:
+                take = min(self.batch_size - len(pending), size)
+                pending.extend(rows[:take])
+                offset = take
+                if len(pending) == self.batch_size:
+                    yield pending
+                    pending = []
+            while offset + self.batch_size <= size:
+                yield rows[offset:offset + self.batch_size]
+                offset += self.batch_size
+            pending.extend(rows[offset:])
+        if pending and not self.drop_last:
+            yield pending
+
