@@ -1,3 +1,20 @@
+# 中文导读
+# 文件用途：为冻结 RENet 提供只读双分支接口，同一份观测可得到 LP 和 VP 的候选动作。
+# 使用位置：frozen_policy 加载器、collector 数据采集，以及双分支 TorchScript 导出。
+# 说明：两个分支共用原 actor，分别保留一侧特征并屏蔽另一侧；策略参数禁止梯度更新。
+# 说明：adapter_from_runner 只是可选适配工具；独立 selector 训练脚本不需要训练 runner。
+#
+# 类、函数及方法说明（包含私有方法、内部函数和属性访问器）：
+# - FrozenRENetAdapter：封装冻结策略和观测归一化器，统一六个双分支输出。
+# - FrozenRENetAdapter.__init__：检查 RENet 所需接口和维度，可选择复制策略，并冻结全部参数。
+# - FrozenRENetAdapter.normalize：使用冻结的归一化器处理策略观测。
+# - FrozenRENetAdapter.forward：计算 LP/VP 特征、速度估计，以及各自送入共享 actor 后的候选动作。
+# - FrozenRENetAdapter.evaluate：在无梯度模式下调用双分支前向计算，并包装为 DualBranchOutput。
+# - FrozenRENetAdapter.parity_error：比较适配器动作与原策略在强制 LP/VP mask 下的推理动作。
+# - adapter_from_runner：从已有 runner 中提取策略和观测归一化器，构建冻结适配器。
+# - validate_checkpoint_metadata：检查 checkpoint 参数键、张量形状及 LP 编码器约定是否匹配模型。
+# 中文导读结束
+
 """Read-only dual-branch view of a frozen ``RENetActorCritic`` instance."""
 
 from __future__ import annotations

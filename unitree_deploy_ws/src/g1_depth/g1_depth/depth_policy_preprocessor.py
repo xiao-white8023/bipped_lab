@@ -196,6 +196,9 @@ class DepthPolicyPreprocessor(Node):
             frame_count=self._history_frames,
             capture_period=self._capture_period,
         )
+        self._valid_history = PolicyDepthHistory(
+            frame_count=self._history_frames, capture_period=self._capture_period,
+        )
         self._camera_info = None
         self._projection = None
         self._projection_key = None
@@ -395,7 +398,7 @@ class DepthPolicyPreprocessor(Node):
         self._frame_pub.publish(message)
 
     def _publish_history(
-        self, source, history, healthy, source_age, valid_ratio
+        self, source, history, healthy, source_age, valid_ratio, valid_support
     ):
         flat_history = np.ascontiguousarray(
             history.reshape(-1), dtype=np.float32
@@ -415,6 +418,7 @@ class DepthPolicyPreprocessor(Node):
         # correctly typed numpy array.  Assign the canonical flattened array
         # directly instead of round-tripping it through message.data.
         policy_input.history = flat_history
+        policy_input.valid_support = np.ascontiguousarray(valid_support.reshape(-1), dtype=np.float32)
         policy_input.valid = bool(healthy)
         policy_input.source_age = float(source_age)
         policy_input.valid_ratio = float(valid_ratio)
@@ -446,6 +450,9 @@ class DepthPolicyPreprocessor(Node):
                 blur_enable=self._blur_enable,
             )
             history, rewound = self._history.push(source_stamp, frame)
+            valid_support, valid_rewound = self._valid_history.push(source_stamp, stats.valid_support)
+            if rewound != valid_rewound or (history is None) != (valid_support is None):
+                raise RuntimeError('depth history and raw validity history lost synchronization')
             if history is None:
                 return
         except (RuntimeError, ValueError) as error:
@@ -498,7 +505,7 @@ class DepthPolicyPreprocessor(Node):
 
         self._publish_frame(message, frame)
         self._publish_history(
-            message, history, healthy, source_age, stats.valid_ratio
+            message, history, healthy, source_age, stats.valid_ratio, valid_support
         )
         self._publish_health(healthy, source_age, stats.valid_ratio)
         self._last_source_stamp = source_stamp

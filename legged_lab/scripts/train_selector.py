@@ -31,6 +31,7 @@ from legged_lab.selector.dataset import SelectorShardDataset, verify_dataset_no_
 from legged_lab.selector.metrics import selector_metrics  # noqa: E402
 from legged_lab.selector.frozen_policy import dataset_policy_identity  # noqa: E402
 from legged_lab.selector.labels import dataset_safety_label_contract  # noqa: E402
+from legged_lab.selector.feature_contract import dataset_feature_contract  # noqa: E402
 from legged_lab.selector.model import (  # noqa: E402
     CalibratedSelector,
     FeatureNormalizer,
@@ -226,12 +227,13 @@ def train_seed(
     metrics["validation/loss"] = validation_loss
     metrics["training/epochs"] = float(len(history))
     artifact = {
-        "version": 1,
+        "version": 2,
         "seed": seed,
         "selector_config": asdict(selector_cfg),
         "training_config": asdict(train_cfg),
         "frozen_policy": dataset_policy_identity(train_loader.dataset.manifest),
         "safety_label_contract": dataset_safety_label_contract(train_loader.dataset.manifest),
+        "selector_feature_contract": dataset_feature_contract(train_loader.dataset.manifest),
         "model_state_dict": model.cpu().state_dict(),
         "normalizer_state_dict": normalizer.cpu().state_dict(),
         "temperatures": temperatures,
@@ -264,6 +266,7 @@ def main() -> None:
     test_dataset = SelectorShardDataset(args.dataset, "test")
     frozen_metadata = dataset_policy_identity(train_dataset.manifest)
     dataset_safety_label_contract(train_dataset.manifest)
+    dataset_feature_contract(train_dataset.manifest)
     print(f"[selector] frozen RENet iteration={frozen_metadata['source_iteration']}; "
           f"VP frames={frozen_metadata['vp_proprio_history_frames']}")
     if min(len(train_dataset), len(validation_dataset), len(test_dataset)) == 0:

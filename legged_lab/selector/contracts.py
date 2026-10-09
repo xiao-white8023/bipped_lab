@@ -57,6 +57,10 @@ class SelectorInput:
     vp_timestamp: torch.Tensor
     current_mask: torch.Tensor
     time_since_switch: torch.Tensor
+    lp_valid_mask: torch.Tensor | None = None
+    vp_valid_support: torch.Tensor | None = None
+    lp_packet_timestamp: torch.Tensor | None = None
+    vp_packet_timestamp: torch.Tensor | None = None
 
 
 @dataclass

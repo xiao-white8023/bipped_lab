@@ -1,3 +1,35 @@
+# 中文导读
+# 文件用途：回归验证 selector 标签修正、reset 前测量、超时处理和有效样本过滤。
+# 使用位置：通过 pytest 执行；使用轻量环境替身及真实 G1 控制步源码，不启动 Isaac Sim。
+# 说明：这些测试检查标签和采集接口，不能证明 PhysX 中的完整轨迹重放或实际控制效果。
+#
+# 类、函数及方法说明（包含私有方法、内部函数和属性访问器）：
+# - _AutoResetEnv：模拟 G1 控制步结束后自动 reset 的最小环境，用于检验标签读取时机。
+# - _AutoResetEnv.__init__：建立本体、扫描、接触、命令及 episode 计数等测试状态。
+# - _AutoResetEnv.reset：将指定机器人恢复为正常姿态、速度和接触状态，并清零 episode 计数。
+# - _AutoResetEnv.step：推进计数、执行测试事件并自动 reset，返回 reset 后观测和终止信息。
+# - _frame：生成指定倾角、高度、有效性和接触标记的 SafetyStepMetrics 测试帧。
+# - _finish：用指定或正常安全帧补齐 rollout，并返回累计结果。
+# - test_obstacle_ahead_is_not_ground_under_the_robot：确认前方高障碍不会替代机身附近地面而产生错误低高度标签。
+# - test_nearest_ground_uses_world_root_position_and_actual_height：验证世界坐标地面定位和真实低高度失败检测。
+# - test_missing_or_distant_ground_cannot_produce_a_safe_label：验证缺失、非有限或距离过远的地面测量被标记无效。
+# - test_out_of_range_ray_return_is_an_unknown_ground_measurement：验证超出扫描最大距离的返回值不能充当有效地面。
+# - test_nonfinite_simulator_state_is_rejected：验证机器人位置、重力或速度包含非有限值时拒绝标签。
+# - _make_terminal：构造低高度、大倾角、高速度和躯干接触的终止状态。
+# - test_terminal_metrics_are_from_before_reset_and_method_is_restored：验证终止指标来自 reset 前且不混入新 episode，并恢复原 reset 方法。
+# - test_capture_boundary_in_the_actual_g1_control_step_source：执行真实 G1 step/check_reset 源码的替身版本，验证测量先于 reset 和命令更新。
+# - test_hook_captures_even_when_no_environment_resets：验证 reset 环境集合为空时也捕获本控制步的安全指标。
+# - test_hook_restores_existing_instance_override_on_exception：验证 step 抛异常时仍恢复此前实例上的 reset 覆盖。
+# - test_hook_refuses_post_reset_fallback_when_boundary_is_missing：验证缺少 reset 前边界时抛错，不使用 reset 后指标替代。
+# - test_early_timeout_is_censored_and_final_step_timeout_is_complete：验证提前超时剔除，而最后一步超时保留完整观测。
+# - test_torso_contact_on_a_timeout_step_is_still_a_physical_failure：验证同时发生超时和真实躯干接触时仍记录物理失败。
+# - test_late_failure_preserves_short_safe_long_failed_order：验证只在长时间窗出现失败时短标签仍安全、长标签为失败。
+# - test_replay_filter_checks_label_validity_and_censoring：验证重放过滤也检查标签有效性与超时事件。
+# - test_collector_rollout_consumes_terminal_capture_not_returned_state：验证实际 collector rollout 使用 reset 前指标生成标签。
+# - test_collector_persists_only_complete_valid_pairs：验证仅写入两分支有效且有完整剩余时间窗的样本，并记录过滤计数。
+# - test_old_label_datasets_are_rejected_even_with_matching_policy：验证策略相同也不能放行缺失或过时的标签约定。
+# 中文导读结束
+
 """Regression cases for pre-reset selector labels, censoring and persistence."""
 
 from __future__ import annotations

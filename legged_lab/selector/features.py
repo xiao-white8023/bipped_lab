@@ -1,12 +1,9 @@
 """Observable health metrics and the fixed 283-D selector feature layout."""
 
 from __future__ import annotations
-
 from dataclasses import dataclass
-
 import torch
 import torch.nn.functional as F
-
 from .config import SelectorConfig
 from .contracts import DualBranchOutput, SensorHealth
 
@@ -14,145 +11,188 @@ from .contracts import DualBranchOutput, SensorHealth
 @dataclass
 class _HealthSnapshot:
     last_data: torch.Tensor
+    last_valid: torch.Tensor
     last_timestamp: torch.Tensor
+    last_packet_timestamp: torch.Tensor
     update_interval: torch.Tensor
     temporal_l1: torch.Tensor
     frozen_ratio: torch.Tensor
+    valid_ratio: torch.Tensor
+    abnormal_ratio: torch.Tensor
+    spatial_mean: torch.Tensor
+    spatial_std: torch.Tensor
     initialized: torch.Tensor
 
 
 class SensorHealthTracker:
-    """Track health using only values and timestamps available on the robot."""
+    """Cache statistics per packet; query packet age at any control rate.
 
-    def __init__(self, num_envs: int, sensor_shape: tuple[int, ...], device: str | torch.device):
-        self.num_envs = int(num_envs)
-        self.sensor_shape = tuple(sensor_shape)
+    valid_mask may be boolean or fractional raw valid support in [0,1]. The
+    source timestamp measures freshness; packet_timestamp identifies arrivals.
+    A repeated packet never overwrites temporal/spatial statistics. All time
+    arithmetic uses float64; only durations enter the FP32 feature vector.
+    """
+
+    def __init__(self, num_envs: int, sensor_shape: tuple[int, ...], device):
+        self.num_envs, self.sensor_shape = int(num_envs), tuple(sensor_shape)
         self.device = torch.device(device)
-        self.last_data = torch.zeros((self.num_envs, *self.sensor_shape), device=self.device)
-        self.last_timestamp = torch.full((self.num_envs,), -torch.inf, device=self.device)
-        self.update_interval = torch.zeros(self.num_envs, device=self.device)
-        self.temporal_l1 = torch.zeros(self.num_envs, device=self.device)
-        self.frozen_ratio = torch.zeros(self.num_envs, device=self.device)
-        self.initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.last_data = torch.zeros((num_envs, *sensor_shape), device=self.device)
+        self.last_valid = torch.zeros_like(self.last_data)
+        self.last_timestamp = torch.full(
+            (num_envs,), -torch.inf, device=self.device, dtype=torch.float64
+        )
+        self.last_packet_timestamp = self.last_timestamp.clone()
+        for name in (
+            "update_interval",
+            "temporal_l1",
+            "frozen_ratio",
+            "valid_ratio",
+            "abnormal_ratio",
+            "spatial_mean",
+            "spatial_std",
+        ):
+            setattr(self, name, torch.zeros(num_envs, device=self.device))
+        self.initialized = torch.zeros(num_envs, dtype=torch.bool, device=self.device)
 
-    def reset(self, env_ids: torch.Tensor | None = None) -> None:
+    def reset(self, env_ids=None):
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
-        self.last_data[env_ids] = 0
-        self.last_timestamp[env_ids] = -torch.inf
-        self.update_interval[env_ids] = 0
-        self.temporal_l1[env_ids] = 0
-        self.frozen_ratio[env_ids] = 0
-        self.initialized[env_ids] = False
+        for name in _HealthSnapshot.__dataclass_fields__:
+            value = getattr(self, name)
+            value[env_ids] = (
+                -torch.inf if name in ("last_timestamp", "last_packet_timestamp") else 0
+            )
 
-    def snapshot(self) -> _HealthSnapshot:
+    def snapshot(self):
         return _HealthSnapshot(
-            last_data=self.last_data.clone(),
-            last_timestamp=self.last_timestamp.clone(),
-            update_interval=self.update_interval.clone(),
-            temporal_l1=self.temporal_l1.clone(),
-            frozen_ratio=self.frozen_ratio.clone(),
-            initialized=self.initialized.clone(),
+            **{
+                name: getattr(self, name).clone()
+                for name in _HealthSnapshot.__dataclass_fields__
+            }
         )
 
-    def restore(self, snapshot: _HealthSnapshot) -> None:
+    def restore(self, snapshot):
         for name in _HealthSnapshot.__dataclass_fields__:
-            target = getattr(self, name)
-            source = getattr(snapshot, name)
+            target, source = getattr(self, name), getattr(snapshot, name)
             if target.shape != source.shape:
                 raise ValueError(f"health snapshot shape mismatch for {name}")
             target.copy_(source)
 
     def update(
         self,
-        data: torch.Tensor,
-        timestamp: torch.Tensor,
-        now: torch.Tensor | float,
+        data,
+        timestamp,
+        now,
         *,
-        valid_mask: torch.Tensor | None = None,
-        abnormal_mask: torch.Tensor | None = None,
-    ) -> SensorHealth:
+        valid_mask=None,
+        abnormal_mask=None,
+        packet_timestamp=None,
+    ):
         if data.shape != self.last_data.shape:
-            raise ValueError(f"sensor data must have shape {tuple(self.last_data.shape)}, got {tuple(data.shape)}")
-        timestamp = timestamp.reshape(self.num_envs).to(device=self.device, dtype=torch.float32)
-        now_tensor = torch.as_tensor(now, device=self.device, dtype=torch.float32)
-        if now_tensor.ndim == 0:
-            now_tensor = now_tensor.expand(self.num_envs)
-        else:
-            now_tensor = now_tensor.reshape(self.num_envs)
-
-        finite = torch.isfinite(data)
-        if valid_mask is None:
-            valid = finite
-        else:
-            if valid_mask.shape != data.shape:
-                raise ValueError("valid_mask must match sensor data")
-            valid = finite & valid_mask.bool()
-        if abnormal_mask is None:
-            abnormal = ~valid
-        else:
-            if abnormal_mask.shape != data.shape:
-                raise ValueError("abnormal_mask must match sensor data")
-            abnormal = (~valid) | abnormal_mask.bool()
-
-        flat_data = torch.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0).reshape(self.num_envs, -1)
-        flat_valid = valid.reshape(self.num_envs, -1)
-        flat_abnormal = abnormal.reshape(self.num_envs, -1)
-        new_packet = (~self.initialized) | (timestamp > self.last_timestamp + 1.0e-7)
-
-        comparable = flat_valid & torch.isfinite(self.last_data).reshape(self.num_envs, -1)
-        differences = (flat_data - self.last_data.reshape(self.num_envs, -1)).abs()
-        count = comparable.sum(dim=-1).clamp_min(1)
-        temporal_l1 = (differences * comparable).sum(dim=-1) / count
-        frozen_ratio = ((differences <= 1.0e-6) & comparable).sum(dim=-1) / count
-        temporal_l1 = torch.where(self.initialized, temporal_l1, torch.zeros_like(temporal_l1))
-        frozen_ratio = torch.where(self.initialized, frozen_ratio, torch.zeros_like(frozen_ratio))
-
-        finite_previous_time = torch.isfinite(self.last_timestamp)
-        interval = torch.where(
-            finite_previous_time,
-            (timestamp - self.last_timestamp).clamp_min(0.0),
-            torch.zeros_like(timestamp),
+            raise ValueError(
+                f"sensor data must have shape {tuple(self.last_data.shape)}"
+            )
+        source = torch.as_tensor(
+            timestamp, device=self.device, dtype=torch.float64
+        ).reshape(self.num_envs)
+        clock = (
+            torch.as_tensor(now, device=self.device, dtype=torch.float64)
+            .reshape(-1)
+            .expand(self.num_envs)
         )
-        self.update_interval.copy_(torch.where(new_packet, interval, self.update_interval))
-        # These two observables are evaluated at the selector tick even when
-        # the packet timestamp is stale.  That makes a true frozen stream read
-        # temporal_l1=0 and frozen_ratio=1 while frame_age keeps increasing.
-        self.temporal_l1.copy_(temporal_l1)
-        self.frozen_ratio.copy_(frozen_ratio)
-        if new_packet.any():
-            self.last_data[new_packet] = data[new_packet]
-            self.last_timestamp[new_packet] = timestamp[new_packet]
-            self.initialized[new_packet] = True
-
-        valid_count = flat_valid.sum(dim=-1)
-        valid_ratio = valid_count.float() / flat_valid.shape[1]
-        abnormal_ratio = flat_abnormal.float().mean(dim=-1)
-        safe_count = valid_count.clamp_min(1)
-        spatial_mean = (flat_data * flat_valid).sum(dim=-1) / safe_count
-        centered = (flat_data - spatial_mean[:, None]) * flat_valid
-        spatial_std = torch.sqrt(centered.square().sum(dim=-1) / safe_count)
-        spatial_mean = torch.where(valid_count > 0, spatial_mean, torch.zeros_like(spatial_mean))
-        spatial_std = torch.where(valid_count > 0, spatial_std, torch.zeros_like(spatial_std))
-        frame_age = torch.where(
-            self.initialized,
-            (now_tensor - self.last_timestamp).clamp_min(0.0),
-            torch.full_like(now_tensor, torch.inf),
+        packet = (
+            source
+            if packet_timestamp is None
+            else torch.as_tensor(
+                packet_timestamp, device=self.device, dtype=torch.float64
+            ).reshape(self.num_envs)
         )
+        if not torch.isfinite(clock).all():
+            raise ValueError("health clock must be finite")
+        # A delayed/rewound source packet is still a new arrival. It must not
+        # inherit the younger source timestamp from the previous packet.
+        new = torch.isfinite(packet) & (
+            (~self.initialized) | (packet != self.last_packet_timestamp)
+        )
+        if new.any():
+            weights = torch.isfinite(data).float()
+            if valid_mask is not None:
+                if valid_mask.shape != data.shape:
+                    raise ValueError("valid support must match sensor data")
+                if (
+                    not torch.isfinite(valid_mask).all()
+                    or ((valid_mask < 0) | (valid_mask > 1)).any()
+                ):
+                    raise ValueError("valid support must be finite and in [0,1]")
+                weights *= valid_mask.float()
+            safe = torch.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+            flat, valid = safe.flatten(1), weights.flatten(1)
+            previous = self.last_data.flatten(1)
+            common = torch.minimum(valid, self.last_valid.flatten(1))
+            count = common.sum(-1).clamp_min(1.0)
+            diff = (flat - previous).abs()
+            temporal = (diff * common).sum(-1) / count
+            frozen = ((diff <= 1e-6).float() * common).sum(-1) / count
+            temporal = torch.where(self.initialized, temporal, 0.0)
+            frozen = torch.where(self.initialized, frozen, 0.0)
+            denominator = valid.sum(-1).clamp_min(1.0)
+            mean = (flat * valid).sum(-1) / denominator
+            std = torch.sqrt(
+                ((flat - mean[:, None]).square() * valid).sum(-1) / denominator
+            )
+            ratio = valid.mean(-1)
+            abnormal = 1.0 - valid
+            if abnormal_mask is not None:
+                if abnormal_mask.shape != data.shape:
+                    raise ValueError("abnormal mask must match sensor data")
+                abnormal = torch.maximum(abnormal, abnormal_mask.flatten(1).float())
+            interval = torch.where(
+                self.initialized,
+                (packet - self.last_packet_timestamp).clamp_min(0.0),
+                0.0,
+            ).float()
+            values = dict(
+                temporal_l1=temporal,
+                frozen_ratio=frozen,
+                update_interval=interval,
+                valid_ratio=ratio,
+                abnormal_ratio=abnormal.mean(-1),
+                spatial_mean=mean,
+                spatial_std=std,
+            )
+            for name, value in values.items():
+                getattr(self, name)[new] = value[new]
+            self.last_data[new] = safe[new]
+            self.last_valid[new] = weights[new]
+            self.last_timestamp[new] = source[new]
+            self.last_packet_timestamp[new] = packet[new]
+            self.initialized[new] = True
+        age = (clock - self.last_timestamp).clamp_min(0.0)
+        age = torch.where(
+            self.initialized & torch.isfinite(self.last_timestamp), age, torch.inf
+        ).float()
         return SensorHealth(
-            frame_age=frame_age,
-            update_interval=self.update_interval.clone(),
-            valid_ratio=valid_ratio,
-            abnormal_ratio=abnormal_ratio,
-            temporal_l1=self.temporal_l1.clone(),
-            frozen_ratio=self.frozen_ratio.clone(),
-            spatial_mean=spatial_mean,
-            spatial_std=spatial_std,
+            frame_age=age,
+            **{
+                name: getattr(self, name).clone()
+                for name in (
+                    "update_interval",
+                    "valid_ratio",
+                    "abnormal_ratio",
+                    "temporal_l1",
+                    "frozen_ratio",
+                    "spatial_mean",
+                    "spatial_std",
+                )
+            },
         )
 
 
 def _require_shape(name: str, tensor: torch.Tensor, shape: tuple[int, ...]) -> None:
-    if tensor.ndim != len(shape) or any(expected >= 0 and actual != expected for actual, expected in zip(tensor.shape, shape)):
+    if tensor.ndim != len(shape) or any(
+        expected >= 0 and actual != expected
+        for actual, expected in zip(tensor.shape, shape)
+    ):
         raise ValueError(f"{name} must have shape {shape}, got {tuple(tensor.shape)}")
 
 
@@ -189,7 +229,9 @@ def build_selector_frame(
     cross = torch.cat(
         (
             latent_difference.norm(dim=-1, keepdim=True),
-            F.cosine_similarity(branches.lp_latent, branches.vp_latent, dim=-1, eps=1.0e-8)[:, None],
+            F.cosine_similarity(
+                branches.lp_latent, branches.vp_latent, dim=-1, eps=1.0e-8
+            )[:, None],
             velocity_difference,
             action_difference.norm(dim=-1, keepdim=True),
             action_difference.abs().amax(dim=-1, keepdim=True),
@@ -227,7 +269,12 @@ def build_selector_frame(
 class FeatureHistory:
     """Five-frame, 10 Hz history with first-frame replication on reset."""
 
-    def __init__(self, num_envs: int, cfg: SelectorConfig | None = None, device: str | torch.device = "cpu"):
+    def __init__(
+        self,
+        num_envs: int,
+        cfg: SelectorConfig | None = None,
+        device: str | torch.device = "cpu",
+    ):
         self.cfg = cfg or SelectorConfig()
         self.cfg.validate()
         self.num_envs = int(num_envs)
@@ -238,7 +285,9 @@ class FeatureHistory:
             self.cfg.frame_dim,
             device=self.device,
         )
-        self.initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.initialized = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
 
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
         if env_ids is None:
@@ -250,7 +299,9 @@ class FeatureHistory:
         _require_shape("frame", frame, (self.num_envs, self.cfg.frame_dim))
         first = ~self.initialized
         if first.any():
-            self.buffer[first] = frame[first, None].expand(-1, self.cfg.history_frames, -1)
+            self.buffer[first] = frame[first, None].expand(
+                -1, self.cfg.history_frames, -1
+            )
         subsequent = self.initialized
         if subsequent.any():
             self.buffer[subsequent, :-1] = self.buffer[subsequent, 1:].clone()
@@ -263,7 +314,10 @@ class FeatureHistory:
 
     def restore(self, snapshot: tuple[torch.Tensor, torch.Tensor]) -> None:
         buffer, initialized = snapshot
-        if buffer.shape != self.buffer.shape or initialized.shape != self.initialized.shape:
+        if (
+            buffer.shape != self.buffer.shape
+            or initialized.shape != self.initialized.shape
+        ):
             raise ValueError("feature-history snapshot shape mismatch")
         self.buffer.copy_(buffer)
         self.initialized.copy_(initialized)

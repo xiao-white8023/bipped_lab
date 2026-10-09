@@ -1,3 +1,21 @@
+# 中文导读
+# 文件用途：按 model_60000 的存档结构加载冻结策略，并校验其与原部署 policy.pt 的一致性。
+# 使用位置：采集脚本、双分支导出脚本；训练、评估和导出还使用策略身份校验函数。
+# 说明：存档结构使用 LP 五帧查询、VP 十帧本体历史和 64 维分支特征，不直接套用当前训练配置。
+# 说明：数据和模型记录源文件哈希及结构约定，防止混用由不同策略生成的特征与标签。
+#
+# 类、函数及方法说明（包含私有方法、内部函数和属性访问器）：
+# - sha256：分块读取模型文件，计算用于追踪来源的 SHA-256 摘要。
+# - build_frozen_policy：明确重建 model_60000 对应的 RENet 网络结构，避免历史长度和辅助头迁移。
+# - validate_reference_weights：逐项比较重建策略与部署 policy.pt 的权重，拒绝缺失或不相等的参数。
+# - validation_inputs：生成确定性的多批量、多观测取值测试输入，用于推理一致性检查。
+# - validate_actions：将双分支动作与 CPU 原部署策略的强制 mask 动作比较，并返回最大误差。
+# - policy_identity：校验策略身份元数据中的哈希、迭代数、维度、历史长度和推理精度约定。
+# - assert_same_policy：比较两份身份元数据的行为相关字段，允许源文件路径搬迁。
+# - dataset_policy_identity：从数据清单中读取并校验冻结策略身份，拒绝缺少来源信息的旧数据。
+# - load_frozen_adapter：严格加载 checkpoint 和参考策略，检查权重及动作，返回适配器和身份信息。
+# 中文导读结束
+
 """Exact architecture and validation for the deployed 2026-09-04 RENet policy.
 
 No Isaac Sim or PPO runner is imported here. Collection and export use the

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from dataclasses import asdict
 import hashlib
 import json
 import os
@@ -33,7 +34,8 @@ parser.add_argument(
     help="Frozen checkpoint path; defaults to DEFAULT_CHECKPOINT_PATH in selector/config.py.",
 )
 parser.add_argument(
-    "--reference-policy", type=Path,
+    "--reference-policy",
+    type=Path,
     default=None,
     help="Deployed policy.pt used for strict weight and LP/VP action validation.",
 )
@@ -51,6 +53,20 @@ parser.add_argument(
     help="Allow a small non-production dataset to validate the complete paired-rollout path.",
 )
 parser.add_argument("--skip-dual-branch-export", action="store_true")
+parser.add_argument("--fault-min-duration-frames", type=int, default=3)
+parser.add_argument("--fault-max-duration-frames", type=int, default=50)
+parser.add_argument("--fault-max-start-delay-frames", type=int, default=30)
+parser.add_argument("--fault-min-recovery-frames", type=int, default=5)
+parser.add_argument("--fault-max-recovery-frames", type=int, default=30)
+parser.add_argument("--fault-max-dual-stagger-frames", type=int, default=10)
+parser.add_argument("--behavior-min-dwell-frames", type=int, default=10)
+parser.add_argument("--behavior-max-dwell-frames", type=int, default=50)
+parser.add_argument("--max-candidate-batches", type=int, default=100000)
+parser.add_argument(
+    "--unbalanced-scenarios",
+    action="store_true",
+    help="Diagnostic only: disable accepted-sample scenario quotas",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, _ = parser.parse_known_args()
 args_cli.enable_cameras = True
@@ -63,12 +79,17 @@ import torch  # noqa: E402
 from legged_lab.envs import *  # noqa: F401,F403,E402
 from legged_lab.selector.collector import CounterfactualCollector  # noqa: E402
 from legged_lab.selector.config import (  # noqa: E402
-    CollectionConfig, DEFAULT_CHECKPOINT_PATH, DEFAULT_REFERENCE_POLICY_PATH, SelectorConfig,
+    CollectionConfig,
+    FaultConfig,
+    DEFAULT_CHECKPOINT_PATH,
+    DEFAULT_REFERENCE_POLICY_PATH,
+    SelectorConfig,
 )
 from legged_lab.selector.dataset import SelectorDatasetWriter  # noqa: E402
 from legged_lab.selector.faults import SelectorFaultManager  # noqa: E402
 from legged_lab.selector.frozen_policy import (  # noqa: E402
-    load_frozen_adapter, validate_actions,
+    load_frozen_adapter,
+    validate_actions,
 )
 from legged_lab.selector.terrain import (  # noqa: E402
     TerrainDistribution,
@@ -92,7 +113,9 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def patch_mask(observations: torch.Tensor, env, policy, mask_value: float) -> torch.Tensor:
+def patch_mask(
+    observations: torch.Tensor, env, policy, mask_value: float
+) -> torch.Tensor:
     observations = observations.clone()
     index = policy.proprio_actor_dim + policy.lidar_flat_dim + policy.depth_flat_dim
     observations[:, index : index + 1] = mask_value
@@ -139,7 +162,9 @@ def run_terrain_prepass(
 
 
 @torch.no_grad()
-def export_dual_branch(adapter, sample: torch.Tensor, output_dir: Path, frozen_metadata: dict) -> Path:
+def export_dual_branch(
+    adapter, sample: torch.Tensor, output_dir: Path, frozen_metadata: dict
+) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     sample = sample[: min(2, sample.shape[0])]
     # Always export a CPU graph for the robot's CPU TorchScript backend.
@@ -155,14 +180,27 @@ def export_dual_branch(adapter, sample: torch.Tensor, output_dir: Path, frozen_m
         "version": 1,
         "source_checkpoint": frozen_metadata["source_checkpoint"],
         "frozen_policy": frozen_metadata,
-        "outputs": ["lp_latent", "vp_latent", "lp_velocity", "vp_velocity", "lp_action", "vp_action"],
+        "outputs": [
+            "lp_latent",
+            "vp_latent",
+            "lp_velocity",
+            "vp_velocity",
+            "lp_action",
+            "vp_action",
+        ],
         "mask_contract": {"vp": 0, "lp": 1},
     }
     destination = output_dir / "renet_dual_branch.pt"
+    if destination.exists():
+        raise FileExistsError(
+            f"refusing to overwrite dual-branch artifact: {destination}"
+        )
     torch.jit.save(
         traced,
         destination,
-        _extra_files={"renet_dual_branch_contract.json": json.dumps(metadata, sort_keys=True)},
+        _extra_files={
+            "renet_dual_branch_contract.json": json.dumps(metadata, sort_keys=True)
+        },
     )
     return destination
 
@@ -171,15 +209,69 @@ def main() -> None:
     if args_cli.task != "g1_renet":
         raise ValueError("selector collection is isolated to task='g1_renet'")
     if args_cli.num_envs != 4096 and not args_cli.smoke_test:
-        raise ValueError("the approved selector collection uses exactly 4096 environments")
-    checkpoint_path = (args_cli.checkpoint_path or DEFAULT_CHECKPOINT_PATH).expanduser().resolve()
+        raise ValueError(
+            "the approved selector collection uses exactly 4096 environments"
+        )
+    checkpoint_path = (
+        (args_cli.checkpoint_path or DEFAULT_CHECKPOINT_PATH).expanduser().resolve()
+    )
     if not checkpoint_path.is_file():
         raise FileNotFoundError(checkpoint_path)
-    if args_cli.prepass_burn_in >= args_cli.prepass_steps and args_cli.terrain_histogram is None:
+    if (
+        args_cli.prepass_burn_in >= args_cli.prepass_steps
+        and args_cli.terrain_histogram is None
+    ):
         raise ValueError("prepass-burn-in must be smaller than prepass-steps")
+    default_output = (
+        REPO_ROOT
+        / "outputs/g1_renet_selector"
+        / ("dataset" if args_cli.terrain_mode == "main" else "dataset_ood_7_9")
+    )
+    output = (args_cli.output or default_output).expanduser().resolve()
+    if not args_cli.terrain_prepass_only:
+        if (output / "manifest.json").exists() or any(output.glob("*/shard_*.pt")):
+            raise FileExistsError(
+                f"refusing to overwrite an existing selector dataset: {output}"
+            )
+        if (
+            not args_cli.skip_dual_branch_export
+            and (output.parent / "exported/renet_dual_branch.pt").exists()
+        ):
+            raise FileExistsError(
+                "dual-branch export exists; use --skip-dual-branch-export or a new run directory"
+            )
+    fault_cfg = FaultConfig(
+        min_duration_frames=args_cli.fault_min_duration_frames,
+        max_duration_frames=args_cli.fault_max_duration_frames,
+        max_start_delay_frames=args_cli.fault_max_start_delay_frames,
+        min_recovery_frames=args_cli.fault_min_recovery_frames,
+        max_recovery_frames=args_cli.fault_max_recovery_frames,
+        max_dual_stagger_frames=args_cli.fault_max_dual_stagger_frames,
+    )
+    fault_cfg.validate()
+
+    target_samples = args_cli.target_samples
+    if target_samples is None:
+        if args_cli.smoke_test:
+            target_samples = args_cli.num_envs
+        else:
+            target_samples = 1_048_576 if args_cli.terrain_mode == "main" else 131_072
+
+    collection_cfg = CollectionConfig(
+        checkpoint_path=str(checkpoint_path),
+        num_envs=args_cli.num_envs,
+        target_samples=target_samples,
+        allow_nonproduction_num_envs=args_cli.smoke_test,
+        behavior_min_dwell_frames=args_cli.behavior_min_dwell_frames,
+        behavior_max_dwell_frames=args_cli.behavior_max_dwell_frames,
+        balanced_scenarios=not args_cli.unbalanced_scenarios,
+        max_candidate_batches=args_cli.max_candidate_batches,
+    )
+    collection_cfg.validate()
     protected_before = {str(path): sha256(path) for path in PROTECTED_FILES}
     adapter, reference, frozen_metadata = load_frozen_adapter(
-        checkpoint_path, args_cli.reference_policy or DEFAULT_REFERENCE_POLICY_PATH,
+        checkpoint_path,
+        args_cli.reference_policy or DEFAULT_REFERENCE_POLICY_PATH,
     )
     env_cfg, agent_cfg = task_registry.get_cfgs(args_cli.task)
     env_cfg, agent_cfg = copy.deepcopy(env_cfg), copy.deepcopy(agent_cfg)
@@ -209,8 +301,13 @@ def main() -> None:
     adapter = adapter.to(env.device).eval()
 
     parity_observations, parity_extras = env.get_observations()
-    if parity_observations.shape[1] != 2120 or parity_extras["observations"]["critic"].shape[1] != 1037:
-        raise ValueError("archived RENet requires actor=2120 and critic=1037 observations")
+    if (
+        parity_observations.shape[1] != 2120
+        or parity_extras["observations"]["critic"].shape[1] != 1037
+    ):
+        raise ValueError(
+            "archived RENet requires actor=2120 and critic=1037 observations"
+        )
     if not abs(env.step_dt - 0.02) < 1.0e-8 or env.num_actions != 23:
         raise ValueError("archived RENet requires 50 Hz control and 23 actions")
     lp_error, vp_error = validate_actions(
@@ -218,21 +315,6 @@ def main() -> None:
     )
     parity = {"lp": lp_error, "vp": vp_error}
     print(f"[selector] frozen-policy parity passed: {parity}")
-
-    default_output = REPO_ROOT / "outputs/g1_renet_selector" / (
-        "dataset" if args_cli.terrain_mode == "main" else "dataset_ood_7_9"
-    )
-    output = (
-        args_cli.output.expanduser().resolve()
-        if args_cli.output is not None
-        else default_output.resolve()
-    )
-    target_samples = args_cli.target_samples
-    if target_samples is None:
-        if args_cli.smoke_test:
-            target_samples = args_cli.num_envs
-        else:
-            target_samples = 1_048_576 if args_cli.terrain_mode == "main" else 131_072
 
     histogram_path = (
         args_cli.terrain_histogram.expanduser().resolve()
@@ -274,15 +356,11 @@ def main() -> None:
         )
         print(f"[selector] exported {artifact}")
 
-    collection_cfg = CollectionConfig(
-        checkpoint_path=str(checkpoint_path),
-        num_envs=args_cli.num_envs,
-        target_samples=target_samples,
-        allow_nonproduction_num_envs=args_cli.smoke_test,
-    )
     selector_cfg = SelectorConfig()
     if (output / "manifest.json").exists() or any(output.glob("*/shard_*.pt")):
-        raise FileExistsError(f"refusing to overwrite an existing selector dataset: {output}")
+        raise FileExistsError(
+            f"refusing to overwrite an existing selector dataset: {output}"
+        )
     metadata = {
         "checkpoint": str(checkpoint_path),
         "checkpoint_sha256": sha256(checkpoint_path),
@@ -299,6 +377,8 @@ def main() -> None:
         else [7, 8, 9],
         "frozen_policy_action_parity": parity,
         "protected_source_sha256": protected_before,
+        "fault_config": asdict(fault_cfg),
+        "collection_complete": False,
     }
     writer = SelectorDatasetWriter(
         output,
@@ -313,6 +393,7 @@ def main() -> None:
         vp_shape=(env.depth_history_frames, env.camera_height, env.camera_width),
         device=env.device,
         seed=args_cli.seed + 2000,
+        cfg=fault_cfg,
     )
     collector = CounterfactualCollector(
         env,
@@ -323,11 +404,15 @@ def main() -> None:
         collection_cfg=collection_cfg,
         seed=args_cli.seed,
     )
-    collector.collect()
-    manifest = writer.close()
+    try:
+        collector.collect()
+    finally:
+        manifest = writer.close()
     protected_after = {str(path): sha256(path) for path in PROTECTED_FILES}
     if protected_before != protected_after:
-        raise RuntimeError("protected RENet source files changed during selector collection")
+        raise RuntimeError(
+            "protected RENet source files changed during selector collection"
+        )
     print(f"[selector] dataset complete: {manifest}")
 
 

@@ -1,3 +1,27 @@
+# 中文导读
+# 文件用途：用 reset 前的仿真真实状态生成 LP/VP 在 0.4 秒和 1 秒内的安全失败标签。
+# 使用位置：collector 采集标签；dataset 使用审计列定义；训练、评估和导出检查标签版本。
+# 说明：版本 2 使用机身投影附近地面，拒绝未知测量和提前超时；跟踪误差只作审计。
+# 说明：真实安全指标只生成监督标签，不进入 selector 输入；reset 钩子只在采集单步期间存在。
+#
+# 类、函数及方法说明（包含私有方法、内部函数和属性访问器）：
+# - safety_label_contract：返回当前标签版本、时间窗、测量方式、失败阈值及无效样本处理约定。
+# - validate_safety_label_contract：要求标签约定与当前版本完全一致，拒绝旧版本或缺失的约定。
+# - dataset_safety_label_contract：从数据清单元数据中读取并校验标签约定。
+# - SafetyStepMetrics：保存完成一个控制步后、尚未 reset 时的倾角、高度、跟踪误差和接触等指标。
+# - local_clearance：在机身投影附近寻找最近有效扫描点，计算相对地面高度及测量有效标记。
+# - capture_safety_step：读取真实机器人状态、地面和躯干接触历史，计算安全指标并检查有限性。
+# - step_with_safety_capture：临时包装环境 reset，在原 step 的 reset 边界采样，并保证退出时恢复原方法。
+# - step_with_safety_capture.capture_and_reset：内部回调，先捕获所有环境的安全指标，再调用原 reset。
+# - RolloutOutcome：保存两个时间窗的标签、首次失败及 reset 时间、有效性和连续审计指标。
+# - RolloutOutcome.metrics：按固定列顺序将 rollout 审计信息堆叠成张量，供数据集保存。
+# - SafetyOutcomeAccumulator：逐步累计一个候选分支的未来安全结果，屏蔽 reset 后的新 episode。
+# - SafetyOutcomeAccumulator.__init__：设置环境数、设备、短长时间窗及失败阈值，并初始化累计状态。
+# - SafetyOutcomeAccumulator.reset：清空标签、计数、首次事件时间和最大/最小审计指标。
+# - SafetyOutcomeAccumulator.update：处理当前安全指标、终止和超时，累计失败并标记未知或截断样本。
+# - SafetyOutcomeAccumulator.outcome：要求完成配置的 rollout 步数，返回短失败必然包含于长失败的结果副本。
+# 中文导读结束
+
 """Safety outcome aggregation for 0.4 s and 1.0 s counterfactual rollouts."""
 
 from __future__ import annotations

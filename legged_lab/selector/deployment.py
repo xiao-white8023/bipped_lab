@@ -14,6 +14,9 @@ from .config import RuntimeConfig, SelectorConfig
 from .contracts import DualBranchOutput, SelectorDecision, SelectorInput, SelectorOutput
 from .features import FeatureHistory, SensorHealthTracker, build_selector_frame
 from .runtime import ActionBlender, SelectorStateMachine
+from .feature_contract import validate_feature_contract
+from .frozen_policy import assert_same_policy
+from .labels import validate_safety_label_contract
 
 
 @dataclass
@@ -32,7 +35,47 @@ class OnlineSelectorRuntime:
     state machine update at 10 Hz; both candidate actions refresh every call.
     In shadow mode, the recommendation is returned but the input mask keeps
     control of the robot.
+
+    Auto mode owns execution mode/switch time after initialization. A manual
+    override must call reset with the actual mode and switch timestamp. Shadow
+    mode reads the external actual mode/dwell every call. LP packet time is the
+    local-map publication time; LP source time is the underlying scan time.
     """
+
+    @classmethod
+    def from_artifacts(cls, dual_branch_path, selector_path, **kwargs):
+        dual_extra = {"renet_dual_branch_contract.json": ""}
+        selector_extra = {"selector_contract.json": ""}
+        dual = torch.jit.load(
+            str(dual_branch_path), map_location="cpu", _extra_files=dual_extra
+        )
+        selector = torch.jit.load(
+            str(selector_path), map_location="cpu", _extra_files=selector_extra
+        )
+        try:
+            dual_metadata = json.loads(dual_extra["renet_dual_branch_contract.json"])
+            selector_metadata = json.loads(selector_extra["selector_contract.json"])
+        except (ValueError, TypeError) as error:
+            raise ValueError(
+                "both TorchScript artifacts must embed their identity contracts"
+            ) from error
+        feature_contract = validate_feature_contract(
+            selector_metadata.get("selector_feature_contract")
+        )
+        validate_safety_label_contract(selector_metadata.get("safety_label_contract"))
+        assert_same_policy(
+            dual_metadata.get("frozen_policy", {}),
+            selector_metadata.get("frozen_policy", {}),
+        )
+        cfg = kwargs.get("runtime_cfg") or RuntimeConfig()
+        if (cfg.normal_blend_steps, cfg.emergency_blend_steps) != (
+            feature_contract["transition"]["normal_steps"],
+            feature_contract["transition"]["emergency_steps"],
+        ):
+            raise ValueError(
+                "runtime action transition differs from the collected label contract"
+            )
+        return cls(dual, selector, **kwargs)
 
     def __init__(
         self,
@@ -58,7 +101,9 @@ class OnlineSelectorRuntime:
         self.selector_cfg.validate()
         self.runtime_cfg.validate()
         if self.proprio_history_dim < self.selector_cfg.proprio_dim:
-            raise ValueError("proprio history cannot be shorter than the current 78-D frame")
+            raise ValueError(
+                "proprio history cannot be shorter than the current 78-D frame"
+            )
         self.dual_branch = dual_branch.to(self.device).eval()
         self.selector = selector.to(self.device).eval()
         self.observation_normalizer = (
@@ -79,8 +124,9 @@ class OnlineSelectorRuntime:
             cfg=self.runtime_cfg,
         )
         self.initialized = False
+        self.shadow_mode = None
         self.last_decision_time = torch.full(
-            (self.num_envs,), -torch.inf, device=self.device
+            (self.num_envs,), -torch.inf, device=self.device, dtype=torch.float64
         )
         self.last_decision: SelectorDecision | None = None
         self.last_uncertainty = torch.zeros(self.num_envs, 4, device=self.device)
@@ -113,6 +159,7 @@ class OnlineSelectorRuntime:
         self.last_decision = None
         self.last_uncertainty.zero_()
         self.initialized = True
+        self.shadow_mode = None
 
     def _validate_input(self, value: SelectorInput) -> None:
         expected = {
@@ -123,15 +170,75 @@ class OnlineSelectorRuntime:
         for name, shape in expected.items():
             actual = getattr(value, name)
             if tuple(actual.shape) != shape:
-                raise ValueError(f"{name} must have shape {shape}, got {tuple(actual.shape)}")
+                raise ValueError(
+                    f"{name} must have shape {shape}, got {tuple(actual.shape)}"
+                )
+        for name, data in (
+            ("lp_valid_mask", value.lp_height_map),
+            ("vp_valid_support", value.vp_depth_history),
+        ):
+            support = getattr(value, name)
+            if support is None or support.shape != data.shape:
+                raise ValueError(
+                    f"{name} must contain raw validity before filling/clipping, with the sensor shape"
+                )
+        for name in (
+            "timestamp",
+            "lp_timestamp",
+            "vp_timestamp",
+            "lp_packet_timestamp",
+        ):
+            if (
+                getattr(value, name) is None
+                or getattr(value, name).dtype != torch.float64
+            ):
+                raise ValueError(
+                    f"{name} must be float64; converting a rounded epoch float32 clock cannot recover precision"
+                )
 
     @torch.no_grad()
     def step(self, value: SelectorInput, *, shadow: bool = False) -> OnlineSelectorStep:
         self._validate_input(value)
-        timestamp = value.timestamp.to(self.device).reshape(self.num_envs).float()
+        timestamp = value.timestamp.to(self.device).reshape(self.num_envs).double()
         current_mask = value.current_mask.to(self.device).reshape(self.num_envs).float()
         if not self.initialized:
             self.reset(initial_mask=current_mask, timestamp=timestamp)
+            self.machine.last_switch_time.copy_(
+                timestamp
+                - value.time_since_switch.to(self.device)
+                .reshape(self.num_envs)
+                .double()
+            )
+        if self.shadow_mode is not None and self.shadow_mode != shadow:
+            self.machine.reset(initial_mask=current_mask, now=timestamp)
+            self.machine.last_switch_time.copy_(
+                timestamp
+                - value.time_since_switch.to(self.device)
+                .reshape(self.num_envs)
+                .double()
+            )
+            self.last_decision_time.fill_(-torch.inf)
+            self.last_decision = None
+            self.blender.seed(
+                value.proprio.to(self.device)[:, -self.selector_cfg.action_dim :]
+            )
+        self.shadow_mode = shadow
+        if not self.blender.initialized.all():
+            # The frozen policy uses action observation scale 1.0. The newest
+            # proprio frame ends with the last executed, blended action.
+            self.blender.seed(
+                value.proprio.to(self.device)[:, -self.selector_cfg.action_dim :]
+            )
+        if shadow:
+            self.machine.current_mask.copy_(current_mask)
+            self.machine.last_switch_time.copy_(
+                timestamp
+                - value.time_since_switch.to(self.device)
+                .reshape(self.num_envs)
+                .double()
+            )
+        else:
+            current_mask = self.machine.current_mask.clone()
 
         proprio = value.proprio.to(self.device)
         lp_map = value.lp_height_map.to(self.device)
@@ -150,30 +257,37 @@ class OnlineSelectorRuntime:
             raise RuntimeError("renet_dual_branch.pt must return six tensors")
         branches = DualBranchOutput(*raw)
 
-        lp_valid = torch.isfinite(lp_map) & (lp_map != -1.1)
-        vp_valid = torch.isfinite(vp_depth) & (vp_depth >= 0.0) & (vp_depth <= 1.0)
         lp_health = self.lp_health.update(
             lp_map,
             value.lp_timestamp.to(self.device),
             timestamp,
-            valid_mask=lp_valid,
+            valid_mask=value.lp_valid_mask.to(self.device),
+            packet_timestamp=None
+            if value.lp_packet_timestamp is None
+            else value.lp_packet_timestamp.to(self.device),
         )
         vp_health = self.vp_health.update(
             vp_depth,
             value.vp_timestamp.to(self.device),
             timestamp,
-            valid_mask=vp_valid,
-            abnormal_mask=~vp_valid,
+            valid_mask=value.vp_valid_support.to(self.device),
+            packet_timestamp=None
+            if value.vp_packet_timestamp is None
+            else value.vp_packet_timestamp.to(self.device),
         )
 
         due = timestamp - self.last_decision_time >= 0.1 - 1.0e-6
         if due.any() and not due.all():
-            raise RuntimeError("batched runtime requires synchronized 10 Hz selector timestamps")
+            raise RuntimeError(
+                "batched runtime requires synchronized 10 Hz selector timestamps"
+            )
         decision_updated = bool(due.all())
         if decision_updated:
             normalized = self.observation_normalizer(policy_observation)
             current_proprio = normalized[
-                :, self.proprio_history_dim - self.selector_cfg.proprio_dim : self.proprio_history_dim
+                :,
+                self.proprio_history_dim
+                - self.selector_cfg.proprio_dim : self.proprio_history_dim,
             ]
             frame = build_selector_frame(
                 current_proprio,
@@ -181,7 +295,7 @@ class OnlineSelectorRuntime:
                 lp_health,
                 vp_health,
                 current_mask,
-                value.time_since_switch.to(self.device),
+                (timestamp - self.machine.last_switch_time).clamp_min(0).float(),
                 self.selector_cfg,
             )
             history = self.history.append(frame)
@@ -191,7 +305,9 @@ class OnlineSelectorRuntime:
             else:
                 risks = prediction
                 uncertainty = torch.zeros_like(risks)
-            self.last_decision = self.machine.step(risks, lp_health, vp_health, timestamp)
+            self.last_decision = self.machine.step(
+                risks, lp_health, vp_health, timestamp
+            )
             self.last_uncertainty = uncertainty
             self.last_decision_time.copy_(timestamp)
         if self.last_decision is None:
@@ -199,9 +315,10 @@ class OnlineSelectorRuntime:
 
         decision = self.last_decision
         if shadow:
-            control_action = current_mask[:, None] * branches.lp_action + (
-                1.0 - current_mask[:, None]
-            ) * branches.vp_action
+            control_action = torch.where(
+                current_mask[:, None] > 0.5, branches.lp_action, branches.vp_action
+            )
+            self.blender.seed(control_action)
         else:
             switched = (
                 decision.switched

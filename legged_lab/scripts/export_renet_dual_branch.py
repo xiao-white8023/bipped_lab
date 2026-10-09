@@ -1,3 +1,14 @@
+# 中文导读
+# 文件用途：无需启动 Isaac Sim，将 model_60000 单独导出为冻结 RENet 双分支 TorchScript。
+# 使用位置：用户单独准备双分支模型时运行；采集脚本还提供自己的 export_dual_branch 导出流程。
+# 说明：生成六个输出：LP/VP 特征、LP/VP 速度估计和 LP/VP 动作；在线运行与 selector 模型配合使用。
+# 说明：会校验原部署 policy.pt，并拒绝覆盖输入模型或已有输出文件。
+#
+# 类、函数及方法说明（包含私有方法、内部函数和属性访问器）：
+# - parse_args：解析 checkpoint、参考 policy.pt 和输出模型路径，不导入或启动 Isaac Sim。
+# - main：严格加载冻结策略，导出并重新加载双分支模型，校验动作一致性和嵌入元数据。
+# 中文导读结束
+
 """Export the frozen G1 RENet checkpoint as one dual-branch TorchScript model."""
 
 from __future__ import annotations

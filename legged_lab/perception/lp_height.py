@@ -229,8 +229,15 @@ class PgttMapNoise:
         if not 1 <= duration[0] <= duration[1] or any(int(value) != value for value in duration):
             raise ValueError("PGTT block durations must be positive integer packet counts")
 
-    def _uniform(self, shape, bounds):
-        return torch.empty(shape, device=self.device).uniform_(*bounds)
+    def _uniform(self, shape, bounds, ids=None, tag="pgtt_parameters"):
+        rng = getattr(self, "selector_randomness", None)
+        if rng is None:
+            return torch.empty(shape, device=self.device).uniform_(*bounds)
+        return bounds[0] + (bounds[1] - bounds[0]) * rng.uniform(ids, tuple(shape[1:]), tag)
+
+    def _randint(self, low, high, ids, tag):
+        rng = getattr(self, "selector_randomness", None)
+        return torch.randint(low, high, (len(ids),), device=self.device) if rng is None else rng.randint(low, high, ids, tag)
 
     def reset(self, ids):
         cfg, count = self.noise, len(ids)
@@ -248,13 +255,13 @@ class PgttMapNoise:
         if not cfg.enable:
             return
 
-        self.std[ids] = self._uniform((count,), cfg.height_std_range)
-        self.bias[ids] = self._uniform((count,), cfg.height_bias_range)
-        self.dropout[ids] = self._uniform((count,), cfg.dropout_range)
-        self.delay[ids] = torch.randint(cfg.max_delay_packets + 1, (count,), device=self.device)
+        self.std[ids] = self._uniform((count,), cfg.height_std_range, ids)
+        self.bias[ids] = self._uniform((count,), cfg.height_bias_range, ids)
+        self.dropout[ids] = self._uniform((count,), cfg.dropout_range, ids)
+        self.delay[ids] = self._randint(0, cfg.max_delay_packets + 1, ids, "pgtt_delay")
         xy = self.nominal[None].expand(count, -1, -1).clone()
         if cfg.quantize:
-            phase = self._uniform((count, 1, 2), (-cfg.map_resolution / 2, cfg.map_resolution / 2))
+            phase = self._uniform((count, 1, 2), (-cfg.map_resolution / 2, cfg.map_resolution / 2), ids)
             cells = torch.round((xy - phase) / cfg.map_resolution).long()
             xy = cells * cfg.map_resolution + phase
             env_column = torch.arange(count, device=self.device)[:, None, None].expand(count, len(self.nominal), 1)
@@ -266,10 +273,10 @@ class PgttMapNoise:
             self.representative[ids] = first[inverse].reshape(count, -1) % len(self.nominal)
         self.query_xy[ids] = xy
 
-        yaw = torch.deg2rad(self._uniform((count, 1), cfg.yaw_bias_deg_range))
+        yaw = torch.deg2rad(self._uniform((count, 1), cfg.yaw_bias_deg_range, ids))
         x, y = xy.unbind(-1)
         self.xy[ids] = torch.stack((x * yaw.cos() - y * yaw.sin(), x * yaw.sin() + y * yaw.cos()), dim=-1)
-        self.xy[ids] += self._uniform((count, 1, 2), cfg.xy_bias_range)
+        self.xy[ids] += self._uniform((count, 1, 2), cfg.xy_bias_range, ids)
 
     def apply(
         self,
@@ -290,22 +297,23 @@ class PgttMapNoise:
         noise_active = cfg.enable if enable_noise is None else cfg.enable and enable_noise
         if noise_active and count:
             representative = self.representative[ids]
-            z += torch.randn_like(z).gather(1, representative) * self.std[ids, None] + self.bias[ids, None]
-            valid &= torch.rand_like(z).gather(1, representative) >= self.dropout[ids, None]
+            rng = getattr(self, "selector_randomness", None)
+            gaussian = torch.randn_like(z) if rng is None else rng.normal(ids, (rays,), "pgtt_gaussian")
+            uniform = torch.rand_like(z) if rng is None else rng.uniform(ids, (rays,), "pgtt_dropout")
+            z += gaussian.gather(1, representative) * self.std[ids, None] + self.bias[ids, None]
+            valid &= uniform.gather(1, representative) >= self.dropout[ids, None]
 
             new_block = (self.block_remaining[ids] == 0) & (
-                torch.rand(count, device=self.device) < cfg.block_probability
+                (torch.rand(count, device=self.device) if rng is None else rng.uniform(ids, (), "pgtt_block")) < cfg.block_probability
             )
             block_ids = ids[new_block]
             if len(block_ids):
-                centers = torch.randint(rays, (len(block_ids),), device=self.device)
+                centers = self._randint(0, rays, block_ids, "pgtt_block_center")
                 self.block_center[block_ids] = self.nominal[centers]
-                self.block_size[block_ids, 0] = self._uniform((len(block_ids),), cfg.block_x_size)
-                self.block_size[block_ids, 1] = self._uniform((len(block_ids),), cfg.block_y_size)
-                self.block_remaining[block_ids] = torch.randint(
-                    cfg.block_duration_packets[0], cfg.block_duration_packets[1] + 1,
-                    (len(block_ids),), device=self.device,
-                )
+                self.block_size[block_ids, 0] = self._uniform((len(block_ids),), cfg.block_x_size, block_ids)
+                self.block_size[block_ids, 1] = self._uniform((len(block_ids),), cfg.block_y_size, block_ids)
+                self.block_remaining[block_ids] = self._randint(cfg.block_duration_packets[0], cfg.block_duration_packets[1] + 1,
+                                                   block_ids, "pgtt_block_duration")
             blocked = (
                 (self.query_xy[ids] - self.block_center[ids, None]).abs()
                 <= self.block_size[ids, None] / 2

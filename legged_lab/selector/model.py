@@ -1,3 +1,32 @@
+# 中文导读
+# 文件用途：定义 selector 风险网络、输入归一化、损失函数和概率校准工具。
+# 使用位置：train_selector.py 训练；eval_selector.py 评估；export_selector.py 导出；deployment 在线推理。
+# 说明：网络读取 [batch, 5, 283] 历史，输出 LP/VP 各自 0.4 秒、1 秒的安全失败风险。
+# 说明：默认训练脚本在三个种子中选一个模型导出；SelectorEnsemble 是额外提供的集成接口。
+#
+# 类、函数及方法说明（包含私有方法、内部函数和属性访问器）：
+# - FeatureNormalizer：保存仅由训练集拟合的逐特征均值和标准差，并执行归一化。
+# - FeatureNormalizer.__init__：建立均值、标准差和已拟合标记等可随模型保存的缓冲。
+# - FeatureNormalizer.fit：忽略非有限值，直接从一份特征张量拟合归一化统计。
+# - FeatureNormalizer.set_statistics：接收外部流式统计得到的均值和标准差，并检查形状。
+# - FeatureNormalizer.forward：替换非有限输入，并按已保存的均值和标准差归一化。
+# - SelectorNetwork：使用逐帧 MLP 和 GRU 编码历史，再生成短长时间窗风险。
+# - SelectorNetwork.__init__：校验网络配置并建立帧编码器、时序 GRU 和四输出头。
+# - SelectorNetwork.raw_outputs：检查输入形状，编码五帧历史并返回尚未转换为概率的四个输出。
+# - SelectorNetwork.probabilities_from_raw：由短风险和条件增量构造四个概率，保证长风险不低于短风险。
+# - SelectorNetwork.forward：执行原始输出计算和单调风险概率转换。
+# - CalibratedSelector：将归一化器、风险网络和四个温度参数组合为可导出的推理模型。
+# - CalibratedSelector.__init__：保存模型和归一化器，检查并注册四个正温度参数。
+# - CalibratedSelector.forward：执行归一化、风险预测和温度校准，再恢复短长风险的单调关系。
+# - SelectorEnsemble：组合多个已校准模型，提供平均风险及模型间分歧。
+# - SelectorEnsemble.__init__：检查模型列表非空，并注册全部子模型。
+# - SelectorEnsemble.forward：堆叠各模型预测，返回风险均值和总体标准差。
+# - weighted_binary_cross_entropy：对四个失败标签计算正类加权损失，使用 FP32 避免混合精度溢出。
+# - positive_class_weights：按每个输出的负/正样本数比值计算并截断正类权重。
+# - fit_temperatures：在验证集预测上用 LBFGS 拟合四个独立正温度参数。
+# - fit_temperatures.closure：内部优化回调，计算温度缩放后的二元交叉熵并反向传播温度梯度。
+# 中文导读结束
+
 """Small calibrated recurrent risk model used by the LP/VP selector."""
 
 from __future__ import annotations
@@ -10,7 +39,7 @@ import torch.nn.functional as F
 
 from .config import SelectorConfig
 
-
+# 保存仅由训练集拟合的逐特征均值和标准差，并执行归一化
 class FeatureNormalizer(nn.Module):
     """Serializable per-feature normalization fitted on the training split."""
 
@@ -50,7 +79,7 @@ class FeatureNormalizer(nn.Module):
         safe = torch.nan_to_num(features, nan=0.0, posinf=0.0, neginf=0.0)
         return (safe - self.mean) / self.std
 
-
+# 建立均值、标准差和已拟合标记等可随模型保存的缓冲。
 class SelectorNetwork(nn.Module):
     """Frame MLP + GRU with monotone short/long failure probabilities."""
 

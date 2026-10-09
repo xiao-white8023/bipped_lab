@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_RUN_DIR = Path(__file__).resolve().parents[2] / "logs/g1_renet/2026-09-04_14-11-25"
+DEFAULT_RUN_DIR = (
+    Path(__file__).resolve().parents[2] / "logs/g1_renet/2026-09-04_14-11-25"
+)
 # selector 采集数据与导出双分支策略默认使用服务器上的冻结 checkpoint。
 DEFAULT_CHECKPOINT_PATH = Path("/data/Tienkung_lab/logs/g1_renet/model_60000.pt")
 # 原始部署 policy.pt 用于严格校验；服务器存放位置不同时通过 --reference-policy 指定。
@@ -20,9 +22,12 @@ class FaultConfig:
 
     update_period_s: float = 0.1
     max_delay_frames: int = 5
-    min_duration_frames: int = 1
-    max_duration_frames: int = 10
-    max_start_delay_frames: int = 10
+    min_duration_frames: int = 3
+    max_duration_frames: int = 50
+    max_start_delay_frames: int = 30
+    min_recovery_frames: int = 5
+    max_recovery_frames: int = 30
+    max_dual_stagger_frames: int = 10
     vp_occlusion_fraction: tuple[float, float] = (0.10, 0.70)
     vp_scale_range: tuple[float, float] = (0.85, 1.15)
     vp_bias_m_range: tuple[float, float] = (-0.20, 0.20)
@@ -47,6 +52,12 @@ class FaultConfig:
             raise ValueError("max_delay_frames must be in [1, 5]")
         if not 1 <= self.min_duration_frames <= self.max_duration_frames:
             raise ValueError("fault duration range is invalid")
+        if not 1 <= self.min_recovery_frames <= self.max_recovery_frames:
+            raise ValueError("fault recovery range is invalid")
+        if self.max_start_delay_frames < 0:
+            raise ValueError("max_start_delay_frames must be nonnegative")
+        if self.max_dual_stagger_frames < 0:
+            raise ValueError("max_dual_stagger_frames must be nonnegative")
         if abs(sum(self.scenario_probabilities) - 1.0) > 1.0e-6:
             raise ValueError("scenario_probabilities must sum to one")
         if abs(sum(self.severity_probabilities) - 1.0) > 1.0e-6:
@@ -101,7 +112,9 @@ class SelectorConfig:
     def validate(self) -> None:
         expected = self.expected_frame_dim()
         if self.frame_dim != expected:
-            raise ValueError(f"selector frame_dim={self.frame_dim}, expected {expected}")
+            raise ValueError(
+                f"selector frame_dim={self.frame_dim}, expected {expected}"
+            )
         if self.output_dim != 4:
             raise ValueError("selector output must be LP/VP x short/long = 4")
         if self.history_frames != 5:
@@ -130,9 +143,24 @@ class RuntimeConfig:
             raise ValueError("risk weights must sum to one")
         if self.sensor_timeout_s <= 0 or self.min_dwell_s < 0:
             raise ValueError("runtime times must be nonnegative")
-        for value in (self.min_valid_ratio, self.switch_margin, self.vp_tie_margin, self.both_unreliable_risk):
+        for value in (
+            self.min_valid_ratio,
+            self.switch_margin,
+            self.vp_tie_margin,
+            self.both_unreliable_risk,
+        ):
             if not 0 <= value <= 1:
                 raise ValueError("risk and ratio thresholds must be in [0, 1]")
+        if (
+            min(
+                self.invalid_confirmations,
+                self.switch_confirmations,
+                self.normal_blend_steps,
+                self.emergency_blend_steps,
+            )
+            < 1
+        ):
+            raise ValueError("confirmation and blend step counts must be positive")
 
 
 @dataclass(frozen=True)
@@ -159,14 +187,29 @@ class CollectionConfig:
     split_probabilities: tuple[float, float, float] = (0.70, 0.15, 0.15)
     reference_terrain_mean: float = 5.27
     allow_nonproduction_num_envs: bool = False
+    candidate_stride_steps: int = 5
+    behavior_min_dwell_frames: int = 10
+    behavior_max_dwell_frames: int = 50
+    balanced_scenarios: bool = True
+    max_candidate_batches: int = 100_000
 
     def validate(self) -> None:
         if self.num_envs != 4096 and not self.allow_nonproduction_num_envs:
-            raise ValueError("the approved selector collector uses exactly 4096 environments")
+            raise ValueError(
+                "the approved selector collector uses exactly 4096 environments"
+            )
         if self.short_horizon_steps != 20 or self.long_horizon_steps != 50:
             raise ValueError("horizons must be 0.4 s and 1.0 s at 50 Hz")
         if self.target_samples <= 0 or self.shard_size <= 0:
             raise ValueError("collection sizes must be positive")
+        if self.candidate_stride_steps != 5:
+            raise ValueError(
+                "selector candidates must advance at 10 Hz (5 control steps)"
+            )
+        if not 1 <= self.behavior_min_dwell_frames <= self.behavior_max_dwell_frames:
+            raise ValueError("behavior dwell range is invalid")
+        if self.max_candidate_batches < 1:
+            raise ValueError("max_candidate_batches must be positive")
         if abs(sum(self.split_probabilities) - 1.0) > 1.0e-6:
             raise ValueError("split_probabilities must sum to one")
 

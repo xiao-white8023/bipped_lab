@@ -1,3 +1,14 @@
+# 中文导读
+# 文件用途：计算四个风险输出的区分度、校准误差，以及离线分支选择的失败指标。
+# 使用位置：train_selector.py 记录验证/测试指标并选模型；eval_selector.py 生成总体及分组报告。
+# 说明：离线选择使用风险加权和 VP 偏好；此处没有模拟在线状态机的驻留、迟滞或动作过渡。
+#
+# 类、函数及方法说明（包含私有方法、内部函数和属性访问器）：
+# - binary_auroc：用排序及并列分数平均秩计算二分类 AUROC，单一标签类别时返回 NaN。
+# - expected_calibration_error：按概率分箱计算预测概率与实际失败率的加权差异。
+# - selector_metrics：汇总四输出 AUROC/ECE、固定分支和 oracle 失败率及危险分支选择率。
+# 中文导读结束
+
 """Dependency-free probability and branch-selection metrics."""
 
 from __future__ import annotations

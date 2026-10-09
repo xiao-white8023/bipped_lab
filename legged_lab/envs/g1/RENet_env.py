@@ -399,6 +399,9 @@ class G1RENetEnv(VecEnv):
             )
             self.depth_last_capture_time = torch.full((self.num_envs,), -torch.inf, device=self.device)
             self.depth_initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+            self.depth_valid_buffer = torch.zeros_like(self.depth_buffer)
+            self.depth_current_valid = torch.zeros(
+                self.num_envs, self.camera_height, self.camera_width, device=self.device)
         #
         self.amp_observation_dim = self.cfg.amp_observation_dim
         if type(self.amp_observation_dim) is not int or self.amp_observation_dim not in (50, 58):
@@ -564,7 +567,10 @@ class G1RENetEnv(VecEnv):
     def _reset_action_delay(self, env_ids):
         """Resample only reset environments; keep the lag fixed within an episode."""
         if self.cfg.domain_rand.action_delay.enable and self._domain_rand_is_active():
-            time_lags = torch.randint(
+            rng = getattr(self, "selector_randomness", None)
+            time_lags = rng.randint(
+                self.action_delay_min_steps, self.action_delay_max_steps + 1,
+                env_ids, "action_delay").int() if rng is not None else torch.randint(
                 self.action_delay_min_steps,
                 self.action_delay_max_steps + 1,
                 (len(env_ids),),
@@ -819,6 +825,7 @@ class G1RENetEnv(VecEnv):
         self.lidar_map_observation = torch.stack((self.lidar_height_map, self.lidar_confidence), 1)
         observations["lidar_elevation_map"] = self.lidar_map_observation
         current_valid = conf_history[:, -1] > 0
+        observations["lp_valid_mask"] = current_valid
         ratio = current_valid.float().mean((1, 2))
         observations["lidar_valid_ratio"] = ratio[:, None]
         observations["lidar_no_return_ratio"] = 1-ratio[:, None]
@@ -877,7 +884,10 @@ class G1RENetEnv(VecEnv):
         * self.noise_scale_vec：乘以噪声缩放系数（self.noise_scale_vec是与观测特征维度匹配的张量），控制噪声的大小，避免噪声过大覆盖有效观测。
         ''' 
         if self.add_noise:
-            current_actor_obs += (2 * torch.rand_like(current_actor_obs) - 1) * self.noise_obs_vec
+            rng = getattr(self, "selector_randomness", None)
+            uniform = torch.rand_like(current_actor_obs) if rng is None else rng.uniform(
+                None, tuple(current_actor_obs.shape[1:]), "proprio_noise")
+            current_actor_obs += (2 * uniform - 1) * self.noise_obs_vec
         
         self.actor_obs_buffer.append(current_actor_obs)
         self.critic_obs_buffer.append(current_critic_obs)
@@ -942,6 +952,8 @@ class G1RENetEnv(VecEnv):
         #
         if self.camera is not None:
             self.depth_buffer[env_ids]=0
+            self.depth_valid_buffer[env_ids] = 0
+            self.depth_current_valid[env_ids] = 0
             self.depth_last_capture_time[env_ids] = -torch.inf
             self.depth_initialized[env_ids] = False
         #
@@ -1222,14 +1234,18 @@ class G1RENetEnv(VecEnv):
 
         return amp_obs
     
-    def get_processed_deepcamera(self):
+    def get_processed_deepcamera(self, env_ids=None):
         # 获取底层输出: (num_envs, H=36, W=64)
         depth = self.camera.data.output["distance_to_image_plane"].clone()
         depth = depth.squeeze(-1)
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+        depth = depth[env_ids]
 
         # 1. CropAndResize: 裁剪掉无用视野 (up=18, down=0, left=16, right=16)
         # 结果尺寸: (num_envs, 18, 32)
         depth_cropped = depth[:, self.cfg.robot.depth_crop[0]:self.cfg.scene.camera.camera.pattern_cfg.height-self.cfg.robot.depth_crop[1], self.cfg.robot.depth_crop[2]:self.cfg.scene.camera.camera.pattern_cfg.width-self.cfg.robot.depth_crop[3]]
+        self.depth_current_valid[env_ids] = (torch.isfinite(depth_cropped) & (depth_cropped > 0)).float()
 
         # 截断与归一化
         depth_cropped[torch.isinf(depth_cropped)] = self.cfg.robot.depth_max
@@ -1243,7 +1259,10 @@ class G1RENetEnv(VecEnv):
         noise_active = self._depth_noise_is_active()
         depth_blurred = depth_cropped
         if noise_active and blur_probability > 0.0:
-            blur_mask = torch.rand(depth_cropped.shape[0], device=depth_cropped.device) < blur_probability
+            rng = getattr(self, "selector_randomness", None)
+            uniform = torch.rand(depth_cropped.shape[0], device=depth_cropped.device) if rng is None else rng.uniform(
+                env_ids, (), "depth_blur")
+            blur_mask = uniform < blur_probability
             if blur_mask.any():
                 depth_blurred = depth_cropped.clone()
                 depth_blurred[blur_mask] = T.GaussianBlur(kernel_size=3, sigma=1.0)(
@@ -1253,13 +1272,15 @@ class G1RENetEnv(VecEnv):
         # Apply stochastic noise while depth is still in metres. Keeping this
         # after the optional blur preserves the configured per-pixel std.
         if noise_active:
-            camera_env_ids = torch.arange(depth_blurred.shape[0], device=depth_blurred.device)
+            camera_env_ids = env_ids
             depth_blurred = distance_dependent_gaussian_noise(
                 depth_blurred,
                 self.cfg.depth_noise,
                 camera_env_ids,
                 min_distance=self.cfg.scene.camera.camera.min_distance,
                 max_distance=self.cfg.robot.depth_max,
+                standard_noise=None if getattr(self, "selector_randomness", None) is None else self.selector_randomness.normal(
+                    env_ids, tuple(depth_blurred.shape[1:]), "depth_gaussian"),
             )
         
         # 截断到 2.5 米
@@ -1277,13 +1298,24 @@ class G1RENetEnv(VecEnv):
         period = self.cfg.robot.depth_update_interval * self.step_dt
         update_mask = (now-self.depth_last_capture_time >= period-1e-6) | ~self.depth_initialized
         if update_mask.any():
-            current_depth = self.get_processed_deepcamera()
+            ids = update_mask.nonzero().flatten()
+            # Collection draws only for rows receiving a packet. Other rows'
+            # resets must not consume camera-noise counters for this row.
+            if getattr(self, "selector_randomness", None) is not None:
+                current_depth = self.get_processed_deepcamera(ids)
+            else:
+                current_depth = self.get_processed_deepcamera()[ids]
             self.depth_buffer[update_mask] = torch.roll(self.depth_buffer[update_mask], shifts=-1, dims=1)
-            self.depth_buffer[update_mask, -1] = current_depth[update_mask]
+            self.depth_buffer[update_mask, -1] = current_depth
+            self.depth_valid_buffer[update_mask] = torch.roll(self.depth_valid_buffer[update_mask], shifts=-1, dims=1)
+            self.depth_valid_buffer[update_mask, -1] = self.depth_current_valid[update_mask]
             reset_mask = ~self.depth_initialized
-            self.depth_buffer[reset_mask] = current_depth[reset_mask, None].expand(-1, self.depth_history_frames, -1, -1)
+            first_local = reset_mask[ids]
+            self.depth_buffer[reset_mask] = current_depth[first_local, None].expand(-1, self.depth_history_frames, -1, -1)
+            self.depth_valid_buffer[reset_mask] = self.depth_current_valid[reset_mask, None].expand(-1, self.depth_history_frames, -1, -1)
             self.depth_initialized[update_mask] = True
             self.depth_last_capture_time[update_mask] = now[update_mask]
+        self.extras.setdefault("observations", {})["vp_valid_support"] = self.depth_valid_buffer
         return self.depth_buffer
 
     @staticmethod

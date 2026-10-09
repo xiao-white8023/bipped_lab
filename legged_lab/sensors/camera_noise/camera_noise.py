@@ -515,6 +515,7 @@ def distance_dependent_gaussian_noise(
     *,
     min_distance: float,
     max_distance: float,
+    standard_noise: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Add zero-mean Gaussian noise whose standard deviation grows with depth.
 
@@ -539,7 +540,9 @@ def distance_dependent_gaussian_noise(
     )
     if float(cfg.far_std) == 0.0:
         return data.clone()
-    return data + torch.randn_like(data) * sigma
+    if standard_noise is not None and standard_noise.shape != data.shape:
+        raise ValueError("standard_noise must match the depth batch")
+    return data + (torch.randn_like(data) if standard_noise is None else standard_noise) * sigma
 
 
 def stereo_too_close_noise(

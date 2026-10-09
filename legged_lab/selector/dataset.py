@@ -30,7 +30,9 @@ def verify_dataset_no_group_leak(root: str | Path) -> dict[str, int]:
         for path in sorted((root / split).glob("shard_*.pt")):
             payload = torch.load(path, map_location="cpu", weights_only=False)
             groups[split].update(str(value) for value in payload["group_ids"])
-            seeds[split].update(int(value) for value in payload["scenario_seed"].reshape(-1))
+            seeds[split].update(
+                int(value) for value in payload["scenario_seed"].reshape(-1)
+            )
     pairs = (("train", "validation"), ("train", "test"), ("validation", "test"))
     for left, right in pairs:
         group_overlap = groups[left] & groups[right]
@@ -73,11 +75,18 @@ class SelectorBatch:
     scenario_seed: torch.Tensor
     future_metrics: torch.Tensor | None = None
     fault_metadata: torch.Tensor | None = None
+    candidate_time: torch.Tensor | None = None
+    feature_end_time: torch.Tensor | None = None
+    execution_metadata: torch.Tensor | None = None
 
     def validate(self, selector_cfg: SelectorConfig | None = None) -> None:
         selector_cfg = selector_cfg or SelectorConfig()
         batch = self.features.shape[0]
-        if self.features.shape != (batch, selector_cfg.history_frames, selector_cfg.frame_dim):
+        if self.features.shape != (
+            batch,
+            selector_cfg.history_frames,
+            selector_cfg.frame_dim,
+        ):
             raise ValueError("features do not match the [batch, 5, 283] contract")
         if self.labels.shape != (batch, 4):
             raise ValueError("labels must have shape [batch, 4]")
@@ -87,12 +96,49 @@ class SelectorBatch:
             if getattr(self, name).reshape(-1).shape[0] != batch:
                 raise ValueError(f"{name} length must equal batch size")
         labels = self.labels.bool()
-        if torch.any(labels[:, 0] & ~labels[:, 1]) or torch.any(labels[:, 2] & ~labels[:, 3]):
-            raise ValueError("short-horizon failures must also be long-horizon failures")
-        if self.future_metrics is not None and self.future_metrics.shape != (batch, 2, len(FUTURE_METRIC_ORDER)):
-            raise ValueError("future_metrics must contain the current audit columns for both branches")
+        if torch.any(labels[:, 0] & ~labels[:, 1]) or torch.any(
+            labels[:, 2] & ~labels[:, 3]
+        ):
+            raise ValueError(
+                "short-horizon failures must also be long-horizon failures"
+            )
+        if self.future_metrics is not None and self.future_metrics.shape != (
+            batch,
+            2,
+            len(FUTURE_METRIC_ORDER),
+        ):
+            raise ValueError(
+                "future_metrics must contain the current audit columns for both branches"
+            )
         if self.fault_metadata is not None and self.fault_metadata.shape != (batch, 8):
             raise ValueError("fault_metadata must have shape [batch, 8]")
+        if (self.candidate_time is None) != (self.feature_end_time is None):
+            raise ValueError(
+                "candidate and feature timestamps must be supplied together"
+            )
+        if self.candidate_time is not None:
+            for value in (self.candidate_time, self.feature_end_time):
+                if (
+                    value.shape != (batch,)
+                    or value.dtype != torch.float64
+                    or not torch.isfinite(value).all()
+                ):
+                    raise ValueError(
+                        "audit timestamps must be finite float64 [batch] tensors"
+                    )
+            if not torch.allclose(
+                self.candidate_time, self.feature_end_time, rtol=0, atol=1e-6
+            ):
+                raise ValueError(
+                    "candidate snapshot and last feature frame are not aligned"
+                )
+        if self.execution_metadata is not None and self.execution_metadata.shape != (
+            batch,
+            3,
+        ):
+            raise ValueError(
+                "execution_metadata must contain mode, dwell and remaining blend steps"
+            )
 
 
 class SelectorDatasetWriter:
@@ -116,7 +162,9 @@ class SelectorDatasetWriter:
         if fixed_split is not None and fixed_split not in SPLIT_NAMES:
             raise ValueError(f"fixed_split must be one of {SPLIT_NAMES}")
         self.fixed_split = fixed_split
-        self._pending: dict[str, list[dict[str, Any]]] = {name: [] for name in SPLIT_NAMES}
+        self._pending: dict[str, list[dict[str, Any]]] = {
+            name: [] for name in SPLIT_NAMES
+        }
         self._pending_count = {name: 0 for name in SPLIT_NAMES}
         self._shard_index = {name: 0 for name in SPLIT_NAMES}
         self._counts = {name: 0 for name in SPLIT_NAMES}
@@ -142,14 +190,31 @@ class SelectorDatasetWriter:
                 "features": batch.features[ids].detach().cpu().to(torch.float16),
                 "labels": batch.labels[ids].detach().cpu().to(torch.uint8),
                 "group_ids": [batch.group_ids[index] for index in indices],
-                "terrain_level": batch.terrain_level.reshape(-1)[ids].detach().cpu().to(torch.int8),
-                "terrain_type": batch.terrain_type.reshape(-1)[ids].detach().cpu().to(torch.int16),
-                "scenario_seed": batch.scenario_seed.reshape(-1)[ids].detach().cpu().to(torch.int64),
+                "terrain_level": batch.terrain_level.reshape(-1)[ids]
+                .detach()
+                .cpu()
+                .to(torch.int8),
+                "terrain_type": batch.terrain_type.reshape(-1)[ids]
+                .detach()
+                .cpu()
+                .to(torch.int16),
+                "scenario_seed": batch.scenario_seed.reshape(-1)[ids]
+                .detach()
+                .cpu()
+                .to(torch.int64),
             }
             if batch.future_metrics is not None:
-                item["future_metrics"] = batch.future_metrics[ids].detach().cpu().to(torch.float16)
+                item["future_metrics"] = (
+                    batch.future_metrics[ids].detach().cpu().to(torch.float16)
+                )
             if batch.fault_metadata is not None:
-                item["fault_metadata"] = batch.fault_metadata[ids].detach().cpu().to(torch.int16)
+                item["fault_metadata"] = (
+                    batch.fault_metadata[ids].detach().cpu().to(torch.int16)
+                )
+            for name in ("candidate_time", "feature_end_time", "execution_metadata"):
+                value = getattr(batch, name)
+                if value is not None:
+                    item[name] = value[ids].detach().cpu()
             self._pending[split].append(item)
             self._pending_count[split] += len(indices)
             while self._pending_count[split] >= self.collection_cfg.shard_size:
@@ -207,14 +272,20 @@ class SelectorDatasetWriter:
         if overlap:
             raise RuntimeError(f"dataset group leakage detected: {sorted(overlap)[:5]}")
         manifest = {
-            "version": 2,
-            "feature_shape": [self.selector_cfg.history_frames, self.selector_cfg.frame_dim],
+            "version": 3,
+            "execution_metadata_order": ["mode", "dwell_s", "remaining_blend_steps"],
+            "feature_shape": [
+                self.selector_cfg.history_frames,
+                self.selector_cfg.frame_dim,
+            ],
             "label_order": ["lp_0.4s", "lp_1.0s", "vp_0.4s", "vp_1.0s"],
             "future_metric_order_per_branch": list(FUTURE_METRIC_ORDER),
             "counts": self._counts,
             "shards": self._shard_index,
             "group_sha256": {
-                split: hashlib.sha256("\n".join(sorted(groups)).encode("utf-8")).hexdigest()
+                split: hashlib.sha256(
+                    "\n".join(sorted(groups)).encode("utf-8")
+                ).hexdigest()
                 for split, groups in self._groups.items()
             },
             "metadata": self.metadata,
@@ -222,7 +293,9 @@ class SelectorDatasetWriter:
         }
         destination = self.root / "manifest.json"
         temporary = destination.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         os.replace(temporary, destination)
         return destination
 
@@ -236,12 +309,16 @@ class SelectorShardDataset(Dataset):
         self.root = Path(root)
         manifest_path = self.root / "manifest.json"
         if not manifest_path.is_file():
-            raise FileNotFoundError(f"selector manifest does not exist: {manifest_path}")
+            raise FileNotFoundError(
+                f"selector manifest does not exist: {manifest_path}"
+            )
         self.manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.shards = sorted((self.root / split).glob("shard_*.pt"))
         expected_shards = int(self.manifest["shards"][split])
         if len(self.shards) != expected_shards:
-            raise RuntimeError(f"expected {expected_shards} {split} shards, found {len(self.shards)}")
+            raise RuntimeError(
+                f"expected {expected_shards} {split} shards, found {len(self.shards)}"
+            )
         self.lengths: list[int] = []
         for path in self.shards:
             payload = torch.load(path, map_location="cpu", weights_only=False)

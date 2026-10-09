@@ -9,6 +9,8 @@ uint32 VALUE_COUNT=1152
 
 std_msgs/Header header
 float32[1152] history
+# Raw valid support before invalid fill/blur/clip, in the SAME history order.
+float32[1152] valid_support
 bool valid
 float32 source_age
 float32 valid_ratio

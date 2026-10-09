@@ -1,21 +1,13 @@
-"""Vectorized, snapshot-safe LP/VP structural fault injection.
-
-Faults are applied to copies of the exact tensors consumed by the frozen
-policy.  Consequently the module is isolated from the normal G1 environment:
-when a fault is inactive the returned sensor tensors are bit-identical to the
-inputs.
-"""
+"""Row-local recurring faults, with data/quality/timestamps kept atomic."""
 
 from __future__ import annotations
-
 from dataclasses import dataclass
 from enum import IntEnum
 import math
-
 import torch
 import torch.nn.functional as F
-
 from .config import FaultConfig
+from .randomness import PerEnvironmentRNG
 
 
 class FaultKind(IntEnum):
@@ -59,7 +51,7 @@ LP_FAULTS = (
 @dataclass
 class FaultSnapshot:
     tensors: dict[str, torch.Tensor]
-    cursor: int
+    cursor: torch.Tensor
     generator_state: torch.Tensor
 
 
@@ -71,286 +63,286 @@ class FaultBatch:
     vp_timestamp: torch.Tensor
     lp_active: torch.Tensor
     vp_active: torch.Tensor
+    lp_valid: torch.Tensor
+    vp_valid: torch.Tensor
+    lp_packet_timestamp: torch.Tensor
+    vp_packet_timestamp: torch.Tensor
 
 
 class SelectorFaultManager:
-    """One independently sampled fault schedule per simulated environment."""
-
-    _SNAPSHOT_TENSORS = (
-        "step_count",
-        "lp_kind",
-        "vp_kind",
-        "severity",
-        "start_frame",
-        "duration_frames",
-        "lp_delay",
-        "vp_delay",
-        "vp_scale",
-        "vp_bias",
-        "vp_shift_x",
-        "vp_shift_y",
-        "vp_collapse_value",
-        "lp_dropout",
-        "lp_bias",
-        "lp_shift_x",
-        "lp_shift_y",
-        "lp_yaw",
-        "lp_drift_xy",
-        "lp_drift_yaw",
-        "vp_occlusion_mask",
-        "lp_block_mask",
-        "lp_buffer",
-        "vp_buffer",
-        "lp_time_buffer",
-        "vp_time_buffer",
-        "buffer_initialized",
-        "lp_frozen",
-        "vp_frozen",
-        "lp_frozen_time",
-        "vp_frozen_time",
-        "lp_freeze_initialized",
-        "vp_freeze_initialized",
-    )
-
     def __init__(
         self,
-        num_envs: int,
+        num_envs,
         *,
-        lp_shape: tuple[int, int] = (11, 17),
-        vp_shape: tuple[int, int, int] = (2, 18, 32),
-        device: str | torch.device = "cpu",
-        seed: int = 42,
-        cfg: FaultConfig | None = None,
+        lp_shape=(11, 17),
+        vp_shape=(2, 18, 32),
+        device="cpu",
+        seed=42,
+        cfg=None,
     ):
         self.cfg = cfg or FaultConfig()
         self.cfg.validate()
-        self.num_envs = int(num_envs)
-        self.lp_shape = tuple(lp_shape)
-        self.vp_shape = tuple(vp_shape)
-        self.device = torch.device(device)
-        generator_device = self.device.type if self.device.type in ("cpu", "cuda") else "cpu"
-        self.generator = torch.Generator(device=generator_device)
-        self.generator.manual_seed(int(seed))
-        n = self.num_envs
-        capacity = self.cfg.max_delay_frames + 1
-        self.step_count = torch.zeros(n, dtype=torch.long, device=self.device)
-        self.lp_kind = torch.zeros(n, dtype=torch.long, device=self.device)
-        self.vp_kind = torch.zeros(n, dtype=torch.long, device=self.device)
-        self.severity = torch.zeros(n, dtype=torch.long, device=self.device)
-        self.start_frame = torch.zeros(n, dtype=torch.long, device=self.device)
-        self.duration_frames = torch.ones(n, dtype=torch.long, device=self.device)
-        self.lp_delay = torch.zeros(n, dtype=torch.long, device=self.device)
-        self.vp_delay = torch.zeros(n, dtype=torch.long, device=self.device)
-        self.vp_scale = torch.ones(n, device=self.device)
-        self.vp_bias = torch.zeros(n, device=self.device)
-        self.vp_shift_x = torch.zeros(n, dtype=torch.long, device=self.device)
-        self.vp_shift_y = torch.zeros(n, dtype=torch.long, device=self.device)
-        self.vp_collapse_value = torch.zeros(n, device=self.device)
-        self.lp_dropout = torch.zeros(n, device=self.device)
-        self.lp_bias = torch.zeros(n, device=self.device)
-        self.lp_shift_x = torch.zeros(n, dtype=torch.long, device=self.device)
-        self.lp_shift_y = torch.zeros(n, dtype=torch.long, device=self.device)
-        self.lp_yaw = torch.zeros(n, device=self.device)
-        self.lp_drift_xy = torch.zeros(n, 2, device=self.device)
-        self.lp_drift_yaw = torch.zeros(n, device=self.device)
-        self.vp_occlusion_mask = torch.zeros((n, *self.vp_shape[-2:]), dtype=torch.bool, device=self.device)
-        self.lp_block_mask = torch.zeros((n, *self.lp_shape), dtype=torch.bool, device=self.device)
-        self.lp_buffer = torch.full(
-            (n, capacity, *self.lp_shape), self.cfg.lp_invalid_height, device=self.device
+        self.num_envs, self.lp_shape, self.vp_shape = (
+            int(num_envs),
+            tuple(lp_shape),
+            tuple(vp_shape),
         )
-        self.vp_buffer = torch.ones((n, capacity, *self.vp_shape), device=self.device)
-        self.lp_time_buffer = torch.zeros(n, capacity, device=self.device)
-        self.vp_time_buffer = torch.zeros(n, capacity, device=self.device)
-        self.buffer_initialized = torch.zeros(n, dtype=torch.bool, device=self.device)
-        self.lp_frozen = torch.full((n, *self.lp_shape), self.cfg.lp_invalid_height, device=self.device)
-        self.vp_frozen = torch.ones((n, *self.vp_shape), device=self.device)
-        self.lp_frozen_time = torch.zeros(n, device=self.device)
-        self.vp_frozen_time = torch.zeros(n, device=self.device)
-        self.lp_freeze_initialized = torch.zeros(n, dtype=torch.bool, device=self.device)
-        self.vp_freeze_initialized = torch.zeros(n, dtype=torch.bool, device=self.device)
-        self.cursor = -1
+        self.device = torch.device(device)
+        self.generator = PerEnvironmentRNG(num_envs, seed, self.device)
+        n, capacity = num_envs, self.cfg.max_delay_frames + 1
+        integer = (
+            "step_count",
+            "lp_kind",
+            "vp_kind",
+            "severity",
+            "start_frame",
+            "duration_frames",
+            "lp_start_frame",
+            "vp_start_frame",
+            "lp_duration_frames",
+            "vp_duration_frames",
+            "next_schedule_frame",
+            "lp_delay",
+            "vp_delay",
+            "vp_shift_x",
+            "vp_shift_y",
+            "lp_shift_x",
+            "lp_shift_y",
+            "schedule_count",
+        )
+        scalar = (
+            "vp_scale",
+            "vp_bias",
+            "vp_collapse_value",
+            "lp_dropout",
+            "lp_bias",
+            "lp_yaw",
+            "lp_drift_yaw",
+        )
+        for name in integer:
+            setattr(self, name, torch.zeros(n, dtype=torch.long, device=self.device))
+        for name in scalar:
+            setattr(self, name, torch.zeros(n, device=self.device))
+        self.lp_drift_xy = torch.zeros(n, 2, device=self.device)
+        self.vp_occlusion_mask = torch.zeros(
+            n, *vp_shape[-2:], device=self.device, dtype=torch.bool
+        )
+        self.lp_block_mask = torch.zeros(
+            n, *lp_shape, device=self.device, dtype=torch.bool
+        )
+        self.lp_buffer = torch.full(
+            (n, capacity, *lp_shape), self.cfg.lp_invalid_height, device=self.device
+        )
+        self.vp_buffer = torch.ones(n, capacity, *vp_shape, device=self.device)
+        self.lp_valid_buffer = torch.zeros_like(self.lp_buffer)
+        self.vp_valid_buffer = torch.zeros_like(self.vp_buffer)
+        self.lp_time_buffer = torch.zeros(
+            n, capacity, device=self.device, dtype=torch.float64
+        )
+        self.vp_time_buffer = torch.zeros_like(self.lp_time_buffer)
+        self.lp_packet_buffer = torch.zeros_like(self.lp_time_buffer)
+        self.vp_packet_buffer = torch.zeros_like(self.lp_time_buffer)
+        self.buffer_initialized = torch.zeros(n, device=self.device, dtype=torch.bool)
+        self.lp_frozen = self.lp_buffer[:, 0].clone()
+        self.vp_frozen = self.vp_buffer[:, 0].clone()
+        self.lp_frozen_valid = torch.zeros_like(self.lp_frozen)
+        self.vp_frozen_valid = torch.zeros_like(self.vp_frozen)
+        self.lp_frozen_time = torch.zeros(n, device=self.device, dtype=torch.float64)
+        self.vp_frozen_time = torch.zeros_like(self.lp_frozen_time)
+        self.lp_frozen_packet = torch.zeros_like(self.lp_frozen_time)
+        self.vp_frozen_packet = torch.zeros_like(self.lp_frozen_time)
+        self.lp_freeze_initialized = torch.zeros_like(self.buffer_initialized)
+        self.vp_freeze_initialized = torch.zeros_like(self.buffer_initialized)
+        self.cursor = torch.full((n,), -1, device=self.device, dtype=torch.long)
+        self._SNAPSHOT_TENSORS = tuple(
+            name
+            for name, value in vars(self).items()
+            if isinstance(value, torch.Tensor) and name != "cursor"
+        )
         self.reset()
 
-    def _rand(self, *shape: int) -> torch.Tensor:
-        return torch.rand(*shape, device=self.device, generator=self.generator)
+    def _signed(self, ids, magnitude):
+        level = self.severity[ids]
+        lo = level.float() * 0.35
+        hi = torch.where(level == 2, 1.0, lo + 0.35)
+        strength = lo + (hi - lo) * self.generator.uniform(ids)
+        sign = torch.where(self.generator.uniform(ids) < 0.5, -1.0, 1.0)
+        return magnitude * strength * sign
 
-    def _randint(self, low: int, high: int, shape: tuple[int, ...]) -> torch.Tensor:
-        return torch.randint(low, high, shape, device=self.device, generator=self.generator)
-
-    @staticmethod
-    def _severity_bounds(level: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        lower = torch.where(level == 0, 0.0, torch.where(level == 1, 0.35, 0.70))
-        upper = torch.where(level == 0, 0.35, torch.where(level == 1, 0.70, 1.0))
-        return lower, upper
-
-    def _strength(self, env_ids: torch.Tensor) -> torch.Tensor:
-        level = self.severity[env_ids]
-        lower, upper = self._severity_bounds(level)
-        return lower + (upper - lower) * self._rand(len(env_ids))
-
-    def _sample_signed(self, env_ids: torch.Tensor, max_abs: float, minimum_abs: float = 0.0) -> torch.Tensor:
-        strength = self._strength(env_ids)
-        magnitude = minimum_abs + (max_abs - minimum_abs) * strength
-        sign = torch.where(self._rand(len(env_ids)) < 0.5, -1.0, 1.0)
-        return magnitude * sign
-
-    def reset(self, env_ids: torch.Tensor | None = None) -> None:
-        if env_ids is None:
-            env_ids = torch.arange(self.num_envs, device=self.device)
-        env_ids = env_ids.to(device=self.device, dtype=torch.long)
-        count = len(env_ids)
-        if count == 0:
+    def _schedule(self, ids, initial=False):
+        if len(ids) == 0:
             return
-        scenario = torch.multinomial(
-            torch.tensor(self.cfg.scenario_probabilities, device=self.device),
-            count,
-            replacement=True,
-            generator=self.generator,
+        scenario = self.generator.categorical(self.cfg.scenario_probabilities, ids)
+        self.severity[ids] = self.generator.categorical(
+            self.cfg.severity_probabilities, ids
         )
-        severity = torch.multinomial(
-            torch.tensor(self.cfg.severity_probabilities, device=self.device),
-            count,
-            replacement=True,
-            generator=self.generator,
+        self.lp_kind[ids] = 0
+        self.vp_kind[ids] = 0
+        for flags, kinds, target in (
+            ((scenario == 2) | (scenario == 3), LP_FAULTS, self.lp_kind),
+            ((scenario == 1) | (scenario == 3), VP_FAULTS, self.vp_kind),
+        ):
+            chosen = ids[flags]
+            options = torch.tensor([int(k) for k in kinds], device=self.device)
+            target[chosen] = options[self.generator.randint(0, len(kinds), chosen)]
+        level = self.severity[ids]
+        lo = level.float() * 0.35
+        hi = torch.where(level == 2, 1.0, lo + 0.35)
+        strength = lo + (hi - lo) * self.generator.uniform(ids)
+        delay = (
+            self.generator.randint(0, self.cfg.max_start_delay_frames + 1, ids)
+            if initial
+            else torch.zeros_like(ids)
         )
-        self.severity[env_ids] = severity
-        self.lp_kind[env_ids] = int(FaultKind.NONE)
-        self.vp_kind[env_ids] = int(FaultKind.NONE)
-        lp_fault = (scenario == 2) | (scenario == 3)
-        vp_fault = (scenario == 1) | (scenario == 3)
-        if lp_fault.any():
-            choices = torch.tensor([int(kind) for kind in LP_FAULTS], device=self.device)
-            self.lp_kind[env_ids[lp_fault]] = choices[
-                self._randint(0, len(choices), (int(lp_fault.sum().item()),))
-            ]
-        if vp_fault.any():
-            choices = torch.tensor([int(kind) for kind in VP_FAULTS], device=self.device)
-            self.vp_kind[env_ids[vp_fault]] = choices[
-                self._randint(0, len(choices), (int(vp_fault.sum().item()),))
-            ]
-
-        self.step_count[env_ids] = 0
-        self.start_frame[env_ids] = self._randint(
-            0, self.cfg.max_start_delay_frames + 1, (count,)
+        self.start_frame[ids] = self.step_count[ids] + delay
+        span = self.cfg.max_duration_frames - self.cfg.min_duration_frames
+        self.duration_frames[ids] = (
+            self.cfg.min_duration_frames + torch.round(strength * span).long()
         )
-        strength = self._strength(env_ids)
-        duration_span = self.cfg.max_duration_frames - self.cfg.min_duration_frames
-        self.duration_frames[env_ids] = (
-            self.cfg.min_duration_frames + torch.round(strength * duration_span).long()
+        self.lp_start_frame[ids] = self.start_frame[ids]
+        self.vp_start_frame[ids] = self.start_frame[ids]
+        self.lp_duration_frames[ids] = self.duration_frames[ids]
+        self.vp_duration_frames[ids] = self.duration_frames[ids]
+        dual = ids[scenario == 3]
+        stagger = self.generator.randint(0, self.cfg.max_dual_stagger_frames + 1, dual)
+        lp_first = self.generator.uniform(dual) < 0.5
+        self.lp_start_frame[dual] += torch.where(lp_first, 0, stagger)
+        self.vp_start_frame[dual] += torch.where(lp_first, stagger, 0)
+        self.vp_duration_frames[dual] = self.generator.randint(
+            self.cfg.min_duration_frames, self.cfg.max_duration_frames + 1, dual
         )
-        self.lp_delay[env_ids] = 1 + torch.round(strength * (self.cfg.max_delay_frames - 1)).long()
-        self.vp_delay[env_ids] = 1 + torch.round(strength * (self.cfg.max_delay_frames - 1)).long()
-        self.vp_scale[env_ids] = 1.0 + self._sample_signed(env_ids, 0.15)
-        self.vp_bias[env_ids] = self._sample_signed(env_ids, 0.20) / self.cfg.vp_depth_max_m
-        shifts = torch.round(1 + strength * (self.cfg.vp_max_shift_pixels - 1)).long()
-        self.vp_shift_x[env_ids] = shifts * torch.where(self._rand(count) < 0.5, -1, 1)
-        self.vp_shift_y[env_ids] = shifts * torch.where(self._rand(count) < 0.5, -1, 1)
-        # 0: all-zero depth, 1: all maximum-range depth, -1: explicit
-        # invalid-depth sentinel.  NaN is deliberately avoided because the
-        # frozen actor must never receive non-finite inputs.
-        collapse_values = torch.tensor((0.0, 1.0, -1.0), device=self.device)
-        self.vp_collapse_value[env_ids] = collapse_values[
-            self._randint(0, len(collapse_values), (count,))
-        ]
-        lo, hi = self.cfg.lp_dropout_fraction
-        self.lp_dropout[env_ids] = lo + strength * (hi - lo)
-        self.lp_bias[env_ids] = self._sample_signed(env_ids, 0.15)
-        max_cell_shift = max(1, round(max(abs(v) for v in self.cfg.lp_translation_range_m) / 0.1))
-        lp_shifts = torch.round(1 + strength * (max_cell_shift - 1)).long()
-        self.lp_shift_x[env_ids] = lp_shifts * torch.where(self._rand(count) < 0.5, -1, 1)
-        self.lp_shift_y[env_ids] = lp_shifts * torch.where(self._rand(count) < 0.5, -1, 1)
-        self.lp_yaw[env_ids] = self._sample_signed(env_ids, max(abs(v) for v in self.cfg.lp_yaw_range_deg))
-        drift_speed = self.cfg.lp_drift_m_per_s[1] * strength
-        drift_angle = 2 * math.pi * self._rand(count)
-        self.lp_drift_xy[env_ids, 0] = drift_speed * drift_angle.cos()
-        self.lp_drift_xy[env_ids, 1] = drift_speed * drift_angle.sin()
-        self.lp_drift_yaw[env_ids] = self._sample_signed(env_ids, self.cfg.lp_drift_deg_per_s[1])
-        self._sample_rectangles(env_ids, strength)
+        self.duration_frames[ids] = (
+            torch.maximum(
+                self.lp_start_frame[ids] + self.lp_duration_frames[ids],
+                self.vp_start_frame[ids] + self.vp_duration_frames[ids],
+            )
+            - self.start_frame[ids]
+        )
+        recovery = self.generator.randint(
+            self.cfg.min_recovery_frames, self.cfg.max_recovery_frames + 1, ids
+        )
+        self.next_schedule_frame[ids] = (
+            self.start_frame[ids] + self.duration_frames[ids] + recovery
+        )
+        self.lp_delay[ids] = (
+            1 + torch.round(strength * (self.cfg.max_delay_frames - 1)).long()
+        )
+        self.vp_delay[ids] = self.lp_delay[ids]
+        self.vp_scale[ids] = 1.0 + self._signed(ids, 0.15)
+        self.vp_bias[ids] = self._signed(ids, 0.20) / self.cfg.vp_depth_max_m
+        shifts = (1 + strength * (self.cfg.vp_max_shift_pixels - 1)).round().long()
+        for name in ("vp_shift_x", "vp_shift_y"):
+            getattr(self, name)[ids] = shifts * torch.where(
+                self.generator.uniform(ids) < 0.5, -1, 1
+            )
+        self.vp_collapse_value[ids] = torch.tensor(
+            [0.0, 1.0, -1.0], device=self.device
+        )[self.generator.randint(0, 3, ids)]
+        low, high = self.cfg.lp_dropout_fraction
+        self.lp_dropout[ids] = low + strength * (high - low)
+        self.lp_bias[ids] = self._signed(ids, 0.15)
+        shifts = (1 + strength).round().long()
+        for name in ("lp_shift_x", "lp_shift_y"):
+            getattr(self, name)[ids] = shifts * torch.where(
+                self.generator.uniform(ids) < 0.5, -1, 1
+            )
+        self.lp_yaw[ids] = self._signed(
+            ids, max(abs(v) for v in self.cfg.lp_yaw_range_deg)
+        )
+        angle = 2 * math.pi * self.generator.uniform(ids)
+        speed = self.cfg.lp_drift_m_per_s[1] * strength
+        self.lp_drift_xy[ids] = torch.stack(
+            (speed * angle.cos(), speed * angle.sin()), -1
+        )
+        self.lp_drift_yaw[ids] = self._signed(ids, self.cfg.lp_drift_deg_per_s[1])
+        self.lp_freeze_initialized[ids] = False
+        self.vp_freeze_initialized[ids] = False
+        self.schedule_count[ids] += 1
+        for name, shape, bounds in (
+            ("vp_occlusion_mask", self.vp_shape[-2:], self.cfg.vp_occlusion_fraction),
+            ("lp_block_mask", self.lp_shape, self.cfg.lp_block_fraction),
+        ):
+            h, w = shape
+            fraction = bounds[0] + strength * (bounds[1] - bounds[0])
+            rh = (fraction * h * w * h / w).sqrt().round().long().clamp(1, h)
+            rw = (fraction * h * w / rh).ceil().long().clamp(1, w)
+            top = (self.generator.uniform(ids) * (h - rh + 1)).long()
+            left = (self.generator.uniform(ids) * (w - rw + 1)).long()
+            yy = torch.arange(h, device=self.device)[None, :, None]
+            xx = torch.arange(w, device=self.device)[None, None, :]
+            getattr(self, name)[ids] = (
+                (yy >= top[:, None, None])
+                & (yy < (top + rh)[:, None, None])
+                & (xx >= left[:, None, None])
+                & (xx < (left + rw)[:, None, None])
+            )
 
-        self.buffer_initialized[env_ids] = False
-        self.lp_freeze_initialized[env_ids] = False
-        self.vp_freeze_initialized[env_ids] = False
-        self.lp_buffer[env_ids] = self.cfg.lp_invalid_height
-        self.vp_buffer[env_ids] = 1.0
-        self.lp_time_buffer[env_ids] = 0.0
-        self.vp_time_buffer[env_ids] = 0.0
+    def reset(self, env_ids=None):
+        ids = (
+            torch.arange(self.num_envs, device=self.device)
+            if env_ids is None
+            else env_ids.to(self.device).long()
+        )
+        self.step_count[ids] = 0
+        self.schedule_count[ids] = 0
+        self.cursor[ids] = -1
+        self.buffer_initialized[ids] = False
+        self.lp_valid_buffer[ids] = 0
+        self.vp_valid_buffer[ids] = 0
+        self._schedule(ids, initial=True)
 
-    def _sample_rectangles(self, env_ids: torch.Tensor, strength: torch.Tensor) -> None:
-        self.vp_occlusion_mask[env_ids] = False
-        self.lp_block_mask[env_ids] = False
-        vp_h, vp_w = self.vp_shape[-2:]
-        lp_h, lp_w = self.lp_shape
-        vp_lo, vp_hi = self.cfg.vp_occlusion_fraction
-        lp_lo, lp_hi = self.cfg.lp_block_fraction
-        vp_fraction = vp_lo + strength * (vp_hi - vp_lo)
-        lp_fraction = lp_lo + strength * (lp_hi - lp_lo)
-        for local_index, env_id in enumerate(env_ids.tolist()):
-            vp_area = max(1, round(float(vp_fraction[local_index]) * vp_h * vp_w))
-            vp_rect_h = max(1, min(vp_h, round(math.sqrt(vp_area * vp_h / vp_w))))
-            vp_rect_w = max(1, min(vp_w, math.ceil(vp_area / vp_rect_h)))
-            top = int(self._randint(0, vp_h - vp_rect_h + 1, (1,)).item())
-            left = int(self._randint(0, vp_w - vp_rect_w + 1, (1,)).item())
-            self.vp_occlusion_mask[env_id, top : top + vp_rect_h, left : left + vp_rect_w] = True
-
-            lp_area = max(1, round(float(lp_fraction[local_index]) * lp_h * lp_w))
-            lp_rect_h = max(1, min(lp_h, round(math.sqrt(lp_area * lp_h / lp_w))))
-            lp_rect_w = max(1, min(lp_w, math.ceil(lp_area / lp_rect_h)))
-            top = int(self._randint(0, lp_h - lp_rect_h + 1, (1,)).item())
-            left = int(self._randint(0, lp_w - lp_rect_w + 1, (1,)).item())
-            self.lp_block_mask[env_id, top : top + lp_rect_h, left : left + lp_rect_w] = True
-
-    def snapshot(self) -> FaultSnapshot:
+    def snapshot(self):
         return FaultSnapshot(
-            tensors={name: getattr(self, name).clone() for name in self._SNAPSHOT_TENSORS},
-            cursor=self.cursor,
-            generator_state=self.generator.get_state().clone(),
+            {n: getattr(self, n).clone() for n in self._SNAPSHOT_TENSORS},
+            self.cursor.clone(),
+            self.generator.get_state(),
         )
 
-    def restore(self, snapshot: FaultSnapshot) -> None:
-        missing = set(self._SNAPSHOT_TENSORS) - set(snapshot.tensors)
-        if missing:
-            raise ValueError(f"fault snapshot is missing fields: {sorted(missing)}")
-        for name in self._SNAPSHOT_TENSORS:
-            target = getattr(self, name)
-            source = snapshot.tensors[name]
-            if target.shape != source.shape:
-                raise ValueError(f"fault snapshot shape mismatch for {name}")
-            target.copy_(source)
-        self.cursor = int(snapshot.cursor)
+    def restore(self, snapshot):
+        for name, value in snapshot.tensors.items():
+            getattr(self, name).copy_(value)
+        self.cursor.copy_(snapshot.cursor)
         self.generator.set_state(snapshot.generator_state)
 
-    def unobservable_onset_within(self, horizon_frames: int) -> torch.Tensor:
-        """Flag candidates with a not-yet-observed total collapse in the label window."""
-
-        if horizon_frames <= 0:
-            raise ValueError("horizon_frames must be positive")
-        future_start = (self.start_frame >= self.step_count) & (
-            self.start_frame < self.step_count + int(horizon_frames)
+    def unobservable_onset_within(self, horizon_frames):
+        lp_pending = (self.lp_start_frame >= self.step_count) & (
+            self.lp_start_frame < self.step_count + horizon_frames
         )
-        collapse = (self.lp_kind == int(FaultKind.LP_COLLAPSE)) | (
-            self.vp_kind == int(FaultKind.VP_COLLAPSE)
+        vp_pending = (self.vp_start_frame >= self.step_count) & (
+            self.vp_start_frame < self.step_count + horizon_frames
         )
-        return future_start & collapse
-
-    def audit_metadata(self) -> torch.Tensor:
-        """Return generation-only metadata; these columns never enter the selector.
-
-        Columns are LP kind, VP kind, severity, phase (-1 before/0 active/1
-        recovered), remaining frames, duration frames, and LP/VP active flags.
-        """
-
-        observed_step = (self.step_count - 1).clamp_min(0)
-        active = (observed_step >= self.start_frame) & (
-            observed_step < self.start_frame + self.duration_frames
+        # The next schedule is sampled in the future and is absent from the
+        # observable feature history. Do not label a candidate across that draw.
+        reschedule = (self.next_schedule_frame >= self.step_count) & (
+            self.next_schedule_frame < self.step_count + horizon_frames
         )
+        return (
+            reschedule
+            | (lp_pending & (self.lp_kind != 0))
+            | (vp_pending & (self.vp_kind != 0))
+        )
+
+    def _active(self, observed):
+        return (
+            (observed >= self.lp_start_frame)
+            & (observed < self.lp_start_frame + self.lp_duration_frames)
+            & (self.lp_kind != 0),
+            (observed >= self.vp_start_frame)
+            & (observed < self.vp_start_frame + self.vp_duration_frames)
+            & (self.vp_kind != 0),
+        )
+
+    def audit_metadata(self):
+        observed = (self.step_count - 1).clamp_min(0)
+        la, va = self._active(observed)
         phase = torch.where(
-            observed_step < self.start_frame,
-            torch.full_like(observed_step, -1),
-            torch.where(active, torch.zeros_like(observed_step), torch.ones_like(observed_step)),
+            observed < self.start_frame,
+            -1,
+            torch.where(observed < self.start_frame + self.duration_frames, 0, 1),
         )
-        remaining = (self.start_frame + self.duration_frames - self.step_count).clamp_min(0)
-        lp_active = active & (self.lp_kind != int(FaultKind.NONE))
-        vp_active = active & (self.vp_kind != int(FaultKind.NONE))
+        remaining = (
+            self.start_frame + self.duration_frames - self.step_count
+        ).clamp_min(0)
         return torch.stack(
             (
                 self.lp_kind,
@@ -359,55 +351,29 @@ class SelectorFaultManager:
                 phase,
                 remaining,
                 self.duration_frames,
-                lp_active.long(),
-                vp_active.long(),
+                la.long(),
+                va.long(),
             ),
-            dim=-1,
+            -1,
         )
 
-    def _push_buffers(
-        self,
-        lp: torch.Tensor,
-        vp: torch.Tensor,
-        lp_timestamp: torch.Tensor,
-        vp_timestamp: torch.Tensor,
-    ) -> None:
-        capacity = self.cfg.max_delay_frames + 1
-        self.cursor = (self.cursor + 1) % capacity
-        first = ~self.buffer_initialized
-        if first.any():
-            self.lp_buffer[first] = lp[first, None]
-            self.vp_buffer[first] = vp[first, None]
-            self.lp_time_buffer[first] = lp_timestamp[first, None]
-            self.vp_time_buffer[first] = vp_timestamp[first, None]
-            self.buffer_initialized[first] = True
-        self.lp_buffer[:, self.cursor] = lp
-        self.vp_buffer[:, self.cursor] = vp
-        self.lp_time_buffer[:, self.cursor] = lp_timestamp
-        self.vp_time_buffer[:, self.cursor] = vp_timestamp
-
-    def _delayed(self, buffer: torch.Tensor, delays: torch.Tensor) -> torch.Tensor:
-        capacity = self.cfg.max_delay_frames + 1
-        slots = torch.remainder(self.cursor - delays, capacity)
+    def _delayed(self, buffer, delays):
         ids = torch.arange(self.num_envs, device=self.device)
-        return buffer[ids, slots]
+        return buffer[ids, (self.cursor - delays) % (self.cfg.max_delay_frames + 1)]
 
     @staticmethod
-    def _integer_shift(data: torch.Tensor, dx: torch.Tensor, dy: torch.Tensor, fill: float) -> torch.Tensor:
-        output = data.clone()
-        for env_id in torch.nonzero((dx != 0) | (dy != 0), as_tuple=False).flatten().tolist():
-            shift_x, shift_y = int(dx[env_id]), int(dy[env_id])
-            shifted = torch.roll(data[env_id], shifts=(shift_y, shift_x), dims=(-2, -1))
-            if shift_y > 0:
-                shifted[..., :shift_y, :] = fill
-            elif shift_y < 0:
-                shifted[..., shift_y:, :] = fill
-            if shift_x > 0:
-                shifted[..., :, :shift_x] = fill
-            elif shift_x < 0:
-                shifted[..., :, shift_x:] = fill
-            output[env_id] = shifted
-        return output
+    def _integer_shift(
+        data: torch.Tensor, dx: torch.Tensor, dy: torch.Tensor, fill: float
+    ) -> torch.Tensor:
+        n, h, w = data.shape[0], data.shape[-2], data.shape[-1]
+        y = torch.arange(h, device=data.device)[None, :, None] - dy[:, None, None]
+        x = torch.arange(w, device=data.device)[None, None, :] - dx[:, None, None]
+        inside = (y >= 0) & (y < h) & (x >= 0) & (x < w)
+        indices = (y.clamp(0, h - 1) * w + x.clamp(0, w - 1)).reshape(n, 1, h * w)
+        shifted = data.reshape(n, -1, h * w).gather(
+            2, indices.expand(n, data.reshape(n, -1, h * w).shape[1], h * w)
+        )
+        return torch.where(inside.reshape(n, 1, h * w), shifted, fill).reshape_as(data)
 
     def _rotate_lp(self, data: torch.Tensor, yaw_deg: torch.Tensor) -> torch.Tensor:
         angle = torch.deg2rad(yaw_deg)
@@ -417,11 +383,29 @@ class SelectorFaultManager:
         theta[:, 0, 1] = -sine
         theta[:, 1, 0] = sine
         theta[:, 1, 1] = cosine
-        grid = F.affine_grid(theta, (self.num_envs, 1, *self.lp_shape), align_corners=True)
+        grid = F.affine_grid(
+            theta, (self.num_envs, 1, *self.lp_shape), align_corners=True
+        )
         valid = (data != self.cfg.lp_invalid_height).to(data.dtype)
-        sampled = F.grid_sample(data[:, None], grid, mode="bilinear", padding_mode="zeros", align_corners=True)[:, 0]
-        sampled_valid = F.grid_sample(valid[:, None], grid, mode="nearest", padding_mode="zeros", align_corners=True)[:, 0]
-        return torch.where(sampled_valid > 0.5, sampled, torch.full_like(sampled, self.cfg.lp_invalid_height))
+        sampled = F.grid_sample(
+            data[:, None],
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
+        )[:, 0]
+        sampled_valid = F.grid_sample(
+            valid[:, None],
+            grid,
+            mode="nearest",
+            padding_mode="zeros",
+            align_corners=True,
+        )[:, 0]
+        return torch.where(
+            sampled_valid > 0.5,
+            sampled,
+            torch.full_like(sampled, self.cfg.lp_invalid_height),
+        )
 
     def _transform_lp(
         self,
@@ -444,13 +428,23 @@ class SelectorFaultManager:
         height_m = max((self.lp_shape[0] - 1) * resolution_m, resolution_m)
         theta[:, 0, 2] = -2.0 * translation_m[:, 0] / width_m
         theta[:, 1, 2] = -2.0 * translation_m[:, 1] / height_m
-        grid = F.affine_grid(theta, (self.num_envs, 1, *self.lp_shape), align_corners=True)
+        grid = F.affine_grid(
+            theta, (self.num_envs, 1, *self.lp_shape), align_corners=True
+        )
         valid = (data != self.cfg.lp_invalid_height).to(data.dtype)
         sampled = F.grid_sample(
-            data[:, None], grid, mode="bilinear", padding_mode="zeros", align_corners=True
+            data[:, None],
+            grid,
+            mode="bilinear",
+            padding_mode="zeros",
+            align_corners=True,
         )[:, 0]
         sampled_valid = F.grid_sample(
-            valid[:, None], grid, mode="nearest", padding_mode="zeros", align_corners=True
+            valid[:, None],
+            grid,
+            mode="nearest",
+            padding_mode="zeros",
+            align_corners=True,
         )[:, 0]
         return torch.where(
             sampled_valid > 0.5,
@@ -460,124 +454,198 @@ class SelectorFaultManager:
 
     def apply(
         self,
-        lp: torch.Tensor,
-        vp: torch.Tensor,
-        lp_timestamp: torch.Tensor,
-        vp_timestamp: torch.Tensor,
-    ) -> FaultBatch:
-        """Apply one 10 Hz fault step without mutating the input tensors."""
-
-        if lp.shape != (self.num_envs, *self.lp_shape):
-            raise ValueError(f"LP tensor must have shape {(self.num_envs, *self.lp_shape)}")
-        if vp.shape != (self.num_envs, *self.vp_shape):
-            raise ValueError(f"VP tensor must have shape {(self.num_envs, *self.vp_shape)}")
-        lp_timestamp = lp_timestamp.reshape(self.num_envs).to(self.device)
-        vp_timestamp = vp_timestamp.reshape(self.num_envs).to(self.device)
-        self._push_buffers(lp, vp, lp_timestamp, vp_timestamp)
-
-        active = (self.step_count >= self.start_frame) & (
-            self.step_count < self.start_frame + self.duration_frames
+        lp,
+        vp,
+        lp_timestamp,
+        vp_timestamp,
+        *,
+        lp_valid=None,
+        vp_valid=None,
+        lp_packet_timestamp=None,
+        vp_packet_timestamp=None,
+        env_ids=None,
+    ):
+        for data, shape in ((lp, self.lp_shape), (vp, self.vp_shape)):
+            if data.shape != (self.num_envs, *shape):
+                raise ValueError(
+                    "fault input shape differs from configured sensor layout"
+                )
+        for data, support in ((lp, lp_valid), (vp, vp_valid)):
+            if support is not None and (
+                support.shape != data.shape
+                or not torch.isfinite(support).all()
+                or ((support < 0) | (support > 1)).any()
+            ):
+                raise ValueError(
+                    "raw valid support must match data and be finite in [0,1]"
+                )
+        ids = (
+            torch.arange(self.num_envs, device=self.device)
+            if env_ids is None
+            else env_ids.to(self.device).long()
         )
-        lp_active = active & (self.lp_kind != int(FaultKind.NONE))
-        vp_active = active & (self.vp_kind != int(FaultKind.NONE))
-        lp_out, vp_out = lp.clone(), vp.clone()
-        lp_time, vp_time = lp_timestamp.clone(), vp_timestamp.clone()
-
-        lp_freeze = lp_active & (self.lp_kind == int(FaultKind.FREEZE))
-        new_lp_freeze = lp_freeze & ~self.lp_freeze_initialized
-        if new_lp_freeze.any():
-            self.lp_frozen[new_lp_freeze] = lp[new_lp_freeze]
-            self.lp_frozen_time[new_lp_freeze] = lp_timestamp[new_lp_freeze]
-            self.lp_freeze_initialized[new_lp_freeze] = True
-        lp_out[lp_freeze] = self.lp_frozen[lp_freeze]
-        lp_time[lp_freeze] = self.lp_frozen_time[lp_freeze]
-
-        vp_freeze = vp_active & (self.vp_kind == int(FaultKind.FREEZE))
-        new_vp_freeze = vp_freeze & ~self.vp_freeze_initialized
-        if new_vp_freeze.any():
-            self.vp_frozen[new_vp_freeze] = vp[new_vp_freeze]
-            self.vp_frozen_time[new_vp_freeze] = vp_timestamp[new_vp_freeze]
-            self.vp_freeze_initialized[new_vp_freeze] = True
-        vp_out[vp_freeze] = self.vp_frozen[vp_freeze]
-        vp_time[vp_freeze] = self.vp_frozen_time[vp_freeze]
-
-        lp_delay_mask = lp_active & (self.lp_kind == int(FaultKind.DELAY))
-        if lp_delay_mask.any():
-            delayed = self._delayed(self.lp_buffer, self.lp_delay)
-            delayed_time = self._delayed(self.lp_time_buffer, self.lp_delay)
-            lp_out[lp_delay_mask] = delayed[lp_delay_mask]
-            lp_time[lp_delay_mask] = delayed_time[lp_delay_mask]
-        vp_delay_mask = vp_active & (self.vp_kind == int(FaultKind.DELAY))
-        if vp_delay_mask.any():
-            delayed = self._delayed(self.vp_buffer, self.vp_delay)
-            delayed_time = self._delayed(self.vp_time_buffer, self.vp_delay)
-            vp_out[vp_delay_mask] = delayed[vp_delay_mask]
-            vp_time[vp_delay_mask] = delayed_time[vp_delay_mask]
-
-        occluded = vp_active & (self.vp_kind == int(FaultKind.VP_OCCLUSION))
-        if occluded.any():
-            mask = self.vp_occlusion_mask[occluded, None].expand(-1, self.vp_shape[0], -1, -1)
-            vp_out[occluded] = torch.where(mask, torch.ones_like(vp_out[occluded]), vp_out[occluded])
-        scaled = vp_active & (self.vp_kind == int(FaultKind.VP_SCALE))
-        if scaled.any():
-            vp_out[scaled] = (
-                vp_out[scaled] * self.vp_scale[scaled, None, None, None]
-            ).clamp(0.0, 1.0)
-        biased_vp = vp_active & (self.vp_kind == int(FaultKind.VP_BIAS))
-        if biased_vp.any():
-            vp_out[biased_vp] = (
-                vp_out[biased_vp] + self.vp_bias[biased_vp, None, None, None]
-            ).clamp(0.0, 1.0)
-        shifted = vp_active & (self.vp_kind == int(FaultKind.VP_SHIFT))
-        if shifted.any():
-            candidate = self._integer_shift(vp_out, self.vp_shift_x, self.vp_shift_y, 1.0)
-            vp_out[shifted] = candidate[shifted]
-        collapsed = vp_active & (self.vp_kind == int(FaultKind.VP_COLLAPSE))
-        if collapsed.any():
-            vp_out[collapsed] = self.vp_collapse_value[collapsed, None, None, None]
-
-        random_dropout = lp_active & (self.lp_kind == int(FaultKind.LP_RANDOM_DROPOUT))
-        if random_dropout.any():
-            dropout_mask = self._rand(self.num_envs, *self.lp_shape) < self.lp_dropout[:, None, None]
-            mask = dropout_mask & random_dropout[:, None, None]
-            lp_out[mask] = self.cfg.lp_invalid_height
-        block = lp_active & (self.lp_kind == int(FaultKind.LP_BLOCK_DROPOUT))
-        if block.any():
-            mask = self.lp_block_mask & block[:, None, None]
-            lp_out[mask] = self.cfg.lp_invalid_height
-        biased = lp_active & (self.lp_kind == int(FaultKind.LP_HEIGHT_BIAS))
-        if biased.any():
-            valid = lp_out[biased] != self.cfg.lp_invalid_height
-            candidate = (lp_out[biased] + self.lp_bias[biased, None, None]).clamp(*self.cfg.lp_height_clip)
-            lp_out[biased] = torch.where(valid, candidate, lp_out[biased])
-        registered = lp_active & (self.lp_kind == int(FaultKind.LP_REGISTRATION))
-        if registered.any():
-            candidate = self._integer_shift(
-                self._rotate_lp(lp_out, self.lp_yaw),
+        lp_valid = (
+            (torch.isfinite(lp) & (lp != self.cfg.lp_invalid_height)).float()
+            if lp_valid is None
+            else lp_valid.float()
+        )
+        vp_valid = (
+            (torch.isfinite(vp) & (vp >= 0) & (vp <= 1)).float()
+            if vp_valid is None
+            else vp_valid.float()
+        )
+        lp_time = (
+            lp_timestamp.to(self.device, torch.float64).reshape(self.num_envs).clone()
+        )
+        vp_time = (
+            vp_timestamp.to(self.device, torch.float64).reshape(self.num_envs).clone()
+        )
+        lp_packet = (
+            lp_time.clone()
+            if lp_packet_timestamp is None
+            else lp_packet_timestamp.to(self.device, torch.float64)
+            .reshape(self.num_envs)
+            .clone()
+        )
+        vp_packet = (
+            vp_time.clone()
+            if vp_packet_timestamp is None
+            else vp_packet_timestamp.to(self.device, torch.float64)
+            .reshape(self.num_envs)
+            .clone()
+        )
+        due = ids[self.step_count[ids] >= self.next_schedule_frame[ids]]
+        self._schedule(due)
+        capacity = self.cfg.max_delay_frames + 1
+        self.cursor[ids] = (self.cursor[ids] + 1) % capacity
+        first = ids[~self.buffer_initialized[ids]]
+        for buffer, value in (
+            (self.lp_buffer, lp),
+            (self.vp_buffer, vp),
+            (self.lp_valid_buffer, lp_valid),
+            (self.vp_valid_buffer, vp_valid),
+            (self.lp_time_buffer, lp_time),
+            (self.vp_time_buffer, vp_time),
+            (self.lp_packet_buffer, lp_packet),
+            (self.vp_packet_buffer, vp_packet),
+        ):
+            buffer[first] = value[first, None]
+            buffer[ids, self.cursor[ids]] = value[ids]
+        self.buffer_initialized[ids] = True
+        selected = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
+        selected[ids] = True
+        la, va = self._active(self.step_count)
+        la &= selected
+        va &= selected
+        out_lp, out_vp = lp.clone(), vp.clone()
+        lv, vv = lp_valid.clone(), vp_valid.clone()
+        for name, kinds, on, data, support, time, packet in (
+            ("lp", self.lp_kind, la, out_lp, lv, lp_time, lp_packet),
+            ("vp", self.vp_kind, va, out_vp, vv, vp_time, vp_packet),
+        ):
+            freeze = on & (kinds == int(FaultKind.FREEZE))
+            initialized = getattr(self, name + "_freeze_initialized")
+            new = freeze & ~initialized
+            getattr(self, name + "_frozen")[new] = data[new]
+            getattr(self, name + "_frozen_valid")[new] = support[new]
+            getattr(self, name + "_frozen_time")[new] = time[new]
+            initialized[new] = True
+            getattr(self, name + "_frozen_packet")[new] = packet[new]
+            data[freeze] = getattr(self, name + "_frozen")[freeze]
+            support[freeze] = getattr(self, name + "_frozen_valid")[freeze]
+            time[freeze] = getattr(self, name + "_frozen_time")[freeze]
+            packet[freeze] = getattr(self, name + "_frozen_packet")[freeze]
+            delayed = on & (kinds == int(FaultKind.DELAY))
+            delays = getattr(self, name + "_delay")
+            data[delayed] = self._delayed(getattr(self, name + "_buffer"), delays)[
+                delayed
+            ]
+            support[delayed] = self._delayed(
+                getattr(self, name + "_valid_buffer"), delays
+            )[delayed]
+            time[delayed] = self._delayed(getattr(self, name + "_time_buffer"), delays)[
+                delayed
+            ]
+            packet[delayed] = self._delayed(
+                getattr(self, name + "_packet_buffer"), delays
+            )[delayed]
+        occluded = va & (self.vp_kind == int(FaultKind.VP_OCCLUSION))
+        mask = (
+            self.vp_occlusion_mask[:, None].expand_as(vv)
+            & occluded[:, None, None, None]
+        )
+        out_vp[mask] = 1.0
+        vv[mask] = 0.0
+        for kind, scale, bias in (
+            (FaultKind.VP_SCALE, self.vp_scale, torch.zeros_like(self.vp_bias)),
+            (FaultKind.VP_BIAS, torch.ones_like(self.vp_scale), self.vp_bias),
+        ):
+            chosen = va & (self.vp_kind == int(kind))
+            out_vp[chosen] = (
+                out_vp[chosen] * scale[chosen, None, None, None]
+                + bias[chosen, None, None, None]
+            ).clamp(0, 1)
+        shifted = va & (self.vp_kind == int(FaultKind.VP_SHIFT))
+        out_vp[shifted] = self._integer_shift(
+            out_vp, self.vp_shift_x, self.vp_shift_y, 1.0
+        )[shifted]
+        vv[shifted] = self._integer_shift(vv, self.vp_shift_x, self.vp_shift_y, 0.0)[
+            shifted
+        ]
+        collapsed = va & (self.vp_kind == int(FaultKind.VP_COLLAPSE))
+        out_vp[collapsed] = self.vp_collapse_value[collapsed, None, None, None]
+        vv[collapsed] = 0.0
+        dropout_ids = (
+            (la & (self.lp_kind == int(FaultKind.LP_RANDOM_DROPOUT)))
+            .nonzero()
+            .flatten()
+        )
+        if len(dropout_ids):
+            drop = (
+                self.generator.uniform(dropout_ids, self.lp_shape)
+                < self.lp_dropout[dropout_ids, None, None]
+            )
+            patch = out_lp[dropout_ids]
+            patch[drop] = self.cfg.lp_invalid_height
+            out_lp[dropout_ids] = patch
+            patch = lv[dropout_ids]
+            patch[drop] = 0.0
+            lv[dropout_ids] = patch
+        blocked = la & (self.lp_kind == int(FaultKind.LP_BLOCK_DROPOUT))
+        mask = self.lp_block_mask & blocked[:, None, None]
+        out_lp[mask] = self.cfg.lp_invalid_height
+        lv[mask] = 0.0
+        biased = la & (self.lp_kind == int(FaultKind.LP_HEIGHT_BIAS))
+        candidate = (out_lp + self.lp_bias[:, None, None]).clamp(
+            *self.cfg.lp_height_clip
+        )
+        out_lp[biased] = torch.where(
+            lv[biased] > 0, candidate[biased], self.cfg.lp_invalid_height
+        )
+        registered = la & (self.lp_kind == int(FaultKind.LP_REGISTRATION))
+        for data, fill in ((out_lp, self.cfg.lp_invalid_height), (lv, 0.0)):
+            changed = self._integer_shift(
+                self._rotate_lp(data, self.lp_yaw),
                 self.lp_shift_x,
                 self.lp_shift_y,
-                self.cfg.lp_invalid_height,
+                fill,
             )
-            lp_out[registered] = candidate[registered]
-        drifting = lp_active & (self.lp_kind == int(FaultKind.LP_DRIFT))
-        if drifting.any():
-            elapsed_s = (self.step_count.float() - self.start_frame.float()).clamp_min(0) * self.cfg.update_period_s
-            yaw = self.lp_drift_yaw * elapsed_s
-            candidate = self._transform_lp(
-                lp_out,
-                self.lp_drift_xy * elapsed_s[:, None],
-                yaw,
+            data[registered] = changed[registered]
+        drifting = la & (self.lp_kind == int(FaultKind.LP_DRIFT))
+        elapsed = (self.step_count - self.lp_start_frame).clamp_min(
+            0
+        ).float() * self.cfg.update_period_s
+        for data in (out_lp, lv):
+            changed = self._transform_lp(
+                data, self.lp_drift_xy * elapsed[:, None], self.lp_drift_yaw * elapsed
             )
-            lp_out[drifting] = candidate[drifting]
-        lp_collapsed = lp_active & (self.lp_kind == int(FaultKind.LP_COLLAPSE))
-        lp_out[lp_collapsed] = self.cfg.lp_invalid_height
-
-        self.step_count += 1
+            data[drifting] = changed[drifting]
+        collapsed = la & (self.lp_kind == int(FaultKind.LP_COLLAPSE))
+        out_lp[collapsed] = self.cfg.lp_invalid_height
+        lv[collapsed] = 0.0
+        lv = lv.clamp(0, 1)
+        vv = vv.clamp(0, 1)
+        self.step_count[ids] += 1
         return FaultBatch(
-            lp=lp_out,
-            vp=vp_out,
-            lp_timestamp=lp_time,
-            vp_timestamp=vp_time,
-            lp_active=lp_active,
-            vp_active=vp_active,
+            out_lp, out_vp, lp_time, vp_time, la, va, lv, vv, lp_packet, vp_packet
         )

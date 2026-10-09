@@ -1,3 +1,23 @@
+# 中文导读
+# 文件用途：统计地形难度与类型分布，并据此固定正式采集环境的地形安排。
+# 使用位置：collect_selector_data.py 的地形预采样、主数据采集和难度 7～9 的泛化测试采集。
+# 说明：terrain_distribution.json 记录场景统计；selector 样本由 collector 的受扰成对 rollout 生成。
+# 说明：reference_mean 仅记录参考值；实际采样使用观测计数，不强制难度均值等于参考值。
+#
+# 类、函数及方法说明（包含私有方法、内部函数和属性访问器）：
+# - TerrainDistribution：保存难度与类型计数矩阵、训练最高难度和参考均值。
+# - TerrainDistribution.empty：建立指定难度数和类型数的零计数统计对象。
+# - TerrainDistribution.observe：累计合法类型且难度在训练范围内的地形观测。
+# - TerrainDistribution.sample_count：属性访问器，返回累计的地形观测总数。
+# - TerrainDistribution.mean_level：属性访问器，计算按观测次数加权的难度均值。
+# - TerrainDistribution.probabilities：将训练范围内的计数归一化为地形抽样概率，拒绝空分布。
+# - TerrainDistribution.sample：按观测到的难度与类型联合分布为各环境抽样。
+# - TerrainDistribution.sample_ood：保留观测到的类型比例，在指定的高难度集合中抽取测试场景。
+# - TerrainDistribution.save：将计数、范围、均值和观测总数保存为 JSON。
+# - TerrainDistribution.load：读取 JSON 并在指定设备上重建统计张量。
+# - apply_frozen_distribution：为环境设置抽取的地形难度、类型和起点，再 reset 所有机器人。
+# 中文导读结束
+
 """Empirical terrain distribution capture and frozen sampling."""
 
 from __future__ import annotations

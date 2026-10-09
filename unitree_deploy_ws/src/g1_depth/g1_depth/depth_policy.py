@@ -64,6 +64,7 @@ class DepthFrameStats:
     valid_ratio: float
     minimum_metres: float
     maximum_metres: float
+    valid_support: np.ndarray
 
 
 def decode_depth_image(
@@ -365,6 +366,7 @@ def preprocess_policy_depth(
         valid_ratio=float(np.mean(valid_support)),
         minimum_metres=float(np.min(metric)),
         maximum_metres=float(np.max(metric)),
+        valid_support=np.asarray(valid_support, dtype=np.float32).copy(),
     )
     return normalized, stats
 

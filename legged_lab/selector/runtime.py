@@ -31,12 +31,22 @@ class SelectorStateMachine:
         self.cfg.validate()
         self.num_envs = int(num_envs)
         self.device = torch.device(device)
-        self.current_mask = torch.full((self.num_envs,), float(initial_mask), device=self.device)
-        self.last_switch_time = torch.full((self.num_envs,), -torch.inf, device=self.device)
+        self.current_mask = torch.full(
+            (self.num_envs,), float(initial_mask), device=self.device
+        )
+        self.last_switch_time = torch.full(
+            (self.num_envs,), -torch.inf, device=self.device, dtype=torch.float64
+        )
         self.pending_mask = self.current_mask.clone()
-        self.pending_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        self.lp_invalid_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        self.vp_invalid_count = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.pending_count = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self.lp_invalid_count = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
+        self.vp_invalid_count = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
 
     def reset(
         self,
@@ -48,7 +58,7 @@ class SelectorStateMachine:
         if env_ids is None:
             env_ids = torch.arange(self.num_envs, device=self.device)
         mask = torch.as_tensor(initial_mask, device=self.device, dtype=torch.float32)
-        time = torch.as_tensor(now, device=self.device, dtype=torch.float32)
+        time = torch.as_tensor(now, device=self.device, dtype=torch.float64)
         if mask.ndim == 0:
             mask = mask.expand(len(env_ids))
         if time.ndim == 0:
@@ -60,15 +70,23 @@ class SelectorStateMachine:
         self.lp_invalid_count[env_ids] = 0
         self.vp_invalid_count[env_ids] = 0
 
-    def _availability(self, health: SensorHealth, invalid_count: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _availability(
+        self, health: SensorHealth, invalid_count: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         values = health.as_tensor()
         finite = torch.isfinite(values).all(dim=-1)
-        invalid_now = (~finite) | (health.frame_age > self.cfg.sensor_timeout_s) | (
-            health.valid_ratio < self.cfg.min_valid_ratio
+        invalid_now = (
+            (~finite)
+            | (health.frame_age > self.cfg.sensor_timeout_s)
+            | (health.valid_ratio < self.cfg.min_valid_ratio)
         )
-        updated_count = torch.where(invalid_now, invalid_count + 1, torch.zeros_like(invalid_count))
-        available = finite & (health.frame_age <= self.cfg.sensor_timeout_s) & (
-            updated_count < self.cfg.invalid_confirmations
+        updated_count = torch.where(
+            invalid_now, invalid_count + 1, torch.zeros_like(invalid_count)
+        )
+        available = (
+            finite
+            & (health.frame_age <= self.cfg.sensor_timeout_s)
+            & (updated_count < self.cfg.invalid_confirmations)
         )
         return available, updated_count
 
@@ -83,16 +101,26 @@ class SelectorStateMachine:
             raise ValueError(f"risks must have shape {(self.num_envs, 4)}")
         if not torch.isfinite(risks).all():
             raise ValueError("selector risks must be finite")
-        now_tensor = torch.as_tensor(now, device=self.device, dtype=torch.float32)
+        now_tensor = torch.as_tensor(now, device=self.device, dtype=torch.float64)
         if now_tensor.ndim == 0:
             now_tensor = now_tensor.expand(self.num_envs)
         else:
             now_tensor = now_tensor.reshape(self.num_envs)
 
-        lp_available, self.lp_invalid_count = self._availability(lp_health, self.lp_invalid_count)
-        vp_available, self.vp_invalid_count = self._availability(vp_health, self.vp_invalid_count)
-        lp_risk = self.cfg.short_risk_weight * risks[:, 0] + self.cfg.long_risk_weight * risks[:, 1]
-        vp_risk = self.cfg.short_risk_weight * risks[:, 2] + self.cfg.long_risk_weight * risks[:, 3]
+        lp_available, self.lp_invalid_count = self._availability(
+            lp_health, self.lp_invalid_count
+        )
+        vp_available, self.vp_invalid_count = self._availability(
+            vp_health, self.vp_invalid_count
+        )
+        lp_risk = (
+            self.cfg.short_risk_weight * risks[:, 0]
+            + self.cfg.long_risk_weight * risks[:, 1]
+        )
+        vp_risk = (
+            self.cfg.short_risk_weight * risks[:, 2]
+            + self.cfg.long_risk_weight * risks[:, 3]
+        )
         both_high = (lp_risk >= self.cfg.both_unreliable_risk) & (
             vp_risk >= self.cfg.both_unreliable_risk
         )
@@ -136,11 +164,15 @@ class SelectorStateMachine:
         desired[tie_to_vp] = 0.0
         desired_reason[tie_to_vp] = self.REASON_TIE_TO_VP
 
-        risk_to_vp = eligible & (self.current_mask > 0.5) & (
-            vp_risk + self.cfg.switch_margin < lp_risk
+        risk_to_vp = (
+            eligible
+            & (self.current_mask > 0.5)
+            & (vp_risk + self.cfg.switch_margin < lp_risk)
         )
-        risk_to_lp = eligible & (self.current_mask <= 0.5) & (
-            lp_risk + self.cfg.switch_margin < vp_risk
+        risk_to_lp = (
+            eligible
+            & (self.current_mask <= 0.5)
+            & (lp_risk + self.cfg.switch_margin < vp_risk)
         )
         desired[risk_to_vp] = 0.0
         desired_reason[risk_to_vp] = self.REASON_RISK_TO_VP
@@ -151,7 +183,11 @@ class SelectorStateMachine:
         same_pending = desired == self.pending_mask
         self.pending_count = torch.where(
             wants_change,
-            torch.where(same_pending, self.pending_count + 1, torch.ones_like(self.pending_count)),
+            torch.where(
+                same_pending,
+                self.pending_count + 1,
+                torch.ones_like(self.pending_count),
+            ),
             torch.zeros_like(self.pending_count),
         )
         self.pending_mask = torch.where(wants_change, desired, self.current_mask)
@@ -196,11 +232,17 @@ class ActionBlender:
         self.num_envs = int(num_envs)
         self.action_dim = int(action_dim)
         self.device = torch.device(device)
-        self.last_output = torch.zeros(self.num_envs, self.action_dim, device=self.device)
+        self.last_output = torch.zeros(
+            self.num_envs, self.action_dim, device=self.device
+        )
         self.start_action = self.last_output.clone()
-        self.remaining = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.remaining = torch.zeros(
+            self.num_envs, dtype=torch.long, device=self.device
+        )
         self.total = torch.ones(self.num_envs, dtype=torch.long, device=self.device)
-        self.initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.initialized = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
 
     def reset(self, env_ids: torch.Tensor | None = None) -> None:
         if env_ids is None:
@@ -210,6 +252,31 @@ class ActionBlender:
         self.remaining[env_ids] = 0
         self.total[env_ids] = 1
         self.initialized[env_ids] = False
+
+    def snapshot(self) -> dict[str, torch.Tensor]:
+        return {
+            name: getattr(self, name).clone()
+            for name in (
+                "last_output",
+                "start_action",
+                "remaining",
+                "total",
+                "initialized",
+            )
+        }
+
+    def restore(self, state: dict[str, torch.Tensor]) -> None:
+        for name, source in state.items():
+            getattr(self, name).copy_(source)
+
+    def seed(self, action: torch.Tensor) -> None:
+        if action.shape != self.last_output.shape:
+            raise ValueError("initial action must match the action contract")
+        self.last_output.copy_(action)
+        self.start_action.copy_(action)
+        self.remaining.zero_()
+        self.total.fill_(1)
+        self.initialized.fill_(True)
 
     def step(
         self,
@@ -222,8 +289,10 @@ class ActionBlender:
         expected = (self.num_envs, self.action_dim)
         if lp_action.shape != expected or vp_action.shape != expected:
             raise ValueError(f"candidate actions must have shape {expected}")
-        mask = selected_mask.reshape(self.num_envs, 1).to(lp_action.dtype)
-        target = mask * lp_action + (1.0 - mask) * vp_action
+        mask = selected_mask.reshape(self.num_envs, 1) > 0.5
+        target = torch.where(mask, lp_action, vp_action)
+        if not torch.isfinite(target).all():
+            raise ValueError("selected candidate action must be finite")
         first = ~self.initialized
         self.last_output[first] = target[first]
         self.initialized[first] = True
@@ -232,9 +301,15 @@ class ActionBlender:
         emergency = emergency_switch.reshape(self.num_envs).bool()
         if switch.any():
             self.start_action[switch] = self.last_output[switch]
-            normal_steps = torch.full_like(self.total[switch], self.cfg.normal_blend_steps)
-            emergency_steps = torch.full_like(self.total[switch], self.cfg.emergency_blend_steps)
-            self.total[switch] = torch.where(emergency[switch], emergency_steps, normal_steps).clamp_min(1)
+            normal_steps = torch.full_like(
+                self.total[switch], self.cfg.normal_blend_steps
+            )
+            emergency_steps = torch.full_like(
+                self.total[switch], self.cfg.emergency_blend_steps
+            )
+            self.total[switch] = torch.where(
+                emergency[switch], emergency_steps, normal_steps
+            ).clamp_min(1)
             self.remaining[switch] = self.total[switch]
 
         blending = self.remaining > 0
@@ -242,10 +317,9 @@ class ActionBlender:
         if blending.any():
             completed = self.total[blending] - self.remaining[blending] + 1
             alpha = completed.to(target.dtype) / self.total[blending].to(target.dtype)
-            output[blending] = (
-                (1.0 - alpha[:, None]) * self.start_action[blending]
-                + alpha[:, None] * target[blending]
-            )
+            output[blending] = (1.0 - alpha[:, None]) * self.start_action[
+                blending
+            ] + alpha[:, None] * target[blending]
             self.remaining[blending] -= 1
         self.last_output.copy_(output)
         return output

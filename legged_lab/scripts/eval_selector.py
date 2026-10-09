@@ -20,11 +20,13 @@ from legged_lab.selector.dataset import SelectorShardDataset  # noqa: E402
 from legged_lab.selector.metrics import selector_metrics  # noqa: E402
 from legged_lab.selector.frozen_policy import assert_same_policy, dataset_policy_identity  # noqa: E402
 from legged_lab.selector.labels import dataset_safety_label_contract, validate_safety_label_contract  # noqa: E402
+from legged_lab.selector.feature_contract import dataset_feature_contract, validate_feature_contract  # noqa: E402
 from legged_lab.selector.model import CalibratedSelector, FeatureNormalizer, SelectorNetwork  # noqa: E402
 
 
 def load_selector(path: Path, device: torch.device) -> CalibratedSelector:
     artifact = torch.load(path, map_location="cpu", weights_only=False)
+    validate_feature_contract(artifact.get("selector_feature_contract"))
     cfg = SelectorConfig(**artifact["selector_config"])
     model = SelectorNetwork(cfg)
     model.load_state_dict(artifact["model_state_dict"], strict=True)
@@ -49,6 +51,7 @@ def main() -> None:
     validate_safety_label_contract(artifact.get("safety_label_contract"))
     assert_same_policy(artifact.get("frozen_policy", {}), dataset_policy_identity(dataset.manifest))
     dataset_safety_label_contract(dataset.manifest)
+    dataset_feature_contract(dataset.manifest)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
     probabilities, labels = [], []
     fault_metadata, terrain_levels = [], []
@@ -90,6 +93,7 @@ def main() -> None:
         "split": args.split,
         "frozen_policy": artifact["frozen_policy"],
         "safety_label_contract": artifact["safety_label_contract"],
+        "selector_feature_contract": artifact["selector_feature_contract"],
         "samples": len(dataset),
         "metrics": metrics,
         "breakdown": breakdown,

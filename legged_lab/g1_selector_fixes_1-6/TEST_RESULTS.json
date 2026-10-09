@@ -1,0 +1,39 @@
+{
+  "test_framework": "pytest; real PyTorch 2.8.0+cpu",
+  "tests": 65,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "test_files": [
+    "rsl_rl/tests/test_selector_safety_labels.py",
+    "rsl_rl/tests/test_selector_collection_v2.py",
+    "rsl_rl/tests/test_selector_training_v2.py",
+    "unitree_deploy_ws/src/g1_depth/test/test_depth_policy.py"
+  ],
+  "synthetic_training": {
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "epochs_per_seed": 1,
+    "train_eval_export_and_artifact_load": "passed",
+    "actual_robot_checkpoint_used": false
+  },
+  "syntax_changed_python_files": 23,
+  "git_diff_check": "passed",
+  "lint": "F821/F811/E9 passed for changed files except existing legacy annotations in camera_noise.py",
+  "not_executed": [
+    "Isaac Sim / GPU collection",
+    "4096 camera throughput",
+    "ROS message build",
+    "robot control",
+    "actual checkpoint behavior parity"
+  ],
+  "additional_legacy_ppo_tests": "Import blocked by rsl_rl.modules.actor_critic_rough absent in local partial snapshot; no full PPO-suite result claimed",
+  "delivery_checks": {
+    "installer_preflight_backup_install_idempotency": "passed",
+    "local_modification_preflight_rejection": "passed",
+    "patch_apply_and_all_replacement_hashes": "passed"
+  }
+}

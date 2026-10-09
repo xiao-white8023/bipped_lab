@@ -1,3 +1,24 @@
+# 中文导读
+# 文件用途：验证存档 RENet 与 selector 的策略来源、历史长度、双分支导出和数值精度兼容性。
+# 使用位置：通过 pytest 执行冻结策略和 selector 兼容回归；CUDA 用例在无 GPU 时跳过。
+# 说明：测试使用本地存档文件，生产默认 checkpoint 仍指向服务器路径。
+# 说明：runner 加载/更新仅属于测试覆盖，不表示 selector 监督训练会调用 RENet runner。
+#
+# 类、函数及方法说明（包含私有方法、内部函数和属性访问器）：
+# - archived：pytest 模块级 fixture，加载本地存档 checkpoint、原部署策略和冻结身份信息。
+# - production_policy_kwargs：解析实际训练配置源码提取网络参数，可覆盖 VP 历史长度和输出类型。
+# - test_real_checkpoint_loads_configurable_vp_and_preserves_deployed_ten_frame_actions：验证不同 VP 窗口可加载存档权重，十帧模式保持部署动作一致。
+# - test_real_checkpoint_runner_load_preserves_actor_and_critic_and_can_update：验证实际 runner 加载存档时保持核心权重和动作，并能按需恢复优化器更新。
+# - test_configured_vp_window_reaches_production_attention_and_gru：验证配置的 VP 历史长度确实作用于注意力和 GRU 的输入形状。
+# - test_dual_export_preserves_all_six_outputs_for_different_batch_sizes：验证导出并重载双分支模型后，不同批量的六个输出保持一致。
+# - test_parity_validation_rejects_same_weights_with_five_frame_vp：验证仅权重相同仍不够，错误的 VP 历史窗口会被动作一致性检查拒绝。
+# - test_policy_provenance_rejects_missing_or_different_underlying_model：验证旧数据、结构差异和参考模型哈希差异被拒绝，而路径搬迁允许。
+# - test_sensor_capture_time_uses_global_epoch_after_episode_reset：验证局部传感器时钟 reset 后仍正确计算全局采样时间。
+# - test_half_precision_probability_loss_and_gradient_are_finite：验证极端半精度概率下损失和梯度保持有限。
+# - test_cuda_adapter_validates_against_immutable_cpu_reference：验证 GPU 适配器与不迁移的 CPU 原部署策略保持动作一致。
+# - test_cuda_autocast_selector_retains_finite_probability_loss：验证 CUDA 自动混合精度下 selector 极端输出的概率、损失和梯度有限。
+# 中文导读结束
+
 """Regression coverage for the archived policy and selector data contract."""
 
 from __future__ import annotations
