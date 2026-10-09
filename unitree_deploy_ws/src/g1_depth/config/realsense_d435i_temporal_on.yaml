@@ -1,0 +1,28 @@
+/camera/camera:
+  ros__parameters:
+    # A/B 对照用文件：与 realsense_d435i.yaml 完全相同，只有
+    # temporal_filter.enable 一项为 true（旧行为）。
+    # 用法（其它参数一律不动，只切这一个变量）：
+    #   ros2 launch g1_control first_real_control.launch.py \
+    #     realsense_params:=/home/unitree/cjh/src/g1_depth/config/realsense_d435i_temporal_on.yaml
+    # 预期：temporal filter 是 alpha=0.4 的 IIR（30 fps 下平均滞后约 50 ms、
+    # 稳定时间约 80 ms），这层观测滞后在训练里不存在，也未被 action_delay
+    # （只延迟动作）覆盖，因此真机步态可能更"发飘/相位不对"。
+    # Native librealsense processing blocks. They operate on the 848x480 Z16
+    # stream before g1_depth projects it onto the policy camera rays.
+    spatial_filter.enable: false
+    spatial_filter.filter_magnitude: 2
+    spatial_filter.filter_smooth_alpha: 0.5
+    spatial_filter.filter_smooth_delta: 20
+    spatial_filter.holes_fill: 0
+
+    temporal_filter.enable: true
+    temporal_filter.filter_smooth_alpha: 0.4
+    temporal_filter.filter_smooth_delta: 20
+    temporal_filter.holes_fill: 0
+
+    # Preserve resolution/intrinsics and do not invent depth from neighbours.
+    decimation_filter.enable: false
+    disparity_filter.enable: false
+    disparity_to_depth.enable: false
+    hole_filling_filter.enable: false

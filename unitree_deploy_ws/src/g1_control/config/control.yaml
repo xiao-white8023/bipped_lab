@@ -1,0 +1,71 @@
+g1_renet_policy:
+  ros__parameters:
+    policy_path: /home/unitree/cjh/models/renet_dual_branch.pt
+    expected_policy_sha256: c512197e3c5e9951c3f183d5be4317777a29bba33be3535370b02d8282b2fb4e
+    inference_backend: tensorrt
+    policy_engine_path: /home/unitree/cjh/models/renet_policy_fp32_notf32.engine
+    expected_policy_engine_sha256: 6761e83826331db123fb9a4ef4bbaf8b6cfded928077c21cd6da5713d452118a
+    proprio_topic: /g1/proprio/policy_input
+    depth_topic: /g1/depth/policy_input
+    elevation_topic: /g1/elevation/policy_input
+    target_topic: /g1/policy/joint_target
+    event_topic: /g1/control/event
+    torch_num_threads: 1
+
+    # Starts in VP. Keep both remote features off until remote_inspector has
+    # established the real axes, signs, dead zone, and button bit mapping.
+    initial_estimator: vp
+    remote_commands_enabled: false
+    remote_mode_switch_enabled: false
+    command_deadzone: 0.10
+    command_x_range: [-0.4, 0.8]
+    command_y_range: [-0.4, 0.4]
+    command_yaw_range: [-1.57, 1.57]
+    command_x_axis_sign: 1.0
+    command_y_axis_sign: -1.0
+    command_yaw_axis_sign: -1.0
+
+    # Five policy frames = 0.10 s at the bridge's 50 Hz snapshot rate.
+    transition_steps: 5
+    report_every: 50
+
+g1_remote_inspector:
+  ros__parameters:
+    lowstate_topic: /lowstate
+    report_rate: 10.0
+
+g1_lowcmd_bridge:
+  ros__parameters:
+    lowstate_topic: /lowstate
+    lowcmd_topic: /lowcmd
+    target_topic: /g1/policy/joint_target
+    event_topic: /g1/control/event
+    status_topic: /g1/control/status
+    proprio_topic: /g1/proprio/policy_input
+    publish_rate: 500.0
+    status_rate: 50.0
+    proprio_rate: 50.0
+
+    # Bring-up gates. Keep both false/true respectively until the read-only
+    # remote test has verified the actual G1 button bits.
+    remote_buttons_enabled: false
+    dry_run: true
+    auto_release_motion_service: false
+    motion_request_topic: /api/motion_switcher/request
+    motion_response_topic: /api/motion_switcher/response
+    motion_response_timeout: 5.0
+    motion_retry_period: 2.0
+    start_button_bit: 2
+    select_button_bit: 3
+    policy_button_bit: 8
+
+    stand_duration: 3.0
+    damping_kd: 10.0
+
+g1_voice_announcer:
+  ros__parameters:
+    event_topic: /g1/control/event
+    voice_request_topic: /api/voice/request
+    voice_response_topic: /api/voice/response
+    speaker_id: 0
+    response_timeout: 5.0

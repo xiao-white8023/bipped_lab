@@ -554,6 +554,37 @@ def idle_when_commanded(
     is_idle = vel_magnitude < vel_threshold       # But not moving
     
     return (is_commanded & is_idle).float()
+
+
+def vp_idle_when_commanded(
+    env,
+    cmd_threshold: float = 0.2,
+    vel_threshold: float = 0.1,
+    ang_cmd_threshold: float = 0.2,
+    ang_vel_threshold: float = 0.1,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """Return a bounded idle cost for VP actions; use a negative reward weight.
+
+    Translation covers forward, backward and lateral commands. Pure turning
+    commands use yaw velocity instead. Commands/mode are captured before the
+    action so resampling a command at the end of a step cannot mislabel it.
+    Wrong-direction motion remains the responsibility of velocity tracking.
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    command = getattr(env, "_renet_reward_command", env.command_generator.command)
+    mask = getattr(env, "_renet_reward_mask", None)
+    if mask is None:
+        mask = env.renet_estimator_mask[:, 0]
+    commanded_translation = torch.linalg.vector_norm(command[:, :2], dim=-1) > cmd_threshold
+    # The XY norm is invariant under a yaw rotation.
+    idle_translation = torch.linalg.vector_norm(asset.data.root_lin_vel_w[:, :2], dim=-1) < vel_threshold
+    pure_turn = (~commanded_translation) & (command[:, 2].abs() > ang_cmd_threshold)
+    idle_turn = asset.data.root_ang_vel_w[:, 2].abs() < ang_vel_threshold
+    idle = (commanded_translation & idle_translation) | (pure_turn & idle_turn)
+    return (idle & (mask <= 0.5)).float()
+
+
 def stand_still_pose(
     env,  
     asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),

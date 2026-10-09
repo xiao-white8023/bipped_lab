@@ -39,6 +39,10 @@ class RolloutStorage:
             self.hidden_states = None
             self.rnd_state = None
             self.residual_gate = None
+            self.feet_height_valid = None
+            self.terrain_height_valid = None
+            self.next_proprio = None
+            self.next_proprio_valid = None
 
         def clear(self):
             self.__init__()
@@ -53,6 +57,9 @@ class RolloutStorage:
         actions_shape,
         rnd_state_shape=None,
         device="cpu",
+        feet_height_dim=0,
+        terrain_height_dim=0,
+        next_proprio_dim=0,
     ):
         # store inputs
         self.training_type = training_type
@@ -63,6 +70,22 @@ class RolloutStorage:
         self.privileged_obs_shape = privileged_obs_shape
         self.rnd_state_shape = rnd_state_shape
         self.actions_shape = actions_shape
+        self.feet_height_valid = (
+            torch.ones(num_transitions_per_env, num_envs, feet_height_dim, dtype=torch.bool, device=self.device)
+            if feet_height_dim > 0 else None
+        )
+        self.terrain_height_valid = (
+            torch.ones(num_transitions_per_env, num_envs, terrain_height_dim, dtype=torch.bool, device=self.device)
+            if terrain_height_dim > 0 else None
+        )
+        self.next_proprio = (
+            torch.zeros(num_transitions_per_env, num_envs, next_proprio_dim, device=self.device)
+            if next_proprio_dim > 0 else None
+        )
+        self.next_proprio_valid = (
+            torch.zeros(num_transitions_per_env, num_envs, 1, dtype=torch.bool, device=self.device)
+            if next_proprio_dim > 0 else None
+        )
 
         # Core 
         # [24,4096,960]
@@ -114,6 +137,19 @@ class RolloutStorage:
         self.actions[self.step].copy_(transition.actions)
         self.rewards[self.step].copy_(transition.rewards.view(-1, 1))
         self.dones[self.step].copy_(transition.dones.view(-1, 1))
+        if self.feet_height_valid is not None:
+            if transition.feet_height_valid is None:
+                raise ValueError("Feet-height validity is required for this rollout storage.")
+            self.feet_height_valid[self.step].copy_(transition.feet_height_valid)
+        if self.terrain_height_valid is not None:
+            if transition.terrain_height_valid is None:
+                raise ValueError("Missing terrain-height validity labels for this transition.")
+            self.terrain_height_valid[self.step].copy_(transition.terrain_height_valid)
+        if self.next_proprio is not None:
+            if transition.next_proprio is None or transition.next_proprio_valid is None:
+                raise ValueError("Next proprioception and validity are required for VP VAE training.")
+            self.next_proprio[self.step].copy_(transition.next_proprio)
+            self.next_proprio_valid[self.step].copy_(transition.next_proprio_valid)
 
         # for distillation
         if self.training_type == "distillation":
@@ -216,7 +252,11 @@ class RolloutStorage:
             ], self.dones[i]
 
     # for reinforcement learning with feedforward networks
-    def mini_batch_generator(self, num_mini_batches, num_epochs=8, include_residual_gate=False):
+    def mini_batch_generator(
+        self, num_mini_batches, num_epochs=8, include_residual_gate=False, include_feet_height_valid=False,
+        include_terrain_height_valid=False,
+        include_next_proprio=False,
+    ):
         if self.training_type != "rl":
             raise ValueError("This function is only available for reinforcement learning training.")
         batch_size = self.num_envs * self.num_transitions_per_env   ## 也就是说，我们现在手里有 98304 条 (s_t, a_t, r_t, ...) 数据。
@@ -241,6 +281,16 @@ class RolloutStorage:
         old_mu = self.mu.flatten(0, 1)
         old_sigma = self.sigma.flatten(0, 1)
         residual_gates = self.residual_gates.flatten(0, 1) if include_residual_gate else None
+        if include_feet_height_valid and self.feet_height_valid is None:
+            raise ValueError("Feet-height validity storage was not enabled.")
+        feet_height_valid = self.feet_height_valid.flatten(0, 1) if include_feet_height_valid else None
+        if include_terrain_height_valid and self.terrain_height_valid is None:
+            raise ValueError("Terrain-height validity storage was not enabled.")
+        terrain_height_valid = self.terrain_height_valid.flatten(0, 1) if include_terrain_height_valid else None
+        if include_next_proprio and self.next_proprio is None:
+            raise ValueError("Next-proprioception storage was not enabled.")
+        next_proprio = self.next_proprio.flatten(0, 1) if include_next_proprio else None
+        next_proprio_valid = self.next_proprio_valid.flatten(0, 1) if include_next_proprio else None
 
         # For RND
         if self.rnd_state_shape is not None:
@@ -294,6 +344,12 @@ class RolloutStorage:
                 )
                 if include_residual_gate:
                     batch = (*batch, residual_gate_batch)
+                if include_feet_height_valid:
+                    batch = (*batch, feet_height_valid[batch_idx])
+                if include_terrain_height_valid:
+                    batch = (*batch, terrain_height_valid[batch_idx])
+                if include_next_proprio:
+                    batch = (*batch, next_proprio[batch_idx], next_proprio_valid[batch_idx])
                 yield batch
 
     # for reinfrocement learning with recurrent networks

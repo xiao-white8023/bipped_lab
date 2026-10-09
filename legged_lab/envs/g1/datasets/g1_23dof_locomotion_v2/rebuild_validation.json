@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "rebuild_from_packaged_snapshots_passed": true,
+  "all_12_files_sha256_identical": {
+    "sources/walk_forward_turns.pkl": "1163d872b3c993d2e9ee1e2e28be1d710b047d8fadacb41d965ddffd99064cf8",
+    "amp/walk_forward_turns.txt": "ecf3babc125cbc6bd71b09d7bd296ee4b51195cf7cb9298a0b4e24c211afec14",
+    "visualization/walk_forward_turns.txt": "46937e29e96a9b64660b3ec046b501979b5949f35742a1217a3c7587034cdac5",
+    "sources/walk_backward.pkl": "0d2496efa4ea9e0f022a4652a46b36867398539f961ae2af8d765cc40ef4bbe4",
+    "amp/walk_backward.txt": "f6b679760758a33555549f9d6927715e25939e0aa00fdd56008212a128bcbcba",
+    "visualization/walk_backward.txt": "1a2916d3a93487fb1abdf438eff0e610fcb6a734eed1854a6d994c7de7694066",
+    "sources/walk_left.pkl": "6468fcfc162d49a00890e3e9a95cc7c194c3b61a3ee7af2c79e06c305cc98bb5",
+    "amp/walk_left.txt": "aa966b3a5e84e4d790c3f4b4c6aa3c76d5d7fc3fb991cbc2facda10de6bb27ea",
+    "visualization/walk_left.txt": "b36997151456ab6689b0df6ad76e419c3ff9f13af9257c3ad4f598cd6020936a",
+    "sources/walk_right.pkl": "42c69478dca66cb210a7b6cb841cc87705d725cacda08b47f377298156635ff6",
+    "amp/walk_right.txt": "7ccbe56901211401be670d383ce48bff680cd63470797f7462da0323bcb67379",
+    "visualization/walk_right.txt": "ce11183126f85f6d173a78e5e7f4d04a5f216d931636c0164faa17a0b5066a23"
+  }
+}

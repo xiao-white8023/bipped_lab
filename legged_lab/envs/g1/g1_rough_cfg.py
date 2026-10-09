@@ -56,6 +56,21 @@ from legged_lab.sensors.grouped_ray_caster import GroupedRayCasterCameraCfg
 import os
 import legged_lab
 LEGGED_LAB_ROOT = os.path.dirname(legged_lab.__file__)
+# AMP 格式开关：50 = 原始 PKL 四段的 no_ankle 格式；58 = 同四段含脚踝格式。
+# 只修改这一行即可同步切换；与 RENet_cfg.py 的开关相互独立。
+G1_ROUGH_AMP_DIM = 50
+if type(G1_ROUGH_AMP_DIM) is not int or G1_ROUGH_AMP_DIM not in (50, 58):
+    raise ValueError("G1_ROUGH_AMP_DIM must be 50 or 58.")
+G1_ROUGH_AMP_DATASET_NAME = (
+    "motion_amp_expert_no_ankle" if G1_ROUGH_AMP_DIM == 50 else "motion_amp_expert"
+)
+G1_ROUGH_AMP_DATASET_DIR = (
+    f"{LEGGED_LAB_ROOT}/envs/g1/datasets/{G1_ROUGH_AMP_DATASET_NAME}"
+)
+G1_ROUGH_AMP_CLIP_NAMES = (
+    "stand_to_walk", "walk_turn_around", "walk_turn_left", "walk_turn_right",
+)
+G1_ROUGH_AMP_DISPLAY_DIR = f"{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_visualization/original_pkl"
 from legged_lab.assets.g1.unitree import G1_CFG
 
 
@@ -210,7 +225,11 @@ class Reward:
 
 @configclass
 class G129WALK_ROUGHENVCFG:
-    amp_motion_files_display=[f'{LEGGED_LAB_ROOT}/envs/g1/datasets/motion_visualization/fallAndGetUp1_subject1.txt']
+    amp_observation_dim: int = G1_ROUGH_AMP_DIM
+    amp_motion_files_display = [
+        f"{G1_ROUGH_AMP_DISPLAY_DIR}/{name}.txt"
+        for name in G1_ROUGH_AMP_CLIP_NAMES
+    ]
     device: str = "cuda:0"
     scene: BaseSceneCfg = BaseSceneCfg(  
         max_episode_length_s=20.0,
@@ -218,7 +237,7 @@ class G129WALK_ROUGHENVCFG:
         env_spacing=2.5,
         robot=G1_23CFG,
         terrain_type="generator",
-        terrain_generator=ROUGH_TERRAINS_CFG,# EXTREME_PARKOUR_TERRAINS_CFG,
+        terrain_generator=Flat_terrain,# EXTREME_PARKOUR_TERRAINS_CFG,
         max_init_terrain_level=5,
         height_scanner=HeightScannerCfg(
             enable_height_scan=False,
@@ -448,23 +467,6 @@ class G129WALK_ROUGHAGENTENV:
         actor_hidden_dims=[512, 256, 128],
         critic_hidden_dims=[512, 256, 128],
         activation="elu",
-        # CnnMlp=CnnMlpCfg(
-        #         input_dim = (18,32),
-        #         input_channels = 8,
-        #         output_channels = [4],
-        #         kernel_size = [3],
-        #         stride = [1],
-        #         dilation = [1],
-        #         padding = "zeros",
-        #         norm = "none", # 归一化方式（可以选不加 'none'，或者 'batch'、'layer'）
-        #         activation = "elu", # 激活函数的名字（比如 'elu'、'relu'）
-        #         max_pool = True, # 是否在卷积后加最大池化层（进一步降维）
-        #         global_pool = "none", # 设定在所有卷积层结束后，要不要加全局池化，把整个特征图直接压缩成 1×1 的大小。
-        #         flatten = True, # 设为 True 时，网络会在最后把 2D 的图像特征图（Height x Width x Channels）强行压扁成一个一维的特征向量。这样才能和机器人的 1D 本体数据（关节角度等）进行拼接。
-        #         mlp_hidden_dim = [256,256],
-        #         mlp_output_dim = 128,
-        #         mlp_activation = "relu"
-        #     )
         CnnMlp=None
     )
     algorithm = RslRlPpoAlgorithmCfg(
@@ -500,17 +502,14 @@ class G129WALK_ROUGHAGENTENV:
 
     # amp parameter
     amp_reward_coef = 0.3  # 风格奖励系数 动作像专家数据。
-    amp_motion_files = [    f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
-        "motion_amp_expert_no_ankle/stand_to_walk.txt",
-
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
-        "motion_amp_expert_no_ankle/walk_turn_around.txt",
-
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
-        "motion_amp_expert_no_ankle/walk_turn_left.txt",
-
-        f"{LEGGED_LAB_ROOT}/envs/g1/datasets/"
-        "motion_amp_expert_no_ankle/walk_turn_right.txt",]
+    # Original PKLs only; do not load revised *_v1 clips or unrelated legacy TXT.
+    amp_observation_dim = G1_ROUGH_AMP_DIM
+    amp_joint_count = (G1_ROUGH_AMP_DIM - 12) // 2
+    amp_data_class_name = "G1AnkleAMPLoader" if G1_ROUGH_AMP_DIM == 58 else "AMPLoader"
+    amp_motion_files = [
+        f"{G1_ROUGH_AMP_DATASET_DIR}/{name}.txt"
+        for name in G1_ROUGH_AMP_CLIP_NAMES
+    ]
     amp_num_preload_transitions = 200000 
     '''
     Taskfinal​=Taskraw​×[0.7+(1−0.7)×D] 判别器输入的就是0或1 如果任务奖励100分 完成的很好 但是不像专家数据 判别器打0分 则作中的任务奖励只有70分 

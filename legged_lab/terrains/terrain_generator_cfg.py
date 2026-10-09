@@ -88,7 +88,6 @@ ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
             border_width=1.0,
             holes=False,
         ),
-
         "pyramid_stairs_28": terrain_gen.MeshPyramidStairsTerrainCfg(                  
             proportion=0.1,
             step_height_range=(0.0, 0.23),
@@ -106,12 +105,12 @@ ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
             holes=False,
         ),
         "boxes": terrain_gen.MeshRandomGridTerrainCfg(
-            proportion=0.1, grid_width=0.45, grid_height_range=(0.0, 0.15), platform_width=3.0        
+            # IsaacLab requires a positive leftover border: 8 m / 0.2 m fills it exactly.
+            proportion=0.1, grid_width=0.21, grid_height_range=(0.0, 0.15), platform_width=3.0
         ),
         "high_platform": terrain_gen.MeshPitTerrainCfg(
             proportion=0.1, pit_depth_range=(0.05, 0.3), platform_width=3.0, double_pit=True
         ),
-
         # 坡
         "up_slope_terrain":terrain_gen.HfPyramidSlopedTerrainCfg(
                 proportion=0.1,
@@ -133,21 +132,7 @@ ROUGH_TERRAINS_CFG = TerrainGeneratorCfg(
         )
     },
 )
-        # "pyramid_stairs_inv_0.28_perlin": terrain_gen_perlin.PerlinInvertedPyramidStairsTerrainCfg(
-        #     proportion=0.99,
-        #     step_height_range=(0.23, 0.23),
-        #     step_width=0.28,
-        #     platform_width=3,
-        #     border_width=1.0,
-        #     perlin_cfg=terrain_gen_perlin.PerlinPlaneTerrainCfg(
-        #         noise_scale=0.05,
-        #         noise_frequency=20,
-        #         fractal_octaves=2,
-        #         fractal_lacunarity=2.0,
-        #         fractal_gain=0.25,
-        #         centering=True,
-        #     )
-        # ),
+
 ROUGH_PERLIN_TERRAINS_CFG=TerrainGeneratorCfg(
     seed=0,
     size=(8.0, 8.0),

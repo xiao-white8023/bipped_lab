@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from itertools import chain
+import math
 
 import torch
 import torch.nn as nn
@@ -54,6 +55,7 @@ class AMPPPO:
         lp_terrain_recon_coef: float = 0.0,
         lp_terrain_recon_warmup_iters: int = 0,
         terrain_recon_target_clip: float = 1.0,
+        terrain_recon_target_normalization: str = "batch",
         terrain_scan_dim: int = 187,
         vel_dim: int = 3,
         terrain_recon_front_only: bool = True,
@@ -67,6 +69,13 @@ class AMPPPO:
         feet_height_warmup_iters: int = 0,
         feet_height_dim: int = 2,
         feet_height_in_critic_offset: int = 0,
+        lp_feet_height_coef: float = 0.0,
+        lp_feet_height_warmup_iters: int = 0,
+        use_feet_height_valid_mask: bool = False,
+        use_terrain_height_valid_mask: bool = False,
+        vp_vae_coef: float = 0.0,
+        vp_vae_beta: float = 0.01,
+        vp_vae_warmup_iters: int = 0,
     ):
         # device-related parameters
         self.device = device
@@ -169,6 +178,9 @@ class AMPPPO:
         self.lp_terrain_recon_coef = lp_terrain_recon_coef
         self.lp_terrain_recon_warmup_iters = lp_terrain_recon_warmup_iters
         self.terrain_recon_target_clip = terrain_recon_target_clip
+        if terrain_recon_target_normalization not in ("batch", "fixed"):
+            raise ValueError("terrain_recon_target_normalization must be 'batch' or 'fixed'.")
+        self.terrain_recon_target_normalization = terrain_recon_target_normalization
         self.terrain_scan_dim = terrain_scan_dim
         self.vel_dim = vel_dim
         self.current_iteration = 0
@@ -178,12 +190,37 @@ class AMPPPO:
         self.vel_obs_start_idx = (self.critic_history_len - 1) * self.single_critic_dim + self.vel_in_critic_offset
         self.feet_height_coef = feet_height_coef
         self.feet_height_warmup_iters = feet_height_warmup_iters
+        self.lp_feet_height_coef = lp_feet_height_coef
+        self.lp_feet_height_warmup_iters = lp_feet_height_warmup_iters
+        self.use_feet_height_valid_mask = use_feet_height_valid_mask
+        self.use_terrain_height_valid_mask = use_terrain_height_valid_mask
+        if not all(math.isfinite(value) and value >= 0 for value in (vp_vae_coef, vp_vae_beta)):
+            raise ValueError("VP VAE coefficient and beta must be finite and nonnegative.")
+        if type(vp_vae_warmup_iters) is not int or vp_vae_warmup_iters < 0:
+            raise ValueError("VP VAE warmup must be a nonnegative integer.")
+        self.vp_vae_coef = vp_vae_coef
+        self.vp_vae_beta = vp_vae_beta
+        self.vp_vae_warmup_iters = vp_vae_warmup_iters
+        self.use_vp_vae = getattr(policy, "use_vp_vae", False) and vp_vae_coef > 0
+        if vp_vae_coef > 0 and not getattr(policy, "use_vp_vae", False):
+            raise ValueError("VP VAE loss requires a multi-head VP policy.")
+        if self.use_vp_vae and (policy.is_recurrent or (self.symmetry and self.symmetry["use_data_augmentation"])):
+            raise ValueError("VP VAE targets require a feedforward rollout without symmetry augmentation.")
+        if use_terrain_height_valid_mask and policy.is_recurrent:
+            raise ValueError("Terrain-height validity currently requires a feedforward rollout generator.")
+        if use_terrain_height_valid_mask and self.symmetry and self.symmetry["use_data_augmentation"]:
+            raise ValueError("Terrain-height validity needs a matching label transform for symmetry augmentation.")
+        if lp_feet_height_coef > 0 and not getattr(policy, "use_lp_feet_height_prediction", False):
+            raise ValueError("LP feet-height loss requires use_lp_feet_height_prediction=True.")
+        if use_feet_height_valid_mask and policy.is_recurrent:
+            raise ValueError("Feet-height validity currently requires a feedforward rollout generator.")
+        if use_feet_height_valid_mask and self.symmetry and self.symmetry["use_data_augmentation"]:
+            raise ValueError("Feet-height validity needs a matching label transform for symmetry augmentation.")
         self.feet_height_dim = feet_height_dim
         self.feet_height_in_critic_offset = feet_height_in_critic_offset
         self.feet_height_obs_start_idx = (
             (self.critic_history_len - 1) * self.single_critic_dim + self.feet_height_in_critic_offset
         )
-
         self.terrain_front_indices = None
         if terrain_recon_front_only and terrain_recon_coef > 0:
             resolution = 0.1
@@ -204,9 +241,11 @@ class AMPPPO:
         if terrain_recon_coef > 0:
             print("[AMPPPO] Terrain reconstruction AUX TASK enabled:")
             print(f"  - coef: {terrain_recon_coef}, warmup: {terrain_recon_warmup_iters} iters")
+            print(f"  - target normalization: {terrain_recon_target_normalization}")
             print(f"  - front_only: {terrain_recon_front_only}, predict {self.terrain_recon_target_dim} points")
         if lp_terrain_recon_coef > 0:
-            print("[AMPPPO] LP full terrain reconstruction AUX TASK enabled:")
+            region = "front" if getattr(self.policy, "lp_terrain_front_indices", None) is not None else "full"
+            print(f"[AMPPPO] LP {region} terrain reconstruction AUX TASK enabled:")
             print(
                 f"  - coef: {lp_terrain_recon_coef}, "
                 f"warmup: {lp_terrain_recon_warmup_iters} iters"
@@ -215,6 +254,9 @@ class AMPPPO:
         if feet_height_coef > 0:
             print("[AMPPPO] Feet height AUX TASK enabled:")
             print(f"  - coef: {feet_height_coef}, warmup: {feet_height_warmup_iters} iters")
+        if lp_feet_height_coef > 0:
+            print("[AMPPPO] LP feet height AUX TASK enabled:")
+            print(f"  - coef: {lp_feet_height_coef}, warmup: {lp_feet_height_warmup_iters} iters")
 
     def init_storage(
         self, training_type, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, actions_shape
@@ -234,14 +276,26 @@ class AMPPPO:
             actions_shape,
             rnd_state_shape,
             self.device,
+            feet_height_dim=self.feet_height_dim if self.use_feet_height_valid_mask else 0,
+            terrain_height_dim=self.terrain_scan_dim if self.use_terrain_height_valid_mask else 0,
+            next_proprio_dim=self.policy.single_proprio_dim if self.use_vp_vae else 0,
         )
 
-    def act(self, obs, critic_obs, amp_obs):
+    def act(self, obs, critic_obs, amp_obs, feet_height_valid=None, terrain_height_valid=None):
+        if self.use_terrain_height_valid_mask:
+            if terrain_height_valid is None or terrain_height_valid.shape != (obs.shape[0], self.terrain_scan_dim):
+                raise ValueError("Expected terrain_height_valid with shape (num_envs, terrain_scan_dim).")
+            self.transition.terrain_height_valid = terrain_height_valid.to(self.device).detach().clone()
+        if self.use_feet_height_valid_mask:
+            if feet_height_valid is None or feet_height_valid.shape != (obs.shape[0], self.feet_height_dim):
+                raise ValueError("Expected feet_height_valid with shape (num_envs, feet_height_dim).")
+            # Capture the labels for s_t, before env.step can reset sensors to s_{t+1}.
+            self.transition.feet_height_valid = feet_height_valid.to(self.device).detach().clone()
         if self.policy.is_recurrent:
             self.transition.hidden_states = self.policy.get_hidden_states()
         # compute the actions and values
         self.transition.actions = self.policy.act(obs).detach()
-        self.transition.values = self.policy.evaluate(critic_obs).detach()
+        self.transition.values = self._evaluate_critic(critic_obs, obs).detach()
         self.transition.actions_log_prob = self.policy.get_actions_log_prob(self.transition.actions).detach()
         self.transition.action_mean = self.policy.action_mean.detach()
         self.transition.action_sigma = self.policy.action_std.detach()
@@ -251,11 +305,19 @@ class AMPPPO:
         self.amp_transition.observations = amp_obs
         return self.transition.actions
 
-    def process_env_step(self, rewards, dones, infos, amp_obs):
+    def process_env_step(self, rewards, dones, infos, amp_obs, next_proprio=None):
         # Record the rewards and dones
         # Note: we clone here because later on we bootstrap the rewards based on timeouts
         self.transition.rewards = rewards.clone()
         self.transition.dones = dones
+        if self.use_vp_vae:
+            expected = (self.transition.observations.shape[0], self.policy.single_proprio_dim)
+            if next_proprio is None or next_proprio.shape != expected:
+                raise ValueError(f"Expected clean next proprioception with shape {expected}.")
+            target = next_proprio.to(self.device).detach()
+            valid = ~dones.to(self.device).bool().reshape(-1, 1) & torch.isfinite(target).all(dim=1, keepdim=True)
+            self.transition.next_proprio = torch.where(valid, target, 0.0).clone()
+            self.transition.next_proprio_valid = valid.clone()
 
         # Compute the intrinsic rewards and add to extrinsic rewards
         if self.rnd:
@@ -282,9 +344,14 @@ class AMPPPO:
         self.amp_transition.clear()
         self.policy.reset(dones)
 
-    def compute_returns(self, last_critic_obs):
+    def _evaluate_critic(self, critic_obs, actor_obs=None, **kwargs):
+        if hasattr(self.policy, "get_critic_observation_contract"):
+            return self.policy.evaluate(critic_obs, actor_observations=actor_obs, **kwargs)
+        return self.policy.evaluate(critic_obs, **kwargs)
+
+    def compute_returns(self, last_critic_obs, last_actor_obs=None):
         # compute value for the last step
-        last_values = self.policy.evaluate(last_critic_obs).detach()
+        last_values = self._evaluate_critic(last_critic_obs, last_actor_obs).detach()
         self.storage.compute_returns(
             last_values, self.gamma, self.lam, normalize_advantage=not self.normalize_advantage_per_mini_batch
         )
@@ -295,6 +362,69 @@ class AMPPPO:
         if iteration >= warmup_iters:
             return target_weight
         return target_weight * (iteration / warmup_iters)
+
+    def _prepare_vp_terrain_target(self, target, valid=None):
+        target = target.detach()
+        if valid is not None:
+            valid = valid.bool() & torch.isfinite(target)
+            target = torch.where(valid, target, 0.0)
+        if self.terrain_recon_target_clip > 0:
+            target = target.clamp(-self.terrain_recon_target_clip, self.terrain_recon_target_clip)
+        if self.terrain_recon_target_normalization == "batch":
+            if valid is None:
+                target = (target - target.mean()) / target.std().clamp_min(1e-6)
+            else:
+                values = target[valid]
+                if values.numel():
+                    target = torch.where(valid, (target - values.mean()) / values.std(unbiased=False).clamp_min(1e-6), 0.0)
+        return target
+
+    @staticmethod
+    def _terrain_height_mse(prediction, target, valid=None):
+        if valid is None:
+            return nn.functional.mse_loss(prediction, target)
+        valid = valid.bool() & torch.isfinite(target)
+        # Mask before arithmetic so invalid NaNs cannot poison the backward pass.
+        errors = (torch.where(valid, prediction, 0.0) - torch.where(valid, target, 0.0)).square()
+        return errors.sum() / valid.sum().clamp_min(1)
+
+    @staticmethod
+    def _feet_height_mse(prediction, target, valid=None):
+        if valid is None:
+            return nn.functional.mse_loss(prediction, target)
+        valid = valid.bool() & torch.isfinite(target)
+        safe_target = torch.where(valid, target, 0.0)
+        errors = (prediction - safe_target).square()
+        return torch.where(valid, errors, 0.0).sum() / valid.sum().clamp_min(1)
+
+    @staticmethod
+    def _vp_vae_losses(prediction, target, mu, logvar, valid):
+        """Mean per-coordinate reconstruction; sum KL over latent coordinates."""
+        valid = valid.bool().reshape(-1) & torch.isfinite(target).all(dim=1)
+        # Index before arithmetic, so invalid NaN labels cannot poison gradients.
+        reconstruction = (prediction[valid] - target[valid]).square().sum()
+        reconstruction = reconstruction / (valid.sum().clamp_min(1) * target.shape[1])
+        kl = -0.5 * (1 + logvar[valid] - mu[valid].square() - logvar[valid].exp()).sum()
+        return reconstruction, kl / valid.sum().clamp_min(1)
+
+    def get_auxiliary_training_contract(self):
+        contract = {
+            "version": 1,
+            "vp_terrain_target_normalization": self.terrain_recon_target_normalization,
+            "terrain_target_clip": self.terrain_recon_target_clip,
+            "feet_height_target": "sensor_z_minus_valid_hit_mean",
+            "feet_height_valid_mask": self.use_feet_height_valid_mask,
+            "terrain_height_valid_mask": self.use_terrain_height_valid_mask,
+            "lp_feet_height_prediction": getattr(self.policy, "use_lp_feet_height_prediction", False),
+        }
+        if getattr(self.policy, "use_vp_vae", False):
+            contract.update(version=2, vp_vae={
+                "target": "clean_next_critic_proprio", "target_dim": self.policy.single_proprio_dim,
+                "terminal_transitions": "exclude_all_dones", "reconstruction_reduction": "coordinate_mean",
+                "kl_reduction": "latent_sum_sample_mean", "beta": self.vp_vae_beta,
+                "coefficient": self.vp_vae_coef, "warmup_iters": self.vp_vae_warmup_iters,
+            })
+        return contract
 
     def _amp_mini_batch_generator(self, num_updates: int, mini_batch_size: int):
         """Yield paired policy and expert AMP mini-batches."""
@@ -312,6 +442,7 @@ class AMPPPO:
         """Compute the discriminator loss for one AMP data source."""
         policy_state, policy_next_state = sample_amp_policy
         expert_state, expert_next_state = sample_amp_expert
+        raw_policy_state, raw_expert_state = policy_state, expert_state
         if normalizer is not None:
             with torch.no_grad():
                 policy_state = normalizer.normalize_torch(policy_state, self.device)
@@ -324,7 +455,7 @@ class AMPPPO:
         expert_loss = torch.nn.MSELoss()(expert_d, torch.ones(expert_d.size(), device=self.device))
         policy_loss = torch.nn.MSELoss()(policy_d, -torch.ones(policy_d.size(), device=self.device))
         amp_loss = 0.5 * (expert_loss + policy_loss)
-        grad_pen_loss = discriminator.compute_grad_pen(*sample_amp_expert, lambda_=10)
+        grad_pen_loss = discriminator.compute_grad_pen(expert_state, expert_next_state, lambda_=10)
         total_loss = self.amploss_coef * (amp_loss + grad_pen_loss)
         metrics = {
             "loss": amp_loss,
@@ -334,7 +465,7 @@ class AMPPPO:
         }
         normalizer_update = None
         if normalizer is not None:
-            normalizer_update = (normalizer, policy_state, expert_state)
+            normalizer_update = (normalizer, raw_policy_state, raw_expert_state)
         return total_loss, metrics, normalizer_update
 
     def _compute_amp_loss(self, sample_amp):
@@ -382,6 +513,11 @@ class AMPPPO:
         mean_terrain_recon_loss = 0
         mean_lp_terrain_recon_loss = 0
         mean_feet_height_loss = 0
+        mean_lp_feet_height_loss = 0
+        mean_feet_height_valid_fraction = 0
+        mean_terrain_height_valid_fraction = 0
+        mean_vae_reconstruction = mean_vae_kl = mean_vae_total = mean_vae_valid_fraction = 0.0
+        vae_weight = self._get_warmup_weight(self.current_iteration, self.vp_vae_warmup_iters, self.vp_vae_coef)
         vel_weight = self._get_warmup_weight(
             self.current_iteration, self.vel_estimation_warmup_iters, self.vel_estimation_coef
         )
@@ -396,12 +532,20 @@ class AMPPPO:
         feet_height_weight = self._get_warmup_weight(
             self.current_iteration, self.feet_height_warmup_iters, self.feet_height_coef
         )
+        lp_feet_height_weight = self._get_warmup_weight(
+            self.current_iteration, self.lp_feet_height_warmup_iters, self.lp_feet_height_coef
+        )
 
         # generator for mini batches
         if self.policy.is_recurrent:
             generator = self.storage.recurrent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         else:
-            generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs) # 分成4个批次 每一个批次利用5轮
+            generator = self.storage.mini_batch_generator(
+                self.num_mini_batches, self.num_learning_epochs,
+                include_feet_height_valid=self.use_feet_height_valid_mask,
+                include_terrain_height_valid=self.use_terrain_height_valid_mask,
+                include_next_proprio=self.use_vp_vae,
+            )
 
         # AMP 算法中专门为判别器提供「机器人生成的运动数据」的采样生成器
         # 专家数据（来自 amp_data，是 “真” 数据）。
@@ -417,6 +561,20 @@ class AMPPPO:
 
         # iterate over batches
         for sample, sample_amp_policy, sample_amp_expert in zip(generator, amp_policy_generator, amp_expert_generator):
+            if self.use_vp_vae:
+                next_proprio_batch, next_proprio_valid_batch = sample[-2:]
+                sample = sample[:-2]
+                mean_vae_valid_fraction += next_proprio_valid_batch.float().mean().item()
+            terrain_height_valid_batch = None
+            if self.use_terrain_height_valid_mask:
+                terrain_height_valid_batch = sample[-1]
+                sample = sample[:-1]
+                mean_terrain_height_valid_fraction += terrain_height_valid_batch.float().mean().item()
+            feet_height_valid_batch = None
+            if self.use_feet_height_valid_mask:
+                feet_height_valid_batch = sample[-1]
+                sample = sample[:-1]
+                mean_feet_height_valid_fraction += feet_height_valid_batch.float().mean().item()
             (
                 obs_batch,
                 critic_obs_batch,
@@ -470,7 +628,9 @@ class AMPPPO:
             self.policy.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0])
             actions_log_prob_batch = self.policy.get_actions_log_prob(actions_batch)
             # -- critic
-            value_batch = self.policy.evaluate(critic_obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1])
+            value_batch = self._evaluate_critic(
+                critic_obs_batch, obs_batch, masks=masks_batch, hidden_states=hid_states_batch[1]
+            )
             # -- entropy
             # we only keep the entropy of the first augmentation (the original one)
             mu_batch = self.policy.action_mean[:original_batch_size]
@@ -563,17 +723,15 @@ class AMPPPO:
                     terrain_target_full = critic_obs_batch[:, -self.terrain_scan_dim :].detach()
                     if self.terrain_front_indices is not None:
                         terrain_target = terrain_target_full[:, self.terrain_front_indices]
+                        terrain_valid = (terrain_height_valid_batch[:, self.terrain_front_indices]
+                                         if terrain_height_valid_batch is not None else None)
                     else:
                         terrain_target = terrain_target_full
-                    if self.terrain_recon_target_clip > 0:
-                        terrain_target = terrain_target.clamp(
-                            -self.terrain_recon_target_clip,
-                            self.terrain_recon_target_clip,
-                        )
-                    target_mean = terrain_target.mean()
-                    target_std = terrain_target.std().clamp(min=1e-6)
-                    terrain_target_norm = (terrain_target - target_mean) / target_std
-                    terrain_recon_loss = nn.functional.mse_loss(terrain_pred, terrain_target_norm)
+                        terrain_valid = terrain_height_valid_batch
+                    if terrain_valid is not None:
+                        terrain_valid = terrain_valid & torch.isfinite(terrain_target)
+                    terrain_target = self._prepare_vp_terrain_target(terrain_target, terrain_valid)
+                    terrain_recon_loss = self._terrain_height_mse(terrain_pred, terrain_target, terrain_valid)
 
             lp_terrain_recon_loss = torch.tensor(0.0, device=self.device)
             if (
@@ -584,14 +742,23 @@ class AMPPPO:
                 lp_terrain_pred = self.policy.predict_lp_terrain()
                 if lp_terrain_pred is not None:
                     lp_terrain_target = critic_obs_batch[:, -self.terrain_scan_dim :].detach()
+                    lp_terrain_valid = terrain_height_valid_batch
+                    lp_indices = getattr(self.policy, "lp_terrain_front_indices", None)
+                    if lp_indices is not None:
+                        lp_terrain_target = lp_terrain_target.index_select(1, lp_indices)
+                        if lp_terrain_valid is not None:
+                            lp_terrain_valid = lp_terrain_valid.index_select(1, lp_indices)
+                    if lp_terrain_valid is not None:
+                        lp_terrain_valid = lp_terrain_valid & torch.isfinite(lp_terrain_target)
                     if self.terrain_recon_target_clip > 0:
                         lp_terrain_target = lp_terrain_target.clamp(
                             -self.terrain_recon_target_clip,
                             self.terrain_recon_target_clip,
                         )
-                    lp_terrain_recon_loss = nn.functional.mse_loss(
+                    lp_terrain_recon_loss = self._terrain_height_mse(
                         lp_terrain_pred,
                         lp_terrain_target,
+                        lp_terrain_valid,
                     )
 
             feet_height_loss = torch.tensor(0.0, device=self.device)
@@ -606,14 +773,36 @@ class AMPPPO:
                         :,
                         self.feet_height_obs_start_idx : self.feet_height_obs_start_idx + self.feet_height_dim,
                     ].detach()
-                    feet_height_loss = nn.functional.mse_loss(feet_height_pred, feet_height_target)
+                    feet_height_loss = self._feet_height_mse(
+                        feet_height_pred, feet_height_target, feet_height_valid_batch
+                    )
+
+            lp_feet_height_loss = torch.tensor(0.0, device=self.device)
+            if lp_feet_height_weight > 0:
+                lp_feet_height_pred = self.policy.predict_lp_feet_height()
+                if lp_feet_height_pred is not None:
+                    feet_height_target = critic_obs_batch[
+                        :, self.feet_height_obs_start_idx : self.feet_height_obs_start_idx + self.feet_height_dim
+                    ].detach()
+                    lp_feet_height_loss = self._feet_height_mse(
+                        lp_feet_height_pred, feet_height_target, feet_height_valid_batch
+                    )
 
             lp_supervised_loss = torch.tensor(0.0, device=self.device)
             vp_supervised_loss = torch.tensor(0.0, device=self.device)
+            vae_reconstruction = vae_kl = vae_loss = torch.tensor(0.0, device=self.device)
+            if self.use_vp_vae:
+                prediction, mu, logvar = self.policy.predict_next_proprio()
+                vae_reconstruction, vae_kl = self._vp_vae_losses(
+                    prediction, next_proprio_batch, mu, logvar, next_proprio_valid_batch
+                )
+                vae_loss = vae_weight * (vae_reconstruction + self.vp_vae_beta * vae_kl)
+                loss += vae_loss
             if use_renet_separate_supervision:
                 lp_supervised_loss = (
                     vel_weight * lp_vel_loss
                     + lp_terrain_weight * lp_terrain_recon_loss
+                    + lp_feet_height_weight * lp_feet_height_loss
                 )
                 vp_supervised_loss = (
                     vel_weight * vp_vel_loss
@@ -625,6 +814,8 @@ class AMPPPO:
                 loss += vel_weight * vel_loss + terrain_weight * terrain_recon_loss
                 loss += lp_terrain_weight * lp_terrain_recon_loss
                 loss += feet_height_weight * feet_height_loss
+                loss += lp_feet_height_weight * lp_feet_height_loss
+            vp_supervised_loss = vp_supervised_loss + vae_loss
 
             # Symmetry loss
             if self.symmetry:
@@ -671,21 +862,14 @@ class AMPPPO:
                 rnd_loss = mseloss(predicted_embedding, target_embedding)
 
             # Discriminator loss.
-            policy_state, policy_next_state = sample_amp_policy
-            expert_state, expert_next_state = sample_amp_expert
-            if self.amp_normalizer is not None:
-                with torch.no_grad():
-                    policy_state = self.amp_normalizer.normalize_torch(policy_state, self.device)
-                    policy_next_state = self.amp_normalizer.normalize_torch(policy_next_state, self.device)
-                    expert_state = self.amp_normalizer.normalize_torch(expert_state, self.device)
-                    expert_next_state = self.amp_normalizer.normalize_torch(expert_next_state, self.device)
-            policy_d = self.discriminator(torch.cat([policy_state, policy_next_state], dim=-1))
-            expert_d = self.discriminator(torch.cat([expert_state, expert_next_state], dim=-1))
-            expert_loss = torch.nn.MSELoss()(expert_d, torch.ones(expert_d.size(), device=self.device))
-            policy_loss = torch.nn.MSELoss()(policy_d, -1 * torch.ones(policy_d.size(), device=self.device))
-            amp_loss = 0.5 * (expert_loss + policy_loss)
-            grad_pen_loss = self.discriminator.compute_grad_pen(*sample_amp_expert, lambda_=10)
-            loss += self.amploss_coef * amp_loss + self.amploss_coef * grad_pen_loss
+            amp_total_loss, amp_metrics, normalizer_updates = self._compute_amp_loss(
+                (sample_amp_policy, sample_amp_expert)
+            )
+            amp_loss = amp_metrics["amp"]
+            grad_pen_loss = amp_metrics["amp_grad_pen"]
+            policy_d = amp_metrics["amp_policy_pred"]
+            expert_d = amp_metrics["amp_expert_pred"]
+            loss += amp_total_loss
 
             # Compute the gradients
             # -- For PPO
@@ -708,9 +892,9 @@ class AMPPPO:
             if self.rnd_optimizer:
                 self.rnd_optimizer.step()
 
-            if self.amp_normalizer is not None:
-                self.amp_normalizer.update(policy_state.cpu().numpy())
-                self.amp_normalizer.update(expert_state.cpu().numpy())
+            for normalizer, raw_policy_state, raw_expert_state in normalizer_updates:
+                normalizer.update(raw_policy_state.detach().cpu().numpy())
+                normalizer.update(raw_expert_state.detach().cpu().numpy())
 
             # Store the losses
             mean_value_loss += value_loss.item()
@@ -725,9 +909,13 @@ class AMPPPO:
             mean_vp_vel_loss += vp_vel_loss.item()
             mean_lp_supervised_loss += lp_supervised_loss.item()
             mean_vp_supervised_loss += vp_supervised_loss.item()
+            mean_vae_reconstruction += vae_reconstruction.item()
+            mean_vae_kl += vae_kl.item()
+            mean_vae_total += vae_loss.item()
             mean_terrain_recon_loss += terrain_recon_loss.item()
             mean_lp_terrain_recon_loss += lp_terrain_recon_loss.item()
             mean_feet_height_loss += feet_height_loss.item()
+            mean_lp_feet_height_loss += lp_feet_height_loss.item()
             # -- RND loss
             if mean_rnd_loss is not None:
                 mean_rnd_loss += rnd_loss.item()
@@ -759,6 +947,7 @@ class AMPPPO:
         mean_terrain_recon_loss /= num_updates
         mean_lp_terrain_recon_loss /= num_updates
         mean_feet_height_loss /= num_updates
+        mean_lp_feet_height_loss /= num_updates
         self.storage.clear()
 
         # construct the loss dictionary
@@ -773,6 +962,15 @@ class AMPPPO:
         }
         if self.rnd:
             loss_dict["rnd"] = mean_rnd_loss
+        if self.use_vp_vae:
+            loss_dict.update({
+                "vp_vae/reconstruction": mean_vae_reconstruction / num_updates,
+                "vp_vae/kl": mean_vae_kl / num_updates,
+                "vp_vae/weighted_loss": mean_vae_total / num_updates,
+                "vp_vae/valid_fraction": mean_vae_valid_fraction / num_updates,
+                "vp_vae/beta": self.vp_vae_beta,
+                "vp_vae/coefficient_current": vae_weight,
+            })
         if self.symmetry:
             loss_dict["symmetry"] = mean_symmetry_loss
         if self.vel_estimation_coef > 0:
@@ -787,11 +985,20 @@ class AMPPPO:
             loss_dict["terrain_recon"] = mean_terrain_recon_loss
             loss_dict["terrain_recon_coef_current"] = terrain_weight
         if self.lp_terrain_recon_coef > 0:
-            loss_dict["terrain_recon/lp_full"] = mean_lp_terrain_recon_loss
-            loss_dict["terrain_recon/lp_full_coef_current"] = lp_terrain_weight
+            lp_region = "lp_front" if getattr(self.policy, "lp_terrain_front_indices", None) is not None else "lp_full"
+            loss_dict[f"terrain_recon/{lp_region}"] = mean_lp_terrain_recon_loss
+            loss_dict[f"terrain_recon/{lp_region}_coef_current"] = lp_terrain_weight
         if self.feet_height_coef > 0:
             loss_dict["feet_height"] = mean_feet_height_loss
+            loss_dict["feet_height/vp"] = mean_feet_height_loss
             loss_dict["feet_height_coef_current"] = feet_height_weight
+        if self.lp_feet_height_coef > 0:
+            loss_dict["feet_height/lp"] = mean_lp_feet_height_loss
+            loss_dict["feet_height/lp_coef_current"] = lp_feet_height_weight
+        if self.use_feet_height_valid_mask:
+            loss_dict["feet_height/valid_fraction"] = mean_feet_height_valid_fraction / num_updates
+        if self.use_terrain_height_valid_mask:
+            loss_dict["terrain_height/valid_fraction"] = mean_terrain_height_valid_fraction / num_updates
 
         self.current_iteration += 1
         return loss_dict

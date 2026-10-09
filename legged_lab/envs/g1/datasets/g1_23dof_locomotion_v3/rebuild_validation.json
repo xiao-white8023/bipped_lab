@@ -1,0 +1,55 @@
+{
+  "passed": true,
+  "includes_ankles": true,
+  "data_files_compared": 12,
+  "files": {
+    "sources/walk_backward.pkl": {
+      "sha256": "0d2496efa4ea9e0f022a4652a46b36867398539f961ae2af8d765cc40ef4bbe4",
+      "byte_identical": true
+    },
+    "sources/walk_left.pkl": {
+      "sha256": "6468fcfc162d49a00890e3e9a95cc7c194c3b61a3ee7af2c79e06c305cc98bb5",
+      "byte_identical": true
+    },
+    "sources/walk_right.pkl": {
+      "sha256": "42c69478dca66cb210a7b6cb841cc87705d725cacda08b47f377298156635ff6",
+      "byte_identical": true
+    },
+    "sources/walk_forward_turns.pkl": {
+      "sha256": "1163d872b3c993d2e9ee1e2e28be1d710b047d8fadacb41d965ddffd99064cf8",
+      "byte_identical": true
+    },
+    "amp/walk_left.txt": {
+      "sha256": "98a9f8d457142c61c0a26718ecde6fbb868b339dc6cc59b09077a28deb385241",
+      "byte_identical": true
+    },
+    "amp/walk_right.txt": {
+      "sha256": "288da4b285b6d0a4779b75e9143f32e4b65da22a42d576f904d40d8d908866d7",
+      "byte_identical": true
+    },
+    "amp/walk_forward_turns.txt": {
+      "sha256": "b939c1a8487488ba12d48d67188eaccb662a746bcfa4e4c50d60684d0db2b78f",
+      "byte_identical": true
+    },
+    "amp/walk_backward.txt": {
+      "sha256": "7476cfb5d324aaef815dd6a89aa953fdc37818e4bab3684453aee621ef042b5c",
+      "byte_identical": true
+    },
+    "visualization/walk_left.txt": {
+      "sha256": "b36997151456ab6689b0df6ad76e419c3ff9f13af9257c3ad4f598cd6020936a",
+      "byte_identical": true
+    },
+    "visualization/walk_right.txt": {
+      "sha256": "ce11183126f85f6d173a78e5e7f4d04a5f216d931636c0164faa17a0b5066a23",
+      "byte_identical": true
+    },
+    "visualization/walk_forward_turns.txt": {
+      "sha256": "46937e29e96a9b64660b3ec046b501979b5949f35742a1217a3c7587034cdac5",
+      "byte_identical": true
+    },
+    "visualization/walk_backward.txt": {
+      "sha256": "1a2916d3a93487fb1abdf438eff0e610fcb6a734eed1854a6d994c7de7694066",
+      "byte_identical": true
+    }
+  }
+}

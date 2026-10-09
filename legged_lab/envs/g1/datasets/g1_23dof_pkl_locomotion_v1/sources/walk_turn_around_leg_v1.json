@@ -1,0 +1,52 @@
+{
+  "input": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/walk_turn_around_end_aligned.pkl",
+  "input_sha256": "525912f00e0185c8c927afbf13ad1a0065881c01a0e5d713c11d90ad88e48cdf",
+  "output": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/walk_turn_around_leg_v1.pkl",
+  "frames": 530,
+  "fps": 39.94147768836869,
+  "modified_joints": [
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint"
+  ],
+  "inward_roll_threshold_deg": -2.0,
+  "inward_yaw_threshold_deg": -6.0,
+  "inward_roll_excess_retained_fraction": 0.35,
+  "inward_yaw_excess_retained_fraction": 0.55,
+  "hip_roll_min_deg_before_after": [
+    -9.02086227913076,
+    -4.782301797695352
+  ],
+  "hip_yaw_min_deg_before_after": [
+    -31.036197162371735,
+    -20.219908439304458
+  ],
+  "left_foot_yaw_relative_pelvis_min_deg_before_after": [
+    -28.886312035743067,
+    -19.110480911690395
+  ],
+  "left_knee_lateral_from_hip_min_m_before_after": [
+    -0.03125118539048796,
+    -0.0231468390030158
+  ],
+  "maximum_left_ankle_position_change_m": 0.038166074641184745,
+  "right_ankle_positions_unchanged": true,
+  "minimum_shoe_height_LR_m_before": [
+    -0.06260168817934948,
+    -0.07924228979922088
+  ],
+  "minimum_shoe_height_LR_m_after": [
+    -0.0632393217183802,
+    -0.07924228979922088
+  ],
+  "maximum_modified_joint_frame_step_deg_before_after": [
+    5.2156595127079886,
+    3.7491247406928303
+  ],
+  "root_pose_unchanged": true,
+  "other_21_joints_unchanged": true,
+  "ankle_angles_all_zero": true,
+  "standing_hold_unchanged": true,
+  "modified_joint_limit_violation_rad": 0.0,
+  "ik_used": false,
+  "note": "Direct smooth joint-angle attenuation. Foot paths change slightly; contacts are not re-solved. Kinematic preview only."
+}

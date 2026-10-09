@@ -1,5 +1,6 @@
 import os
 import copy
+import json
 import warnings
 import torch
 import torch.nn as nn
@@ -44,35 +45,7 @@ class RENetPolicyExporter(nn.Module):
 
     def forward(self, x):
         observations = self.normalizer(x)
-        proprio_history, lidar_flat, depth_flat, estimator_mask, current_proprio = (
-            self.policy._split_actor_obs(observations)
-        )
-
-        proprio_embed = self.policy._embed_proprio_history(proprio_history)
-        lidar_embed = self.policy._embed_lidar_height(lidar_flat)
-        depth_embed = self.policy._embed_depth_history(depth_flat)
-        depth_context = self.policy._align_depth_to_proprio_history(depth_embed)
-
-        lp_features = self.policy._fuse_lp_features(proprio_embed, lidar_embed)
-        vp_features = self.policy._fuse_vp_features(
-            proprio_embed,
-            depth_embed,
-            depth_context,
-        )
-        _, lp_hidden = self.policy.lp_gru(lp_features)
-        _, vp_hidden = self.policy.vp_gru(vp_features)
-        lp_latent = lp_hidden[-1]
-        vp_latent = vp_hidden[-1]
-
-        estimator_mask = estimator_mask.clamp(0.0, 1.0)
-        actor_input = torch.cat(
-            [
-                current_proprio,
-                lp_latent * estimator_mask,
-                vp_latent * (1.0 - estimator_mask),
-            ],
-            dim=-1,
-        )
+        actor_input = self.policy._process_actor_obs(observations)
         return self.policy.actor(actor_input)
 
     @torch.jit.export
@@ -85,10 +58,9 @@ def _is_renet_policy(policy):
         hasattr(policy, name)
         for name in (
             "estimator_mask_dim",
-            "lidar_cnn",
-            "lp_gru",
             "vp_gru",
             "_split_actor_obs",
+            "_process_actor_obs",
         )
     )
 
@@ -144,6 +116,22 @@ def _validate_renet_torchscript(policy, normalizer, traced_model, obs_dim):
     lp_depth_changed[:, depth_slice] += 0.5
     lp_lidar_changed = lp_base.clone()
     lp_lidar_changed[:, lidar_slice] += 0.5
+    lidar_map = lp_base[:, lidar_slice].reshape(1, policy.lidar_h, policy.lidar_w)
+    lp_lidar_center = lp_base.clone()
+    center_map = lidar_map.clone()
+    center_y, center_x = policy.lidar_h // 2, policy.lidar_w // 2
+    center_map[
+        :,
+        max(0, center_y - 1) : min(policy.lidar_h, center_y + 2),
+        max(0, center_x - 1) : min(policy.lidar_w, center_x + 2),
+    ] += 0.75
+    lp_lidar_center[:, lidar_slice] = center_map.reshape(1, -1)
+    lp_lidar_half = lp_base.clone()
+    half_map = lidar_map.clone()
+    half_map[:, :, policy.lidar_w // 2 :] += 0.5
+    lp_lidar_half[:, lidar_slice] = half_map.reshape(1, -1)
+    lp_lidar_shuffled = lp_base.clone()
+    lp_lidar_shuffled[:, lidar_slice] = torch.flip(lidar_map, dims=(1, 2)).reshape(1, -1)
     vp_base = base.clone()
     vp_base[:, mask_index] = 0.0
     vp_lidar_changed = vp_base.clone()
@@ -155,6 +143,9 @@ def _validate_renet_torchscript(policy, normalizer, traced_model, obs_dim):
         lp_action = traced_model(lp_base)
         lp_depth_action = traced_model(lp_depth_changed)
         lp_lidar_action = traced_model(lp_lidar_changed)
+        lp_lidar_center_action = traced_model(lp_lidar_center)
+        lp_lidar_half_action = traced_model(lp_lidar_half)
+        lp_lidar_shuffled_action = traced_model(lp_lidar_shuffled)
         vp_action = traced_model(vp_base)
         vp_lidar_action = traced_model(vp_lidar_changed)
         vp_depth_action = traced_model(vp_depth_changed)
@@ -168,8 +159,20 @@ def _validate_renet_torchscript(policy, normalizer, traced_model, obs_dim):
         raise RuntimeError("LP action unexpectedly depends on the inactive depth input.")
     if not torch.allclose(vp_action, vp_lidar_action, rtol=1.0e-5, atol=1.0e-6):
         raise RuntimeError("VP action unexpectedly depends on the inactive LiDAR input.")
-    if torch.allclose(lp_action, lp_lidar_action, rtol=1.0e-6, atol=1.0e-7):
-        raise RuntimeError("LP action is insensitive to the LiDAR input; refusing to export.")
+    lidar_probe_actions = (
+        lp_lidar_action,
+        lp_lidar_center_action,
+        lp_lidar_half_action,
+        lp_lidar_shuffled_action,
+    )
+    if all(
+        torch.allclose(lp_action, action, rtol=1.0e-6, atol=1.0e-7)
+        for action in lidar_probe_actions
+    ):
+        raise RuntimeError(
+            "LP action is insensitive to uniform, local, half-map, and spatial LiDAR "
+            "perturbations; refusing to export."
+        )
     if torch.allclose(vp_action, vp_depth_action, rtol=1.0e-6, atol=1.0e-7):
         raise RuntimeError("VP action is insensitive to the depth input; refusing to export.")
     print("[SUCCESS] TorchScript LP/VP routing validation passed.")
@@ -256,7 +259,7 @@ class G1StudentDeploymentExporter(nn.Module):
         pass
 
 
-def export_policy_as_jit(policy, normalizer, path, filename="policy.pt"):
+def export_policy_as_jit(policy, normalizer, path, filename="policy.pt", metadata=None):
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
 
@@ -271,13 +274,22 @@ def export_policy_as_jit(policy, normalizer, path, filename="policy.pt"):
         exporter,
         dummy_input,
         strict=False,
+        # MultiheadAttention may select a different eager fast path during
+        # PyTorch's second trace pass.  The graph is validated immediately
+        # below against eager LP/VP outputs and structured sensor probes.
+        check_trace=False,
     )
 
     if _is_renet_policy(policy):
         _validate_renet_torchscript(policy, normalizer, traced_model, obs_dim)
 
     save_path = os.path.join(path, filename)
-    traced_model.save(save_path)
+    extra_files = {}
+    if metadata is not None:
+        extra_files["renet_contract.json"] = json.dumps(
+            metadata, ensure_ascii=False, sort_keys=True
+        )
+    torch.jit.save(traced_model, save_path, _extra_files=extra_files)
 
     print(f"\n[SUCCESS] TorchScript policy exported to: {save_path}")
     return save_path

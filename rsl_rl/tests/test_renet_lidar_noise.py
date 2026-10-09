@@ -294,18 +294,17 @@ def test_seeded_models_are_reproducible():
     torch.testing.assert_close(first_sensor, second_sensor)
 
 
-def test_renet_and_cli_integration_are_wired():
+def test_renet_uses_ame_packet_noise_without_physical_lidar_noise():
     cfg_source = CFG_PATH.read_text(encoding="utf-8")
     env_source = ENV_PATH.read_text(encoding="utf-8")
     play_source = PLAY_PATH.read_text(encoding="utf-8")
     eval_source = EVAL_PATH.read_text(encoding="utf-8")
-
-    assert "noise=LidarNoiseCfg(" in cfg_source
-    assert "enable=True" in cfg_source[cfg_source.index("noise=LidarNoiseCfg(") :]
-    assert "apply_new_scans(" in env_source
-    assert env_source.index("apply_new_scans(") < env_source.index("update_from_point_cloud(")
-    assert "self.lidar_noise_model.reset(env_ids)" in env_source
-    assert '"--lidar_noise"' in play_source
-    assert "env_cfg.scene.lidar.noise.enable = bool(args_cli.lidar_noise)" in play_source
-    assert '"--eval_lidar_noise"' in eval_source
-    assert "lidar_cfg.noise.enable = bool(args_cli.eval_lidar_noise)" in eval_source
+    assert "lidar=None" in cfg_source
+    assert "LidarNoiseCfg" not in cfg_source
+    assert "LidarNoiseModel" not in env_source
+    assert "update_from_point_cloud(" not in env_source
+    assert "PgttMapNoise(" in env_source
+    assert '"--lp_noise"' in play_source
+    assert "env_cfg.lp_height.noise.enable = bool(args_cli.lp_noise)" in play_source
+    assert '"--eval_lp_noise"' in eval_source
+    assert "env_cfg.lp_height.noise.force_active = bool(args_cli.eval_lp_noise)" in eval_source

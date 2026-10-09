@@ -1,0 +1,81 @@
+{
+  "passed": true,
+  "device": "cuda:0",
+  "envs": 2,
+  "rollout_steps_per_mode": 4,
+  "actor_dim": 2120,
+  "critic_dim": 1037,
+  "feet_height_valid": [
+    [
+      true,
+      true
+    ],
+    [
+      true,
+      true
+    ]
+  ],
+  "amp_dimension": 58,
+  "discriminator_input_dimension": 116,
+  "modes": {
+    "lp": {
+      "value_function": 2.8049832582473755,
+      "surrogate": 0.03441175818443298,
+      "entropy": 32.63632392883301,
+      "amp": 1.2823074758052826,
+      "amp_grad_pen": 0.04063405701890588,
+      "amp_policy_pred": -0.7202136483974755,
+      "amp_expert_pred": -0.3280383045785129,
+      "vel_estimation": 0.1292174607515335,
+      "vel_estimation_coef_current": 1.0,
+      "vel_estimation/lp": 0.07107563316822052,
+      "vel_estimation/vp": 0.05814182572066784,
+      "renet/lp_supervised": 0.14104008674621582,
+      "renet/vp_supervised": 0.21030324697494507,
+      "terrain_recon": 0.14294058829545975,
+      "terrain_recon_coef_current": 0.5,
+      "terrain_recon/lp_full": 0.11065696179866791,
+      "terrain_recon/lp_full_coef_current": 0.5,
+      "feet_height": 0.40345562994480133,
+      "feet_height/vp": 0.40345562994480133,
+      "feet_height_coef_current": 0.2,
+      "feet_height/lp": 0.07317985873669386,
+      "feet_height/lp_coef_current": 0.2,
+      "feet_height/valid_fraction": 1.0
+    },
+    "vp": {
+      "value_function": 0.45059049129486084,
+      "surrogate": 0.04323700815439224,
+      "entropy": 32.63646697998047,
+      "amp": 0.8652650713920593,
+      "amp_grad_pen": 0.03587502334266901,
+      "amp_policy_pred": -0.10631979815661907,
+      "amp_expert_pred": 0.040681513492017984,
+      "vel_estimation": 0.3453417792916298,
+      "vel_estimation_coef_current": 1.0,
+      "vel_estimation/lp": 0.17829208076000214,
+      "vel_estimation/vp": 0.16704969853162766,
+      "renet/lp_supervised": 0.36442336440086365,
+      "renet/vp_supervised": 0.29717832058668137,
+      "terrain_recon": 0.17840448021888733,
+      "terrain_recon_coef_current": 0.5,
+      "terrain_recon/lp_full": 0.08775589987635612,
+      "terrain_recon/lp_full_coef_current": 0.5,
+      "feet_height": 0.20463190227746964,
+      "feet_height/vp": 0.20463190227746964,
+      "feet_height_coef_current": 0.2,
+      "feet_height/lp": 0.7112666815519333,
+      "feet_height/lp_coef_current": 0.2,
+      "feet_height/valid_fraction": 1.0
+    }
+  },
+  "checkpoint_roundtrip": true,
+  "terrain": "generator_2x3",
+  "interpretation": "integration only; not a trained-policy performance evaluation",
+  "date": "2026-10-03",
+  "unit_tests": {
+    "passed": 75,
+    "skipped": 1,
+    "skip_reason": "MuJoCo unavailable in env_isaaclab; sim2sim test module skipped"
+  }
+}

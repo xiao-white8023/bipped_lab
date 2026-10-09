@@ -1,0 +1,46 @@
+g1_rolling_elevation_map:
+  ros__parameters:
+    cloud_topic: /cloud_registered
+    odometry_topic: /Odometry
+    world_frame: g1_world
+    lio_world_frame: camera_init
+    lio_body_frame: body
+    capture_frame: capture_torso_yaw
+    pose_sync_tolerance: 0.03
+    resolution: 0.1
+    internal_size_x: 3.2
+    internal_size_y: 3.2
+    output_size_x: 1.6
+    output_size_y: 1.0
+    capture_z_min: -1.5
+    capture_z_max: 0.5
+    # Preserve the original single-frame baseline for A/B replay.
+    history_seconds: 0.1
+    history_max_frames: 1
+    confidence_observations: 1
+    head_filter_enabled: false
+    height_offset: 0.5
+    height_scale: 1.0
+    height_clip_min: -1.0
+    height_clip_max: 1.0
+    invalid_height: -1.1
+
+g1_baseline_elevation_analyzer:
+  ros__parameters:
+    height_topic: /g1/elevation/policy_heights
+    valid_topic: /g1/elevation/policy_valid
+    valid_ratio_topic: /g1/elevation/valid_ratio
+    sync_error_topic: /g1/elevation/pose_sync_error
+    policy_cloud_topic: /g1/elevation/policy_cloud
+    expected_cloud_frame: capture_torso_yaw
+    pair_timeout_sec: 0.05
+    idle_timeout_sec: 3.0
+    duration_sec: 0.0
+    max_frames: 0
+    max_stored_frames: 20000
+    self_hit_x_min: -0.35
+    self_hit_x_max: 0.35
+    self_hit_y_min: -0.35
+    self_hit_y_max: 0.35
+    self_hit_z_min: -0.35
+    self_hit_z_max: 0.5

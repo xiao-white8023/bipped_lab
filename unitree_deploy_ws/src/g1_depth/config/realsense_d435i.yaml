@@ -1,0 +1,28 @@
+/camera/camera:
+  ros__parameters:
+    # Native librealsense processing blocks. They operate on the 848x480 Z16
+    # stream before g1_depth projects it onto the policy camera rays.
+    # Both are deliberately OFF: the VP observation must be the sensor's own
+    # measurement, not a filtered version of it. The spatial filter adds
+    # edge-preserving smoothing on top of the ray projection, and the temporal
+    # filter is an IIR blend (alpha=0.4, ~2.5 frames) whose ~80 ms time constant
+    # both lags and correlates the 10 Hz depth samples. Neither exists in the
+    # training observation. Re-enable only as a deliberate A/B.
+    spatial_filter.enable: false
+    spatial_filter.filter_magnitude: 2
+    spatial_filter.filter_smooth_alpha: 0.5
+    spatial_filter.filter_smooth_delta: 20
+    spatial_filter.holes_fill: 0
+
+    temporal_filter.enable: false
+    temporal_filter.filter_smooth_alpha: 0.4
+    temporal_filter.filter_smooth_delta: 20
+    # Disable temporal persistency/hole replacement. The camera moves with the
+    # robot, so stale depth must not be copied across a newly exposed edge.
+    temporal_filter.holes_fill: 0
+
+    # Preserve resolution/intrinsics and do not invent depth from neighbours.
+    decimation_filter.enable: false
+    disparity_filter.enable: false
+    disparity_to_depth.enable: false
+    hole_filling_filter.enable: false

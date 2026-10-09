@@ -1,0 +1,56 @@
+g1_depth_policy_preprocessor:
+  ros__parameters:
+    # 本机 realsense2_camera 4.51.1 实测话题。若更换 launch/namespace，
+    # 只改这两个入口，不改策略契约参数。
+    depth_topic: /camera/depth/image_rect_raw
+    camera_info_topic: /camera/depth/camera_info
+
+    policy_frame_topic: /g1/depth/policy_frame
+    policy_history_topic: /g1/depth/policy_history
+    # 控制节点使用的原子输入：Header、2x18x32 历史和健康量来自同一帧。
+    policy_input_topic: /g1/depth/policy_input
+    valid_topic: /g1/depth/policy_valid
+    source_age_topic: /g1/depth/source_age
+    valid_ratio_topic: /g1/depth/valid_ratio
+    input_qos_depth: 1
+
+    # D435i 的 16UC1 深度通常以毫米表示；32FC1 输入不使用这个比例。
+    depth_unit_scale: 0.001
+
+    # 以下参数来自 g1_renet 训练配置，属于 policy.pt 的固定输入契约。
+    capture_period: 0.1
+    history_frames: 2
+    target_width: 64
+    target_height: 36
+    target_horizontal_fov_deg: 89.51
+    target_vertical_fov_deg: 58.29
+    crop_top: 18
+    crop_bottom: 0
+    crop_left: 16
+    crop_right: 16
+    sampling_mode: nearest
+    # 无效深度值的处理方式，与训练侧严格对齐：
+    #   training -> 只把 inf/nan 填成 depth_max（训练里 ray caster 从不返回 0），
+    #     D435i 的 0（没有测到）保持 0 进入后续步骤，最后被 clip 到 [0.1, 2.5]
+    #     变成近端值；填充这一步与 RENet_env.get_processed_deepcamera 一致。
+    #   max -> 旧的部署行为，所有无效值（含 0）一律填 2.5 m，只用于真机 A/B 对照。
+    # 视场外的射线（真机独有、训练无对应情形）始终填 depth_max。
+    invalid_depth_mode: training
+    # 训练与 MuJoCo 契约都包含固定 GaussianBlur(3x3, sigma=1)。false = 故意
+    # 偏离该契约，把投影后的深度直接送进 clip/归一化，用于单独测量这层确定性
+    # 模糊在真机上的影响；与 true 做 A/B 时其它参数保持不变。
+    blur_enable: false
+    depth_min: 0.1
+    depth_max: 2.5
+
+    # 这些健康门限只生成诊断量 policy_valid，不在本节点内选择 VP/LP。
+    # 即使诊断为无效，节点仍发布有限值，供后续控制节点自行决定如何处理。
+    minimum_projection_coverage: 0.99
+    minimum_valid_ratio: 0.50
+    maximum_source_age: 0.20
+    future_stamp_tolerance: 0.05
+    source_timeout: 0.25
+    expected_frame_id: ''
+    watchdog_rate: 20.0
+    warning_interval: 2.0
+    report_every: 30

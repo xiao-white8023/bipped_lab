@@ -14,6 +14,7 @@ ENV_PATH = REPO_ROOT / "legged_lab" / "envs" / "g1" / "RENet_env.py"
 ACTOR_PATH = REPO_ROOT / "rsl_rl" / "rsl_rl" / "modules" / "renet_actor_critic.py"
 ALGORITHM_PATH = REPO_ROOT / "rsl_rl" / "rsl_rl" / "algorithms" / "amp_ppo.py"
 RUNNER_PATH = REPO_ROOT / "rsl_rl" / "rsl_rl" / "runners" / "renet_amp_on_policy_runner.py"
+RAY_CASTER_PATH = REPO_ROOT / "legged_lab" / "terrains" / "ray_caster.py"
 
 
 def _source(path: Path) -> str:
@@ -54,9 +55,9 @@ def _depth_cnn_cfg() -> dict:
     }
 
 
-def _lidar_cnn_cfg() -> dict:
+def _lidar_cnn_cfg(shape=(11, 17)) -> dict:
     return {
-        "input_dim": (11, 17),
+        "input_dim": shape,
         "input_channels": 1,
         "output_channels": [8, 16],
         "kernel_size": [3, 3],
@@ -74,24 +75,41 @@ def _lidar_cnn_cfg() -> dict:
     }
 
 
-def _make_policy() -> RENetActorCritic:
-    num_actor_obs = 10 * 78 + 11 * 17 + 2 * 18 * 32 + 1
+def _make_policy(
+    frames=1,
+    shape=(11, 17),
+    lp_front=False,
+    lp_encoder_type="ame_point_cross_attention",
+    lp_feet=True,
+    vp_frames=5,
+    vp_critic_frames=None,
+    critic_frames=10,
+    fusion_type="attention",
+) -> RENetActorCritic:
+    num_actor_obs = 10 * 78 + frames * shape[0] * shape[1] + 2 * 18 * 32 + 1
     return RENetActorCritic(
         num_actor_obs=num_actor_obs,
-        num_critic_obs=85 * 10 + 187,
+        num_critic_obs=85 * critic_frames + 187,
         num_actions=23,
         actor_hidden_dims=[32],
         critic_hidden_dims=[32],
         CnnMlp=_depth_cnn_cfg(),
-        LidarCnnMlp=_lidar_cnn_cfg(),
+        LidarCnnMlp=_lidar_cnn_cfg(shape),
         single_proprio_dim=78,
         estimator_mask_dim=1,
         estimator_latent_dim=64,
         proprio_embed_dim=64,
         proprio_embed_dims=[32],
-        fusion_type="attention",
+        fusion_type=fusion_type,
         attention_num_heads=1,
+        lp_encoder_type=lp_encoder_type,
+        ame_lp_attention_num_heads=16,
+        ame_lp_query_history_frames=5,
+        vp_proprio_history_frames=vp_frames,
+        vp_critic_history_frames=vp_critic_frames,
         lp_encoder_dims=[32],
+        lp_height_history_frames=frames,
+        lp_terrain_recon_front_only=lp_front,
         vp_encoder_dims=[32],
         use_vel_estimation=True,
         vel_hidden_dim=[16],
@@ -104,6 +122,7 @@ def _make_policy() -> RENetActorCritic:
         terrain_recon_grid_rows=11,
         terrain_recon_x_min=0.0,
         use_feet_height_prediction=True,
+        use_lp_feet_height_prediction=lp_feet,
         feet_height_hidden_dim=[16],
     )
 
@@ -133,6 +152,7 @@ def test_config_defines_lp_vp_training_without_terrain_forcing():
     expected_rewards = [
         "track_lin_vel_xy_exp",
         "track_ang_vel_z_exp",
+        "vp_idle_when_commanded",
         "ang_vel_xy_l2",
         "energy",
         "dof_acc_l2",
@@ -144,6 +164,8 @@ def test_config_defines_lp_vp_training_without_terrain_forcing():
         "feet_slide",
         "feet_force",
         "feet_stumble",
+        "stair_edge_penalty_L",
+        "stair_edge_penalty_R",
         "dof_pos_limits",
         "joint_deviation_hip",
         "joint_deviation_ankle",
@@ -154,15 +176,31 @@ def test_config_defines_lp_vp_training_without_terrain_forcing():
         "alive",
         "feet_air_time",
     ]
-    assert _class_assignments(CFG_PATH, "Reward") == expected_rewards
+    # Reward registration order can change without changing the enabled terms.
+    assert sorted(_class_assignments(CFG_PATH, "Reward")) == sorted(expected_rewards)
     assert "alternate_interval_iters: int = 20" in source
     assert "lp_probability: float = 0.5" in source
     assert "force_vp_terrain_names" not in source
     assert "force_vp_terrain_level" not in source
     assert "LidarCnnMlp" in source
     assert "lp_terrain_recon_coef: float = 0.5" in source
+    assert 'lp_height_source: str = "pgtt_full_atten"' in source
     assert "input_dim=(11,17)" in source
-    assert "max_pool=[True,False]" in source
+    assert "lidar=None" in source
+    assert "LidarElevationMapCfg" not in source
+    assert "resolve_pgtt_height_cfg" in source
+    assert 'agent_cfg.policy.lp_encoder_type = "ame_point_cross_attention"' in source
+    assert "ame_point_cross_attention" in source
+    assert "pgtt_full_atten" in _source(RUNNER_PATH)
+
+    env_source = _source(ENV_PATH)
+    ray_caster_source = _source(RAY_CASTER_PATH)
+    assert "scene_cfg.pgtt_height_scanner = RayCasterCfg(" in env_source
+    assert "patterns.GridPatternCfg(" in env_source
+    assert "TrapezoidPatternCfg" not in env_source
+    assert "GroupedRayCasterCfg(" not in env_source
+    for property_name in ("scan_counts", "scan_timestamps", "current_timestamps", "ray_starts_w"):
+        assert f"def {property_name}" in ray_caster_source
 
 
 def test_actor_layout_mask_slots_and_full_lp_decoder():
@@ -188,8 +226,16 @@ def test_actor_layout_mask_slots_and_full_lp_decoder():
     assert torch.count_nonzero(actor_input[0, 142:206]) > 0
     assert torch.count_nonzero(actor_input[1, 78:142]) > 0
     assert policy.predict_lp_terrain().shape == (2, 187)
+    assert policy.lp_frame_embedding is None
+    assert policy._embed_lidar_height(torch.zeros(2, 187)).shape == (2, 187, 64)
+    assert policy.lp_gru is None
+    assert policy.lp_encoder is None
+    assert policy.lp_attention.num_heads == 16
+    assert policy.lp_terrain_decoder[0].in_features == 64
+    assert policy.lp_terrain_front_indices is None
     assert policy.predict_terrain().shape == (2, 99)
     assert policy.predict_feet_height().shape == (2, 2)
+    assert policy.predict_lp_feet_height().shape == (2, 2)
 
 
 def test_lidar_changes_only_lp_actions_and_depth_changes_only_vp_actions():
@@ -223,6 +269,10 @@ def test_lidar_changes_only_lp_actions_and_depth_changes_only_vp_actions():
     assert not torch.allclose(vp_base, vp_depth)
 
 
+
+
+
+
 def test_mask_routes_policy_gradient_but_both_auxiliary_branches_can_train():
     torch.manual_seed(19)
     policy = _make_policy()
@@ -230,13 +280,15 @@ def test_mask_routes_policy_gradient_but_both_auxiliary_branches_can_train():
     lp_obs = _obs(policy, mask=1.0)
     policy.zero_grad(set_to_none=True)
     policy.act_inference(lp_obs).sum().backward()
-    assert _has_nonzero_grad(policy.lp_gru)
+    assert _has_nonzero_grad(policy.lidar_cnn)
+    assert _has_nonzero_grad(policy.lp_attention)
     assert _has_zero_grad(policy.vp_gru)
 
     vp_obs = _obs(policy, mask=0.0)
     policy.zero_grad(set_to_none=True)
     policy.act_inference(vp_obs).sum().backward()
-    assert _has_zero_grad(policy.lp_gru)
+    assert _has_zero_grad(policy.lidar_cnn)
+    assert _has_zero_grad(policy.lp_attention)
     assert _has_nonzero_grad(policy.vp_gru)
 
     policy.zero_grad(set_to_none=True)
@@ -248,12 +300,99 @@ def test_mask_routes_policy_gradient_but_both_auxiliary_branches_can_train():
         + policy.predict_lp_terrain().square().mean()
         + policy.predict_terrain().square().mean()
         + policy.predict_feet_height().square().mean()
+        + policy.predict_lp_feet_height().square().mean()
     )
     auxiliary_loss.backward()
-    assert _has_nonzero_grad(policy.lp_gru)
+    assert _has_nonzero_grad(policy.lidar_cnn)
+    assert _has_nonzero_grad(policy.lp_attention)
     assert _has_nonzero_grad(policy.vp_gru)
     assert _has_nonzero_grad(policy.lp_terrain_decoder)
     assert _has_nonzero_grad(policy.terrain_decoder)
+
+
+
+
+
+
+def test_pgtt_full_atten_uses_five_frame_query_and_point_tokens():
+    torch.manual_seed(29)
+    policy = _make_policy(lp_encoder_type="ame_point_cross_attention").eval()
+    observations = _obs(policy, batch_size=3, mask=1.0)
+    proprio = observations[:, : policy.proprio_actor_dim]
+    lidar = observations[
+        :, policy.proprio_actor_dim : policy.proprio_actor_dim + policy.lidar_flat_dim
+    ]
+
+    query = policy._encode_ame_lp_query(proprio)
+    tokens = policy._embed_ame_lidar_tokens(lidar)
+    weights = policy.get_lp_attention_weights(proprio, lidar)
+    latent = policy._encode_lp_latent(proprio, lidar)
+
+    assert query.shape == (3, 1, 64)
+    assert tokens.shape == (3, 187, 64)
+    assert weights.shape == (3, 16, 1, 187)
+    assert latent.shape == (3, 64)
+    torch.testing.assert_close(
+        weights.sum(dim=-1), torch.ones(3, 16, 1), rtol=1.0e-5, atol=1.0e-6
+    )
+    assert policy.lp_attention.num_heads == 16
+    assert policy.lp_gru is None and policy.lp_encoder is None
+    assert not hasattr(policy, "lp_frame_embedding") or policy.lp_frame_embedding is None
+    assert policy.lp_terrain_decoder[0].in_features == 64
+    assert policy.get_lp_encoder_contract()["encoder_type"] == "ame_point_cross_attention"
+
+
+def test_pgtt_full_atten_query_reads_only_last_five_proprio_frames():
+    torch.manual_seed(31)
+    policy = _make_policy(lp_encoder_type="ame_point_cross_attention").eval()
+    observations = _obs(policy, batch_size=2, mask=1.0)
+    proprio = observations[:, :780]
+    lidar = observations[:, 780:967]
+    old_changed = proprio.clone()
+    old_changed[:, : 5 * 78] += 1.0
+    recent_changed = proprio.clone()
+    recent_changed[:, 5 * 78 :] += 1.0
+
+    with torch.inference_mode():
+        base_query = policy._encode_ame_lp_query(proprio)
+        old_query = policy._encode_ame_lp_query(old_changed)
+        recent_query = policy._encode_ame_lp_query(recent_changed)
+        base_latent = policy._encode_lp_latent(proprio, lidar)
+        old_latent = policy._encode_lp_latent(old_changed, lidar)
+        recent_latent = policy._encode_lp_latent(recent_changed, lidar)
+
+    torch.testing.assert_close(base_query, old_query)
+    torch.testing.assert_close(base_latent, old_latent)
+    assert not torch.allclose(base_query, recent_query)
+    assert not torch.allclose(base_latent, recent_latent)
+
+
+def test_pgtt_full_atten_auxiliary_paths_and_policy_gradients():
+    torch.manual_seed(37)
+    policy = _make_policy(lp_encoder_type="ame_point_cross_attention")
+    observations = _obs(policy, batch_size=2, mask=1.0)
+
+    policy.zero_grad(set_to_none=True)
+    policy.act_inference(observations).sum().backward()
+    assert _has_nonzero_grad(policy.lp_query_mlp)
+    assert _has_nonzero_grad(policy.lidar_cnn)
+    assert _has_nonzero_grad(policy.lp_attention)
+
+    policy.zero_grad(set_to_none=True)
+    policy._process_actor_obs(observations)
+    policy.predict_velocity()["lp"].square().mean().backward()
+    assert _has_nonzero_grad(policy.lp_query_mlp)
+    assert _has_zero_grad(policy.lidar_cnn)
+    assert _has_zero_grad(policy.lp_attention)
+
+    policy.zero_grad(set_to_none=True)
+    policy._process_actor_obs(observations)
+    policy.predict_lp_terrain().square().mean().backward()
+    assert _has_nonzero_grad(policy.lidar_cnn)
+    assert _has_nonzero_grad(policy.lp_attention)
+    assert _has_nonzero_grad(policy.lp_terrain_decoder)
+
+
 
 
 def test_lp_target_is_fixed_and_confidence_is_diagnostic_only():
@@ -269,7 +408,7 @@ def test_lp_target_is_fixed_and_confidence_is_diagnostic_only():
     assert "target_std" not in lp_block
 
     append_block = env_source.split("def append_renet_training_inputs", 1)[1].split(
-        "def update_lidar_elevation_map_diagnostics", 1
+        "def update_lp_height_diagnostics", 1
     )[0]
     assert "flat_lidar_height" in append_block
     assert "lidar_confidence" not in append_block
@@ -300,5 +439,16 @@ def test_training_sources_are_lp_vp_only():
     assert "op_vel_estimator" not in actor_source
     assert 'return {"lp": lp_vel, "vp": vp_vel, "active": active_vel}' in actor_source
     assert 'loss_dict["vel_estimation/lp"]' in algorithm_source
-    assert 'loss_dict["terrain_recon/lp_full"]' in algorithm_source
+    assert 'lp_region = "lp_front"' in algorithm_source
     assert 'loss_dict["renet/lp_supervised"]' in algorithm_source
+    assert "lp_collapse_diagnostics" not in algorithm_source
+
+
+def test_atten_only_model_rejects_removed_encoder_and_front_grid():
+    import pytest
+    with pytest.raises(ValueError, match="ame_point_cross_attention"):
+        _make_policy(lp_encoder_type="legacy_lidar_token_attention")
+    with pytest.raises(ValueError, match="11x17"):
+        _make_policy(shape=(11, 9))
+    with pytest.raises(ValueError, match="fusion_type"):
+        _make_policy(fusion_type="mlp")

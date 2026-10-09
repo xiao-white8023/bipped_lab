@@ -335,16 +335,24 @@ class G1ROUGHEnv(VecEnv):
                 device=self.device, dtype=torch.float
             )
         #
+        self.amp_observation_dim = self.cfg.amp_observation_dim
+        if type(self.amp_observation_dim) is not int or self.amp_observation_dim not in (50, 58):
+            raise ValueError("g1_rough amp_observation_dim must be 50 or 58.")
+        amp_joint_count = (self.amp_observation_dim - 12) // 2
         amp_joint_names = [
             "left_hip_pitch_joint",
             "left_hip_roll_joint",
             "left_hip_yaw_joint",
             "left_knee_joint",
+            "left_ankle_pitch_joint",
+            "left_ankle_roll_joint",
 
             "right_hip_pitch_joint",
             "right_hip_roll_joint",
             "right_hip_yaw_joint",
             "right_knee_joint",
+            "right_ankle_pitch_joint",
+            "right_ankle_roll_joint",
 
             "waist_yaw_joint",
 
@@ -361,6 +369,8 @@ class G1ROUGHEnv(VecEnv):
             "right_wrist_roll_joint",
         ]
 
+        if self.amp_observation_dim == 50:
+            amp_joint_names = [name for name in amp_joint_names if "ankle" not in name]
         self.amp_joint_ids, self.amp_joint_names = (
             self.robot.find_joints(
                 amp_joint_names,
@@ -368,9 +378,9 @@ class G1ROUGHEnv(VecEnv):
             )
         )
 
-        if len(self.amp_joint_ids) != 19:
+        if len(self.amp_joint_ids) != amp_joint_count or self.amp_joint_names != amp_joint_names:
             raise RuntimeError(
-                "AMP应找到19个非脚踝关节，"
+                f"AMP应按数据集顺序找到{amp_joint_count}个关节，"
                 f"实际找到 {len(self.amp_joint_ids)}："
                 f"{self.amp_joint_names}"
             )
@@ -871,8 +881,8 @@ class G1ROUGHEnv(VecEnv):
 
         amp_obs = torch.cat(
             [
-                joint_pos,       # 19
-                joint_vel,       # 19
+                joint_pos,       # 23
+                joint_vel,       # 23
                 left_hand_pos,   # 3
                 right_hand_pos,  # 3
                 left_foot_pos,   # 3
@@ -881,9 +891,10 @@ class G1ROUGHEnv(VecEnv):
             dim=-1,
         )
 
-        if amp_obs.shape[1] != 50:
+        expected_dim = 2 * len(self.amp_joint_ids) + 12
+        if amp_obs.shape[1] != expected_dim:
             raise RuntimeError(
-                f"AMP obs 应为50维，实际为 {amp_obs.shape}"
+                f"AMP obs 应为{expected_dim}维，实际为 {amp_obs.shape}"
             )
 
         return amp_obs

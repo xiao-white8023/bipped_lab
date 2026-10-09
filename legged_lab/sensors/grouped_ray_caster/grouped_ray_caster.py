@@ -51,6 +51,21 @@ class GroupedRayCaster(MultiMeshRayCaster):
 
         return self._scan_counts
 
+    @property
+    def scan_timestamps(self) -> torch.Tensor:
+        """Read-only capture times; independent of randomized episode lengths."""
+        return self._scan_timestamps
+
+    @property
+    def current_timestamps(self) -> torch.Tensor:
+        """Read-only per-environment sensor clock (reset with the sensor)."""
+        return self._timestamp
+
+    @property
+    def ray_starts_w(self) -> torch.Tensor:
+        """Read-only actual world origins, including the configured mount offset."""
+        return self._ray_starts_w
+
     def _initialize_warp_meshes(self):
         super()._initialize_warp_meshes()
 
@@ -122,6 +137,7 @@ class GroupedRayCaster(MultiMeshRayCaster):
         self._scan_counts = torch.zeros(
             self._view.count, dtype=torch.long, device=self._device
         )
+        self._scan_timestamps = torch.zeros(self._view.count, device=self._device)
         # 创建缓冲区以存储光线碰撞组
         self._create_ray_collision_groups()
         self._initialize_temporal_pattern()
@@ -214,6 +230,7 @@ class GroupedRayCaster(MultiMeshRayCaster):
         scan_counts = getattr(self, "_scan_counts", None)
         if scan_counts is not None:
             scan_counts[resolved_env_ids] = 0
+            self._scan_timestamps[resolved_env_ids] = 0
         if getattr(self, "_mid360_scan_cursors", None) is None:
             return
         self._reset_mid360_phase(resolved_env_ids)
@@ -459,3 +476,4 @@ Plaintext
         )
         self._advance_mid360_frame(env_ids)
         self._scan_counts[env_ids] += 1
+        self._scan_timestamps[env_ids] = self._timestamp[env_ids]

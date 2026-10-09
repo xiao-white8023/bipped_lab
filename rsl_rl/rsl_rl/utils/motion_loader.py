@@ -1,8 +1,8 @@
 """AMP expert-motion loader for the Unitree G1 23-DoF configuration.
 
-Expected expert frame layout (58 values):
-    G1 joint positions (23)
-    G1 joint velocities (23)
+Expected expert frame layout (50 values):
+    G1 non-ankle joint positions (19)
+    G1 non-ankle joint velocities (19)
     end-effector positions in the root frame (12)
 
 The 12 end-effector values are expected in the same order produced by the
@@ -50,6 +50,7 @@ class AMPLoader:
     )  # 50
 
     FRAME_SIZE = END_POS_END_IDX
+    FRAME_LAYOUT = None  # Legacy 50-D files did not carry an explicit schema.
 
     def __init__(
         self,
@@ -80,11 +81,21 @@ class AMPLoader:
         self.trajectory_weights: list[float] = []
         self.trajectory_frame_durations: list[float] = []
         self.trajectory_num_frames: list[int] = []
+        self.joint_names = None
 
         for motion_idx, motion_file in enumerate(motion_files):
             path = Path(motion_file)
             with path.open("r", encoding="utf-8") as file:
                 motion_json = json.load(file)
+            if self.FRAME_LAYOUT is not None:
+                if motion_json.get("FrameLayout") != self.FRAME_LAYOUT or motion_json.get("JointCount") != self.JOINT_POS_SIZE:
+                    raise ValueError(f"{path}: expected an explicitly tagged {self.FRAME_SIZE}-D AMP frame, not a visualization frame.")
+                joint_names = motion_json.get("AMPJointNames")
+                if not isinstance(joint_names, list) or len(joint_names) != self.JOINT_POS_SIZE or len(set(joint_names)) != self.JOINT_POS_SIZE:
+                    raise ValueError(f"{path}: missing or invalid AMP joint-order metadata.")
+                if self.joint_names is not None and self.joint_names != joint_names:
+                    raise ValueError(f"{path}: AMP joint order differs between motion files.")
+                self.joint_names = joint_names
 
             motion_data = np.asarray(motion_json["Frames"], dtype=np.float32)
             self._validate_motion_data(motion_data, path)
@@ -292,26 +303,40 @@ class AMPLoader:
     def num_motions(self):
         return len(self.trajectory_names)
 
-    @staticmethod
-    def get_joint_pose(pose):
-        return pose[AMPLoader.JOINT_POSE_START_IDX : AMPLoader.JOINT_POSE_END_IDX]
+    @classmethod
+    def get_joint_pose(cls, pose):
+        return pose[cls.JOINT_POSE_START_IDX : cls.JOINT_POSE_END_IDX]
 
-    @staticmethod
-    def get_joint_pose_batch(poses):
-        return poses[:, AMPLoader.JOINT_POSE_START_IDX : AMPLoader.JOINT_POSE_END_IDX]
+    @classmethod
+    def get_joint_pose_batch(cls, poses):
+        return poses[:, cls.JOINT_POSE_START_IDX : cls.JOINT_POSE_END_IDX]
 
-    @staticmethod
-    def get_joint_vel(pose):
-        return pose[AMPLoader.JOINT_VEL_START_IDX : AMPLoader.JOINT_VEL_END_IDX]
+    @classmethod
+    def get_joint_vel(cls, pose):
+        return pose[cls.JOINT_VEL_START_IDX : cls.JOINT_VEL_END_IDX]
 
-    @staticmethod
-    def get_joint_vel_batch(poses):
-        return poses[:, AMPLoader.JOINT_VEL_START_IDX : AMPLoader.JOINT_VEL_END_IDX]
+    @classmethod
+    def get_joint_vel_batch(cls, poses):
+        return poses[:, cls.JOINT_VEL_START_IDX : cls.JOINT_VEL_END_IDX]
 
-    @staticmethod
-    def get_end_pos(pose):
-        return pose[AMPLoader.END_POS_START_IDX : AMPLoader.END_POS_END_IDX]
+    @classmethod
+    def get_end_pos(cls, pose):
+        return pose[cls.END_POS_START_IDX : cls.END_POS_END_IDX]
 
-    @staticmethod
-    def get_end_pos_batch(poses):
-        return poses[:, AMPLoader.END_POS_START_IDX : AMPLoader.END_POS_END_IDX]
+    @classmethod
+    def get_end_pos_batch(cls, poses):
+        return poses[:, cls.END_POS_START_IDX : cls.END_POS_END_IDX]
+
+
+class G1AnkleAMPLoader(AMPLoader):
+    """All 23 G1 joints: positions(23), velocities(23), root-frame ends(12).
+
+    58-D visualization files have a different layout and are explicitly rejected.
+    The original AMPLoader remains 50-D for other tasks and legacy datasets.
+    """
+    JOINT_POS_SIZE = JOINT_VEL_SIZE = 23
+    JOINT_POSE_START_IDX = 0
+    JOINT_POSE_END_IDX = JOINT_VEL_START_IDX = 23
+    JOINT_VEL_END_IDX = END_POS_START_IDX = 46
+    END_POS_END_IDX = FRAME_SIZE = 58
+    FRAME_LAYOUT = "g1_amp_joint_pos_vel_end_effectors_v1"

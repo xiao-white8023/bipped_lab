@@ -1,0 +1,473 @@
+{
+  "dataset": "motion_amp_expert",
+  "format_version": 1,
+  "robot": "Unitree G1 23-DoF",
+  "task": "g1_rough",
+  "source_selection": "Only stand_to_walk, walk_turn_around, walk_turn_left, walk_turn_right; original PKLs, no *_v1 variants",
+  "mjcf": "../../../../assets/g1/g1_23dof/g1_23dof_rev_1_0.xml",
+  "mjcf_sha256": "85cd118a279013d5530b59f569b84a0952f019396e3cf88dc7dda3e9723c3f7a",
+  "urdf": "../../../../assets/g1/g1_23dof/g1_23dof_rev_1_0.urdf",
+  "urdf_sha256": "8e2cd509732bde755eaca83fc6c17d28052d2f97a86b8a5cdd6c8c64e998346e",
+  "joint_order_23": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint"
+  ],
+  "amp_joint_order": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint"
+  ],
+  "amp_joint_count": 23,
+  "amp_dimension": 58,
+  "includes_ankles": true,
+  "amp_feature_layout": "g1_amp_joint_pos_vel_end_effectors_v1",
+  "amp_end_effector_order": [
+    "left_wrist_roll_rubber_hand",
+    "right_wrist_roll_rubber_hand",
+    "left_ankle_roll_link",
+    "right_ankle_roll_link"
+  ],
+  "amp_layout": {
+    "joint_pos": [
+      0,
+      23
+    ],
+    "joint_vel": [
+      23,
+      46
+    ],
+    "end_effector_pos_b": [
+      46,
+      58
+    ]
+  },
+  "visualization_layout": {
+    "root_xyz": [
+      0,
+      3
+    ],
+    "root_euler_xyz": [
+      3,
+      6
+    ],
+    "joint_pos": [
+      6,
+      29
+    ],
+    "root_lin_vel_w": [
+      29,
+      32
+    ],
+    "root_ang_vel_b": [
+      32,
+      35
+    ],
+    "joint_vel": [
+      35,
+      58
+    ]
+  },
+  "frames_total": 1678,
+  "sample_span_total_s": 41.87489456489457,
+  "training_transition_dt_s": 0.02,
+  "units": "metres, radians, seconds",
+  "sampling": "Equal MotionWeight=0.5 per clip; normalized probability 25% each; Clamp, no wrapping.",
+  "derivative": "Central differences; second-order one-sided endpoints at source FPS.",
+  "pose_conversion": "All source frames/poses/FPS preserved; no resampling, cropping, grounding, smoothing, appended holds or IK.",
+  "feature_conversion": "Full 23-joint FK of hand/ankle link origins in pelvis coordinates; non-ankle format removes only ankle joint position/velocity columns.",
+  "clips": {
+    "stand_to_walk": {
+      "frames": 517,
+      "fps": 39.974276527331185,
+      "duration_s": 12.90830115830116,
+      "root_height_m": {
+        "min": 0.7338871677239093,
+        "mean": 0.7878478067924348,
+        "max": 0.8207228642990326
+      },
+      "root_displacement_world_m": [
+        4.968277837343463,
+        4.749798712696296,
+        -0.08462882474211231
+      ],
+      "root_displacement_initial_root_m": [
+        -6.860673971937816,
+        0.4165933037662355,
+        0.09558864042854462
+      ],
+      "root_yaw_change_deg": -15.120105798910258,
+      "max_joint_speed_rad_s": 16.84194395418479,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            -0.09870871556658402,
+            0.10718863284583924,
+            0.01007397666794825
+          ],
+          "max": [
+            0.17436490757293235,
+            0.22570660536696543,
+            0.049439338162595284
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            -0.08972683730261048,
+            -0.22638628984583434,
+            0.008542670262434618
+          ],
+          "max": [
+            0.125446212789663,
+            -0.15944288981605864,
+            0.03670789792223551
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            -0.19367776446012971,
+            0.0650935380590011,
+            -0.7568261542476811
+          ],
+          "max": [
+            0.31248962956905724,
+            0.1813760069542133,
+            -0.6669468018591437
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            -0.22568296784015474,
+            -0.1917491359499206,
+            -0.7561382626766243
+          ],
+          "max": [
+            0.3170290297055715,
+            -0.04870169879173745,
+            -0.6522960960414029
+          ]
+        }
+      },
+      "gmr_pkl": "../pkl/stand_to_walk.pkl",
+      "gmr_pkl_sha256": "a2fbd3877717f373756cbf505c91ee8447f7eebbced839665386877e83fa4bb4",
+      "visualization_file": "../motion_visualization/original_pkl/stand_to_walk.txt",
+      "visualization_sha256": "c4c57446dbbee0454c552b5836ff2a3a97db332fb6771d2885f2a5d5a2162229",
+      "amp_file": "stand_to_walk.txt",
+      "amp_sha256": "6f7235c497e19408ed90aacf41132e22195f725209685f05a01cf68a39050f82",
+      "source_layout": "gmr_flat",
+      "source_quaternion_order": "xyzw",
+      "motion_weight": 0.5,
+      "normalized_sampling_probability": 0.25
+    },
+    "walk_turn_around": {
+      "frames": 454,
+      "fps": 39.94147768836869,
+      "duration_s": 11.341593406593406,
+      "root_height_m": {
+        "min": 0.7342996634805062,
+        "mean": 0.7700601208539706,
+        "max": 0.7986103190079209
+      },
+      "root_displacement_world_m": [
+        0.16140368181302645,
+        0.3139429404281051,
+        -0.0027434996379676058
+      ],
+      "root_displacement_initial_root_m": [
+        -0.3151292520967846,
+        -0.15908324998646167,
+        -0.0022179234376234628
+      ],
+      "root_yaw_change_deg": -162.76264970035095,
+      "max_joint_speed_rad_s": 6.383233378253336,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            -0.09083113805246282,
+            0.16486845452246598,
+            0.009430840976960508
+          ],
+          "max": [
+            0.181720289193966,
+            0.2735864620574293,
+            0.07150357604795402
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            -0.07662207221022212,
+            -0.23297512571863122,
+            0.009542634514680737
+          ],
+          "max": [
+            0.1432669100283953,
+            -0.17240637060646788,
+            0.04379144934085458
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            -0.2569106877186544,
+            0.0473037601500933,
+            -0.7568782019099711
+          ],
+          "max": [
+            0.3661906126345296,
+            0.2225362068298663,
+            -0.6441571166697571
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            -0.24207588846745895,
+            -0.19502617822323468,
+            -0.7553103314009081
+          ],
+          "max": [
+            0.35346408394459927,
+            -0.05728664852312816,
+            -0.6249846922768704
+          ]
+        }
+      },
+      "gmr_pkl": "../pkl/walk_turn_around.pkl",
+      "gmr_pkl_sha256": "c1b962908ab57d602629965067f912c4d31aba8cf3dd9ff79bb1e87efc75851a",
+      "visualization_file": "../motion_visualization/original_pkl/walk_turn_around.txt",
+      "visualization_sha256": "707c9d6cd817bf8e0c1795f9da5b6e90517d9bcf83090e1dc637a396535e2acb",
+      "amp_file": "walk_turn_around.txt",
+      "amp_sha256": "ed35a3183d16ecf77234d750623aeeec7f0ba361e3014b7b33cb8344b1184a1d",
+      "source_layout": "gmr_flat",
+      "source_quaternion_order": "xyzw",
+      "motion_weight": 0.5,
+      "normalized_sampling_probability": 0.25
+    },
+    "walk_turn_left": {
+      "frames": 336,
+      "fps": 40.0,
+      "duration_s": 8.375,
+      "root_height_m": {
+        "min": 0.7460446193340537,
+        "mean": 0.7824833812221628,
+        "max": 0.8152550002476806
+      },
+      "root_displacement_world_m": [
+        -5.073398496774772,
+        -2.4790928198906554,
+        0.0309082759637892
+      ],
+      "root_displacement_initial_root_m": [
+        4.715037929528962,
+        3.1054720989757407,
+        0.10338860584911701
+      ],
+      "root_yaw_change_deg": 52.750293763886376,
+      "max_joint_speed_rad_s": 6.110350556882477,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            -0.08221701726281926,
+            0.14546416579537025,
+            0.008011254267599258
+          ],
+          "max": [
+            0.1692492076961996,
+            0.20868324002349034,
+            0.05941357884974671
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            -0.04668959629188882,
+            -0.2093164708098085,
+            0.007985985174334631
+          ],
+          "max": [
+            0.11665523329927976,
+            -0.1752339456958477,
+            0.03247281623700754
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            -0.21730375092865592,
+            0.0466652371088084,
+            -0.7564547776674971
+          ],
+          "max": [
+            0.3491853631650789,
+            0.17782930085661994,
+            -0.6463906237169152
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            -0.2115263196901084,
+            -0.17988545297437303,
+            -0.7557275710028786
+          ],
+          "max": [
+            0.3375809599107608,
+            -0.04554578331034009,
+            -0.6309338473836029
+          ]
+        }
+      },
+      "gmr_pkl": "../pkl/walk_turn_left.pkl",
+      "gmr_pkl_sha256": "38355245802eda087d4355873afc690d9628e38a255880a3b81ebb0c7d79782d",
+      "visualization_file": "../motion_visualization/original_pkl/walk_turn_left.txt",
+      "visualization_sha256": "86daeac315caf79c75d6bfdd2086c3055222c056498bd85711eb23718250a765",
+      "amp_file": "walk_turn_left.txt",
+      "amp_sha256": "f2d5cd435f2a921343325ebb957936b3f810978618d897d72f89507dc81c2d49",
+      "source_layout": "gmr_flat",
+      "source_quaternion_order": "xyzw",
+      "motion_weight": 0.5,
+      "normalized_sampling_probability": 0.25
+    },
+    "walk_turn_right": {
+      "frames": 371,
+      "fps": 40.0,
+      "duration_s": 9.25,
+      "root_height_m": {
+        "min": 0.7304414462281662,
+        "mean": 0.7869045968817615,
+        "max": 0.81454866938808
+      },
+      "root_displacement_world_m": [
+        5.246075069799344,
+        2.4337590408228524,
+        -0.08299744417927912
+      ],
+      "root_displacement_initial_root_m": [
+        5.1295374069678905,
+        -2.642376616037857,
+        0.3963169085856977
+      ],
+      "root_yaw_change_deg": -65.06478591870047,
+      "max_joint_speed_rad_s": 7.05913575899095,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            -0.0864673412713164,
+            0.15385268118934126,
+            0.009878548850517407
+          ],
+          "max": [
+            0.20493142377715948,
+            0.22098035541628408,
+            0.07817785743252761
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            -0.07385198414577057,
+            -0.20278790104655167,
+            0.007465209053266558
+          ],
+          "max": [
+            0.1371702612262325,
+            -0.16259898633296052,
+            0.045236502506168466
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            -0.23260977221672569,
+            0.06025650604707685,
+            -0.756781384526755
+          ],
+          "max": [
+            0.39013386206585193,
+            0.18755766822490338,
+            -0.6243127632827306
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            -0.21643665248513924,
+            -0.18000975195854285,
+            -0.7548396707480444
+          ],
+          "max": [
+            0.35581316497156323,
+            -0.03887253331912922,
+            -0.6214830654048832
+          ]
+        }
+      },
+      "gmr_pkl": "../pkl/walk_turn_right.pkl",
+      "gmr_pkl_sha256": "616c71faff10023288ea673bd1fe4d2f0a247b9cf42ed57115061dd89dec6c91",
+      "visualization_file": "../motion_visualization/original_pkl/walk_turn_right.txt",
+      "visualization_sha256": "d4c878e0416563755aaab34fa8333aeba4d1b4601431528c6526bfe4d1646ef5",
+      "amp_file": "walk_turn_right.txt",
+      "amp_sha256": "c37eb2ec51936349cdb94471117b28191dace9d20b4012d2a2a1a17eab27dd09",
+      "source_layout": "gmr_flat",
+      "source_quaternion_order": "xyzw",
+      "motion_weight": 0.5,
+      "normalized_sampling_probability": 0.25
+    }
+  }
+}

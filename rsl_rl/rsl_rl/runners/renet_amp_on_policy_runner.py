@@ -17,7 +17,12 @@ from rsl_rl.modules import (
     MhaActorCritic,
     RENetActorCritic,
 )
-from rsl_rl.utils import AMPLoader, Normalizer, store_code_state
+from rsl_rl.utils import AMPLoader, G1AnkleAMPLoader, Normalizer, store_code_state
+from rsl_rl.utils.renet_checkpoint import (
+    upgrade_renet_auxiliary_checkpoint,
+    validate_renet_vp_checkpoint_contract,
+    validate_renet_critic_checkpoint_contract,
+)
 
 
 class RENetAmpOnPolicyRunner:
@@ -29,6 +34,14 @@ class RENetAmpOnPolicyRunner:
         self.policy_cfg = train_cfg["policy"]  #  策略参数
         self.device = device
         self.env = env
+        if hasattr(env, "lp_observation_contract"):
+            self.policy_cfg["lp_height_history_frames"] = env.lp_height_history_frames
+            self.policy_cfg["LidarCnnMlp"]["input_dim"] = env.lp_observation_shape
+            self.policy_cfg["LidarCnnMlp"]["input_channels"] = 1
+            self.policy_cfg["lp_terrain_recon_front_only"] = env.lp_terrain_recon_front_only
+            if env.lp_height_source != "pgtt_full_atten":
+                raise ValueError("g1_renet supports only source='pgtt_full_atten'.")
+            self.policy_cfg["lp_encoder_type"] = "ame_point_cross_attention"
 
         # check if multi-gpu is enabled
         self._configure_multi_gpu()
@@ -66,6 +79,13 @@ class RENetAmpOnPolicyRunner:
         policy: ActorCritic | MhaActorCritic | RENetActorCritic = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
+        self.lp_encoder_contract = (
+            policy.get_lp_encoder_contract()
+            if hasattr(policy, "get_lp_encoder_contract")
+            else None
+        )
+        self.vp_encoder_contract = policy.get_vp_encoder_contract()
+        self.critic_observation_contract = policy.get_critic_observation_contract()
 
         # resolve dimension of rnd gated state
         if "rnd_cfg" in self.alg_cfg and self.alg_cfg["rnd_cfg"] is not None:
@@ -85,7 +105,26 @@ class RENetAmpOnPolicyRunner:
             self.alg_cfg["symmetry_cfg"]["_env"] = env
 
         # init amp loader
-        amp_data = AMPLoader(
+        amp_joint_count = train_cfg.get("amp_joint_count", 19)
+        if type(amp_joint_count) is not int or amp_joint_count not in (19, 23):
+            raise ValueError("RENet AMP supports 19 non-ankle or 23 full joints.")
+        amp_dimension = 2 * amp_joint_count + 12
+        configured_dimension = train_cfg.get("amp_observation_dim", amp_dimension)
+        expected_loader_name = "G1AnkleAMPLoader" if amp_joint_count == 23 else "AMPLoader"
+        loader_name = train_cfg.get("amp_data_class_name", expected_loader_name)
+        if configured_dimension != amp_dimension or loader_name != expected_loader_name:
+            raise ValueError(
+                "RENet AMP cfg is inconsistent: amp_observation_dim, amp_joint_count "
+                "and amp_data_class_name must select the same 50-D or 58-D layout."
+            )
+        amp_loader_class = G1AnkleAMPLoader if loader_name == "G1AnkleAMPLoader" else AMPLoader
+        amp_obs_demo = self.env.get_amp_obs_for_expert_trans()
+        if amp_obs_demo.shape[1] != amp_dimension:
+            raise ValueError(
+                f"AMP environment/cfg mismatch: environment={amp_obs_demo.shape[1]}, "
+                f"agent cfg={amp_dimension}. Set the AMP switch in RENet_cfg.py."
+            )
+        amp_data = amp_loader_class(
             device,
             time_between_frames=self.env.step_dt,
             preload_transitions=True,
@@ -94,7 +133,6 @@ class RENetAmpOnPolicyRunner:
         )
 
         print(f"DEBUG: 数据集的维度: {amp_data.observation_dim}")
-        amp_obs_demo = self.env.get_amp_obs_for_expert_trans()  # 获得AMP样本的维度
         print(f"DEBUG: 机器人输出的用来和数据集比较的维度: {amp_obs_demo.shape[1]}")
 
         if amp_data.observation_dim != amp_obs_demo.shape[1]:
@@ -102,6 +140,15 @@ class RENetAmpOnPolicyRunner:
                 "AMP observation dimension mismatch: "
                 f"dataset={amp_data.observation_dim}, policy={amp_obs_demo.shape[1]}."
             )
+        if amp_data.joint_names is not None and amp_data.joint_names != self.env.amp_joint_names:
+            raise ValueError("AMP expert joint order differs from the robot AMP observation order.")
+        self.amp_observation_contract = {
+            "version": 2, "dimension": amp_data.observation_dim,
+            "frame_layout": amp_data.FRAME_LAYOUT,
+            "joint_names": list(self.env.amp_joint_names),
+            "normalizer_statistics": "raw_current_policy_and_expert_states",
+            "gradient_penalty_space": "normalized_discriminator_inputs",
+        }
 
         amp_normalizer = Normalizer(amp_data.observation_dim)
         discriminator = Discriminator(
@@ -246,9 +293,13 @@ class RENetAmpOnPolicyRunner:
             with torch.inference_mode():
                 for _ in range(self.num_steps_per_env):
                     # Sample actions
-                    actions = self.alg.act(obs, privileged_obs, amp_obs)
+                    feet_height_valid = extras["observations"].get("feet_height_valid")
+                    terrain_height_valid = extras["observations"].get("terrain_height_valid")
+                    actions = self.alg.act(obs, privileged_obs, amp_obs, feet_height_valid=feet_height_valid,
+                                           terrain_height_valid=terrain_height_valid)
                     # Step the environment
                     obs, rewards, dones, infos = self.env.step(actions.to(self.env.device))
+                    extras = infos
                     next_amp_obs = self.env.get_amp_obs_for_expert_trans()
                     # Move to device
                     obs, rewards, dones, next_amp_obs = (
@@ -258,6 +309,13 @@ class RENetAmpOnPolicyRunner:
                         next_amp_obs.to(self.device),
                     )
                     # perform normalization
+                    next_proprio = None
+                    if self.alg.use_vp_vae:
+                        if self.privileged_obs_type is None:
+                            raise ValueError("VP VAE training requires clean privileged observations.")
+                        raw_critic = infos["observations"][self.privileged_obs_type].to(self.device)
+                        proprio_start = (self.alg.critic_history_len - 1) * self.alg.single_critic_dim
+                        next_proprio = raw_critic[:, proprio_start : proprio_start + self.alg.policy.single_proprio_dim]
                     obs = self.obs_normalizer(obs)
                     if self.privileged_obs_type is not None:
                         privileged_obs = self.privileged_obs_normalizer(
@@ -321,6 +379,7 @@ class RENetAmpOnPolicyRunner:
                         dones,
                         infos,
                         next_amp_obs_with_term,
+                        next_proprio=next_proprio,
                     )
 
                     # Extract intrinsic rewards (only for logging)
@@ -368,7 +427,7 @@ class RENetAmpOnPolicyRunner:
 
                 # compute returns
                 if self.training_type == "rl":
-                    self.alg.compute_returns(privileged_obs)
+                    self.alg.compute_returns(privileged_obs, last_actor_obs=obs)
 
             # update policy
             loss_dict = self.alg.update()
@@ -410,7 +469,7 @@ class RENetAmpOnPolicyRunner:
         # -- Episode info
         ep_string = ""
         if locs["ep_infos"]:
-            for key in locs["ep_infos"][0]:
+            for key in sorted({key for info in locs["ep_infos"] for key in info}):
                 infotensor = torch.tensor([], device=self.device)
                 for ep_info in locs["ep_infos"]:
                     # handle scalar and zero dimensional tensor infos
@@ -516,6 +575,11 @@ class RENetAmpOnPolicyRunner:
             "iter": self.current_learning_iteration,
             "infos": infos,
         }
+        saved_dict["auxiliary_training_contract"] = self.alg.get_auxiliary_training_contract()
+        saved_dict["policy_parameter_names"] = [name for name, _ in self.alg.policy.named_parameters()]
+        saved_dict["amp_observation_contract"] = self.amp_observation_contract
+        saved_dict["vp_encoder_contract"] = self.vp_encoder_contract
+        saved_dict["critic_observation_contract"] = self.critic_observation_contract
         # -- Save RND model if used
         if self.alg.rnd:
             saved_dict["rnd_state_dict"] = self.alg.rnd.state_dict()
@@ -526,6 +590,11 @@ class RENetAmpOnPolicyRunner:
             saved_dict["privileged_obs_norm_state_dict"] = self.privileged_obs_normalizer.state_dict()
 
         # save model
+        if hasattr(self.env, "lp_observation_contract"):
+            saved_dict["lp_observation_contract"] = self.env.lp_observation_contract
+            saved_dict["lp_height_source"] = self.env.lp_height_source
+            if self.lp_encoder_contract is not None:
+                saved_dict["lp_encoder_contract"] = self.lp_encoder_contract
         torch.save(saved_dict, path)
 
         # upload model to external logging service
@@ -533,7 +602,69 @@ class RENetAmpOnPolicyRunner:
             self.writer.save_model(path, self.current_learning_iteration)
 
     def load(self, path: str, load_optimizer: bool = True):
-        loaded_dict = torch.load(path, weights_only=False)
+        loaded_dict = torch.load(path, map_location=self.device, weights_only=False)
+        for message in validate_renet_vp_checkpoint_contract(
+            loaded_dict.get("vp_encoder_contract"), self.vp_encoder_contract, self.alg.policy.history_len
+        ):
+            print(f"[RENet VP] {message}")
+        saved_critic_frames = None
+        if self.critic_observation_contract is not None:
+            saved_critic_width = loaded_dict["model_state_dict"]["critic.0.weight"].shape[1]
+            history_dim = saved_critic_width - self.critic_observation_contract["terrain_dim"]
+            if history_dim <= 0 or history_dim % self.critic_observation_contract["single_frame_dim"]:
+                raise ValueError("Checkpoint critic input has an incompatible observation layout.")
+            saved_critic_frames = history_dim // self.critic_observation_contract["single_frame_dim"]
+        for message in validate_renet_critic_checkpoint_contract(
+            loaded_dict.get("critic_observation_contract"), self.critic_observation_contract, saved_critic_frames
+        ):
+            print(f"[RENet critic] {message}")
+        migrated_archived_ame = False
+        migration_messages = []
+        if hasattr(self.env, "lp_observation_contract"):
+            saved_contract = loaded_dict.get("lp_observation_contract")
+            saved_encoder_contract = loaded_dict.get("lp_encoder_contract")
+            current_encoder_contract = self.lp_encoder_contract
+            if self.env.lp_height_source != "pgtt_full_atten":
+                raise ValueError("g1_renet supports only source='pgtt_full_atten'.")
+            # Archived AME checkpoints used a different source label. This is
+            # metadata normalization only; no alternative network is constructed.
+            migrated_contract = dict(self.env.lp_observation_contract)
+            migrated_contract["source"] = "pgtt_full"
+            migrated_archived_ame = (
+                saved_contract == migrated_contract
+                and saved_encoder_contract == current_encoder_contract
+            )
+            exact_atten_contract = (
+                saved_contract == self.env.lp_observation_contract
+                and saved_encoder_contract == current_encoder_contract
+            )
+            if migrated_archived_ame:
+                print(
+                    "[LP] Normalizing the archived AME source label to pgtt_full_atten; "
+                    "model and optimizer shapes will be verified strictly."
+                )
+            elif not exact_atten_contract:
+                raise ValueError(
+                    "Incompatible pgtt_full_atten checkpoint contract. Expected the "
+                    "11x17 AME point-cross-attention encoder with five proprio frames "
+                    "and 16 heads."
+                )
+        if hasattr(self.alg.policy, "predict_lp_feet_height"):
+            loaded_dict, migration_messages = upgrade_renet_auxiliary_checkpoint(
+                loaded_dict, self.alg.policy, self.alg.optimizer,
+                self.alg.get_auxiliary_training_contract(), load_optimizer=load_optimizer,
+                discriminator=self.alg.discriminator, amp_normalizer=self.alg.amp_normalizer,
+                amp_contract=self.amp_observation_contract,
+            )
+            for message in migration_messages:
+                print(f"[RENet AUX] {message}")
+        if migrated_archived_ame:
+            self._validate_archived_ame_model_state(loaded_dict["model_state_dict"])
+            if load_optimizer:
+                self._validate_optimizer_state_shapes(
+                    loaded_dict["optimizer_state_dict"],
+                    allow_fresh_amp=any(message.startswith("AMP reset:") for message in migration_messages),
+                )
         # -- Load model
         resumed_training = self.alg.policy.load_state_dict(loaded_dict["model_state_dict"])
         self.alg.discriminator.load_state_dict(loaded_dict["discriminator_state_dict"])
@@ -566,6 +697,90 @@ class RENetAmpOnPolicyRunner:
             if hasattr(self.alg, "current_iteration"):
                 self.alg.current_iteration = self.current_learning_iteration
         return loaded_dict["infos"]
+
+    def _validate_archived_ame_model_state(self, saved_model_state):
+        """Check AME keys, registration order and shapes before mutating the policy."""
+        current_state = self.alg.policy.state_dict()
+        saved_names = list(saved_model_state)
+        current_names = list(current_state)
+        if saved_names != current_names:
+            missing = [name for name in current_names if name not in saved_model_state]
+            unexpected = [name for name in saved_names if name not in current_state]
+            raise ValueError(
+                "Archived AME model registration order is incompatible with "
+                "pgtt_full_atten. "
+                f"missing={missing}, unexpected={unexpected}."
+            )
+        for name in current_names:
+            saved_tensor = saved_model_state[name]
+            current_tensor = current_state[name]
+            if tuple(saved_tensor.shape) != tuple(current_tensor.shape):
+                raise ValueError(
+                    f"Archived AME model tensor {name!r} has shape "
+                    f"{tuple(saved_tensor.shape)}, expected {tuple(current_tensor.shape)}."
+                )
+
+    def _validate_optimizer_state_shapes(self, saved_optimizer_state, allow_fresh_amp=False):
+        """Reject archived optimizer state before Adam slots can bind to wrong parameters."""
+        current_groups = self.alg.optimizer.param_groups
+        saved_groups = saved_optimizer_state.get("param_groups", [])
+        if len(current_groups) != len(saved_groups):
+            raise ValueError(
+                "Archived AME optimizer group count is incompatible with pgtt_full_atten: "
+                f"{len(saved_groups)} != {len(current_groups)}."
+            )
+        saved_states = saved_optimizer_state.get("state", {})
+        for group_index, (current_group, saved_group) in enumerate(
+            zip(current_groups, saved_groups, strict=True)
+        ):
+            if saved_group.get("name") != current_group.get("name"):
+                raise ValueError(
+                    "Archived AME optimizer group order mismatch at index "
+                    f"{group_index}: {saved_group.get('name')!r} != "
+                    f"{current_group.get('name')!r}."
+                )
+            current_params = current_group["params"]
+            saved_param_ids = saved_group["params"]
+            if len(current_params) != len(saved_param_ids):
+                raise ValueError(
+                    "Archived AME optimizer parameter count mismatch in group "
+                    f"{group_index}: {len(saved_param_ids)} != {len(current_params)}."
+                )
+            for parameter_index, (parameter, saved_id) in enumerate(
+                zip(current_params, saved_param_ids, strict=True)
+            ):
+                # New/reset AUX parameters legitimately have no Adam moments yet.
+                if saved_id not in saved_states:
+                    allowed_fresh = {
+                        param for name, param in self.alg.policy.named_parameters()
+                        if name.startswith(("lp_feet_height_decoder.", "terrain_decoder."))
+                    }
+                    if parameter in allowed_fresh:
+                        continue
+                    if allow_fresh_amp and current_group.get("name") in ("amp_trunk", "amp_head"):
+                        continue
+                    raise ValueError(
+                        "Archived AME optimizer has no Adam state at group/parameter "
+                        f"{group_index}/{parameter_index}."
+                    )
+                state = saved_states[saved_id]
+                for required_name in ("exp_avg", "exp_avg_sq"):
+                    if required_name not in state:
+                        raise ValueError(
+                            "Archived AME optimizer is missing "
+                            f"{required_name} at group/parameter "
+                            f"{group_index}/{parameter_index}."
+                        )
+                for state_name in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+                    state_tensor = state.get(state_name)
+                    if state_tensor is None:
+                        continue
+                    if tuple(state_tensor.shape) != tuple(parameter.shape):
+                        raise ValueError(
+                            "Archived AME optimizer tensor mismatch at group/parameter "
+                            f"{group_index}/{parameter_index} ({state_name}): "
+                            f"{tuple(state_tensor.shape)} != {tuple(parameter.shape)}."
+                        )
 
     def get_inference_policy(self, device=None):
         self.eval_mode()  # switch to evaluation mode (dropout for example)

@@ -43,7 +43,7 @@ parser.add_argument("--feet_stumble_force_threshold", type=float, default=10.0)
 parser.add_argument("--eval_depth_noise", action="store_true")
 parser.add_argument("--depth_noise_std", type=float, default=0.0)
 parser.add_argument("--depth_failure_prob", type=float, default=0.0)
-parser.add_argument("--eval_lidar_noise", action="store_true")
+parser.add_argument("--eval_lp_noise", action="store_true")
 
 # 是否打开本体观测噪声。默认 eval 时关掉
 parser.add_argument("--eval_obs_noise", action="store_true")
@@ -178,9 +178,13 @@ def configure_eval_env(env_cfg):
             env_cfg.depth_noise_curriculum.gaussian_std_range = (0.0, 0.0)
             env_cfg.depth_noise_curriculum.failure_probability_range = (0.0, 0.0)
 
+    if hasattr(env_cfg, "lp_height"):
+        env_cfg.lp_height.noise.enable = bool(args_cli.eval_lp_noise)
+        env_cfg.lp_height.noise.force_active = bool(args_cli.eval_lp_noise)
+
     lidar_cfg = getattr(env_cfg.scene, "lidar", None)
     if lidar_cfg is not None and hasattr(lidar_cfg, "noise"):
-        lidar_cfg.noise.enable = bool(args_cli.eval_lidar_noise)
+        lidar_cfg.noise.enable = bool(args_cli.eval_lp_noise)
 
     # eval 不需要可视化 camera ray
     if hasattr(env_cfg.scene.camera, "camera"):
@@ -412,7 +416,7 @@ def eval_policy():
     print(f"[INFO] target eval episodes = {args_cli.num_eval_episodes}")
     print(f"[INFO] eval_depth_noise = {args_cli.eval_depth_noise}")
     print(f"[INFO] depth_noise_std = {args_cli.depth_noise_std}")
-    print(f"[INFO] eval_lidar_noise = {args_cli.eval_lidar_noise}")
+    print(f"[INFO] eval_lidar_noise = {args_cli.eval_lp_noise}")
     print(f"[INFO] depth_failure_prob = {args_cli.depth_failure_prob}")
 
     # 每个并行环境当前 episode 的起点。用于解决 reset x 可能不是 0 的问题。

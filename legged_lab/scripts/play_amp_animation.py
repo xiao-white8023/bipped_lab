@@ -14,7 +14,7 @@ During playback, the terminal displays:
 - current playback time
 - total motion duration
 
-Export preserves the existing 58D full-AMP locomotion layout.
+Export uses the task cfg's selected 50D or 58D AMP locomotion layout.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import argparse
 import json
 import sys
 import time
+import traceback
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +31,12 @@ import numpy as np
 
 # Ensure the repository-local rsl_rl package has priority.
 CURRENT_DIR = Path(__file__).resolve().parent
+REPOSITORY_ROOT = CURRENT_DIR.parent.parent
+if str(REPOSITORY_ROOT) not in sys.path:
+    # Running this file directly sets sys.path[0] to ``legged_lab/scripts``.
+    # Add the repository parent so the sibling ``legged_lab`` package is
+    # importable even when the project has not been installed editable.
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 LOCAL_RSL_RL_PATH = (CURRENT_DIR / "../../rsl_rl").resolve()
 if str(LOCAL_RSL_RL_PATH) not in sys.path:
     sys.path.insert(0, str(LOCAL_RSL_RL_PATH))
@@ -98,6 +105,29 @@ parser.add_argument(
     type=float,
     default=0.5,
     help="MotionWeight written to the generated AMP expert file.",
+)
+parser.add_argument(
+    "--repeat",
+    type=int,
+    default=1,
+    help=(
+        "Number of playback passes. Use a large value for continuous visual "
+        "inspection; closing the Isaac Sim window stops playback."
+    ),
+)
+parser.add_argument(
+    "--realtime",
+    action="store_true",
+    help="Pace GUI playback using the motion timestamps instead of rendering as fast as possible.",
+)
+parser.add_argument(
+    "--root_height_offset",
+    type=float,
+    default=0.1,
+    help=(
+        "Extra root Z offset applied by the viewer. The historical default is "
+        "0.1 m; use 0.0 for motions already grounded to the current URDF."
+    ),
 )
 parser.add_argument(
     "--clip_ranges",
@@ -192,14 +222,18 @@ def _write_motion_file(
     motion_weight: float,
     start_time: float,
     end_time: float,
+    joint_names: list[str],
 ) -> None:
     output_path = Path(save_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if frames.ndim != 2 or frames.shape[1] != 58:
+    if frames.ndim != 2 or frames.shape[1] not in (50, 58):
         raise ValueError(
-            f"Expected locomotion AMP expert data with shape (T, 58), got {frames.shape}."
+            f"Expected locomotion AMP expert data with shape (T, 50) or (T, 58), got {frames.shape}."
         )
+    joint_count = (frames.shape[1] - 12) // 2
+    if len(joint_names) != joint_count or len(set(joint_names)) != joint_count:
+        raise ValueError("AMP joint-order metadata does not match the exported frame width.")
     if not np.isfinite(frames).all():
         raise ValueError("Generated AMP expert frames contain NaN or Inf values.")
 
@@ -209,6 +243,9 @@ def _write_motion_file(
         "EnableCycleOffsetPosition": True,
         "EnableCycleOffsetRotation": True,
         "MotionWeight": float(motion_weight),
+        "FrameLayout": "g1_amp_joint_pos_vel_end_effectors_v1",
+        "JointCount": joint_count,
+        "AMPJointNames": list(joint_names),
         "Frames": frames.tolist(),
     }
 
@@ -377,6 +414,10 @@ def play_amp_animation() -> None:
         raise ValueError(
             "Generating one AMP expert trajectory requires --num_envs=1."
         )
+    if args_cli.repeat < 1:
+        raise ValueError(f"--repeat must be at least 1, got {args_cli.repeat}.")
+    if args_cli.save_path and args_cli.repeat != 1:
+        raise ValueError("--repeat must be 1 when --save_path is used.")
 
     print(
         "[play_amp_animation] Creating the IsaacLab environment. The first "
@@ -387,12 +428,12 @@ def play_amp_animation() -> None:
     environment_start_time = time.perf_counter()
     env_class = task_registry.get_task_class(args_cli.task)
     env = env_class(env_cfg, args_cli.headless)
+    env.visualization_root_height_offset = float(args_cli.root_height_offset)
     print(
         "[play_amp_animation] Environment ready in "
         f"{time.perf_counter() - environment_start_time:.1f} s.",
         flush=True,
     )
-
     source_num_frames = int(
         env.amp_loader_display.trajectory_num_frames[0]
     )
@@ -470,7 +511,6 @@ def play_amp_animation() -> None:
 
     print(
         "Starting G1 motion playback:\n"
-        f"  AMP profile       = {args_cli.amp_profile}\n"
         f"  source_frames     = {source_num_frames}\n"
         f"  source_fps        = {1.0 / source_frame_duration:.6f}\n"
         f"  source_duration   = {source_duration:.6f} s\n"
@@ -490,6 +530,7 @@ def play_amp_animation() -> None:
             )
         print()
 
+    playback_ranges = playback_ranges * int(args_cli.repeat)
     num_playback_ranges = len(playback_ranges)
 
     for clip_index, (start_time, end_time, sample_times) in enumerate(
@@ -498,6 +539,7 @@ def play_amp_animation() -> None:
     ):
         total_output_frames = len(sample_times)
         all_frames: list[np.ndarray] = []
+        playback_wall_start = time.perf_counter()
 
         if clip_ranges:
             print(
@@ -512,6 +554,14 @@ def play_amp_animation() -> None:
                     f"in clip {clip_index}."
                 )
                 break
+
+            if args_cli.realtime:
+                target_wall_time = (
+                    playback_wall_start + float(sample_time) - start_time
+                )
+                remaining_time = target_wall_time - time.perf_counter()
+                if remaining_time > 0.0:
+                    time.sleep(remaining_time)
 
             source_frame_index = int(
                 round(float(sample_time) / source_frame_duration)
@@ -542,16 +592,20 @@ def play_amp_animation() -> None:
             base_amp_frame = env.visualize_motion(float(sample_time))
 
             if args_cli.save_path:
-                if tuple(base_amp_frame.shape) != (1, 58):
+                expected_amp_dim = 2 * len(env.amp_joint_names) + 12
+                if tuple(base_amp_frame.shape) != (1, expected_amp_dim):
                     raise ValueError(
-                        "env.visualize_motion() must return shape (1, 58) "
-                        "for full G1 23-DoF AMP, "
+                        f"env.visualize_motion() must return shape (1, {expected_amp_dim}) "
+                        "for the selected G1 AMP layout, "
                         f"but returned {tuple(base_amp_frame.shape)}."
                     )
 
                 all_frames.append(base_amp_frame[0].detach().cpu().numpy().copy())
 
         print()
+
+        if not simulation_app.is_running():
+            break
 
         if args_cli.save_path:
             if not all_frames:
@@ -572,11 +626,17 @@ def play_amp_animation() -> None:
                 motion_weight=args_cli.motion_weight,
                 start_time=start_time,
                 end_time=end_time,
+                joint_names=env.amp_joint_names,
             )
 
 
 if __name__ == "__main__":
     try:
         play_amp_animation()
+    except Exception:
+        # Isaac Sim shutdown can itself block on some driver/runtime
+        # combinations.  Print the actionable error before entering cleanup.
+        traceback.print_exc()
+        raise
     finally:
         simulation_app.close()

@@ -1,0 +1,1003 @@
+{
+  "dataset": "g1_23dof_locomotion_v3",
+  "format_version": 3,
+  "curation": "User-accepted four final motion sequences",
+  "robot": "Unitree G1 23-DoF",
+  "task": "g1_renet",
+  "mjcf": "legged_lab/assets/g1/g1_23dof/g1_23dof_rev_1_0.xml",
+  "mjcf_sha256": "85cd118a279013d5530b59f569b84a0952f019396e3cf88dc7dda3e9723c3f7a",
+  "urdf": "legged_lab/assets/g1/g1_23dof/g1_23dof_rev_1_0.urdf",
+  "urdf_sha256": "8e2cd509732bde755eaca83fc6c17d28052d2f97a86b8a5cdd6c8c64e998346e",
+  "joint_order_23": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint"
+  ],
+  "amp_joint_order": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint"
+  ],
+  "amp_joint_order_23": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint"
+  ],
+  "amp_joint_count": 23,
+  "amp_dimension": 58,
+  "includes_ankles": true,
+  "amp_feature_layout": "g1_amp_joint_pos_vel_end_effectors_v1",
+  "amp_end_effector_order": [
+    "left_wrist_roll_rubber_hand",
+    "right_wrist_roll_rubber_hand",
+    "left_ankle_roll_link",
+    "right_ankle_roll_link"
+  ],
+  "amp_layout": {
+    "joint_pos": [
+      0,
+      23
+    ],
+    "joint_vel": [
+      23,
+      46
+    ],
+    "left_hand_pos_b": [
+      46,
+      49
+    ],
+    "right_hand_pos_b": [
+      49,
+      52
+    ],
+    "left_foot_pos_b": [
+      52,
+      55
+    ],
+    "right_foot_pos_b": [
+      55,
+      58
+    ]
+  },
+  "visualization_layout": {
+    "root_xyz": [
+      0,
+      3
+    ],
+    "root_euler_xyz": [
+      3,
+      6
+    ],
+    "joint_pos": [
+      6,
+      29
+    ],
+    "root_lin_vel_w": [
+      29,
+      32
+    ],
+    "root_ang_vel_b": [
+      32,
+      35
+    ],
+    "joint_vel": [
+      35,
+      58
+    ]
+  },
+  "units": "metres, radians, seconds",
+  "fps": 30.0,
+  "frames_total": 5400,
+  "playback_duration_total_s": 180.0,
+  "training_transition_dt_s": 0.02,
+  "sampling": "Equal MotionWeight=1 per full clip; uniform valid start time within each clip; no wrapping.",
+  "derivative": "numpy.gradient, central differences inside each clip and second-order one-sided endpoints; no smoothing/resampling.",
+  "pose_conversion": "Source joints and root XYZ preserved; normalized XYZW quaternion converted to unwrapped XYZ Euler only for visualization. No grounding, speed scaling, cropping or new IK.",
+  "feature_conversion": "23 joint positions/velocities; MJCF FK of hand/ankle link origins relative to pelvis, rotated into pelvis frame.",
+  "limitations": "Kinematic motion references. Direction and root speed are not inputs to the 58-D AMP frame. Physics tracking and trained-policy style are not validated by dataset conversion.",
+  "clips": {
+    "walk_forward_turns": {
+      "frames": 1800,
+      "fps": 30.0,
+      "root_height_m": {
+        "min": 0.724245548248291,
+        "mean": 0.7731944796442985,
+        "max": 0.793649435043335
+      },
+      "root_displacement_world_m": [
+        8.7254638671875,
+        14.733407974243164,
+        0.0
+      ],
+      "root_displacement_initial_root_m": [
+        8.32894477195618,
+        14.961139970563423,
+        0.0
+      ],
+      "root_yaw_change_deg": 181.52001926501583,
+      "max_joint_speed_rad_s": 5.132131576538086,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            -0.09399807148277958,
+            0.2007546430105993,
+            0.012894001666136717
+          ],
+          "max": [
+            0.1640172331525829,
+            0.22170708154279722,
+            0.05914596202801119
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            -0.04988108556576906,
+            -0.22233305396822484,
+            0.012923223271113699
+          ],
+          "max": [
+            0.1081674633450385,
+            -0.2060499410535573,
+            0.03177973319726714
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            -0.3390864709230038,
+            0.031010323151363265,
+            -0.7547509020979534
+          ],
+          "max": [
+            0.33732960476098883,
+            0.2205588304521515,
+            -0.6289634244683674
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            -0.32746648036322357,
+            -0.20026311332262323,
+            -0.7547292900974141
+          ],
+          "max": [
+            0.339982515637719,
+            0.0029865167857264572,
+            -0.6544049983059638
+          ]
+        }
+      },
+      "gmr_pkl": "sources/walk_forward_turns.pkl",
+      "gmr_pkl_sha256": "1163d872b3c993d2e9ee1e2e28be1d710b047d8fadacb41d965ddffd99064cf8",
+      "visualization_file": "visualization/walk_forward_turns.txt",
+      "visualization_sha256": "46937e29e96a9b64660b3ec046b501979b5949f35742a1217a3c7587034cdac5",
+      "amp_file": "amp/walk_forward_turns.txt",
+      "amp_sha256": "b939c1a8487488ba12d48d67188eaccb662a746bcfa4e4c50d60684d0db2b78f",
+      "source_original": "/home/cjh/kimodo/outputs/front8_review/v8_continuity/g1_23_accad_forward_turns_60s.pkl",
+      "source_origin": "ACCAD captured start/stop and walking style; planned stepping turns",
+      "source_revision": 8,
+      "sequence_composition": {
+        "direction": "forward_turns",
+        "revision": 8,
+        "duration_s": 60.0,
+        "frames": 1800,
+        "fps": 30.0,
+        "source_type": "ACCAD captured start/stop and captured-stride style with planned stepping turns",
+        "stand_start_s": 3.0,
+        "stand_end_s": 3.0,
+        "phase_intervals_s": {
+          "stand_start": [
+            0.0,
+            3.0
+          ],
+          "start": [
+            3.0,
+            7.5
+          ],
+          "forward": [
+            7.5,
+            12.566666666666666
+          ],
+          "turn_left": [
+            12.566666666666666,
+            18.0
+          ],
+          "after_left": [
+            18.0,
+            23.066666666666666
+          ],
+          "turn_right": [
+            23.066666666666666,
+            30.066666666666666
+          ],
+          "after_right": [
+            30.066666666666666,
+            35.13333333333333
+          ],
+          "turn_around": [
+            35.13333333333333,
+            44.333333333333336
+          ],
+          "after_turn_around": [
+            44.333333333333336,
+            51.3
+          ],
+          "stop": [
+            51.3,
+            57.0
+          ],
+          "stand_end": [
+            57.0,
+            60.0
+          ]
+        },
+        "source_segments": [
+          {
+            "phase": "start",
+            "source": "/home/cjh/GMR/ACCAD/Female1Walking_c3d/B1_-_stand_to_walk_stageii.npz",
+            "robot_clip": "/home/cjh/kimodo/outputs/front8_review/v8_continuity/start.pkl",
+            "frame_range_exclusive": [
+              0,
+              153
+            ],
+            "sequence_interval_s": [
+              3.0,
+              8.1
+            ],
+            "seam_weighted_joint_mse": 0.0
+          },
+          {
+            "phase": "forward",
+            "source": "/home/cjh/GMR/ACCAD/Female1Walking_c3d/B3_-_walk1_stageii.npz",
+            "robot_clip": "/home/cjh/kimodo/outputs/front8_review/v8_continuity/walk.pkl",
+            "frame_range_exclusive": [
+              32,
+              202
+            ],
+            "sequence_interval_s": [
+              7.5,
+              13.166666666666666
+            ],
+            "seam_weighted_joint_mse": 0.010678203917876189
+          },
+          {
+            "phase": "turn_left",
+            "source": "/home/cjh/GMR/ACCAD/Female1Walking_c3d/B3_-_walk1_stageii.npz",
+            "robot_clip": "/home/cjh/kimodo/outputs/front8_review/v8_continuity/left.pkl",
+            "frame_range_exclusive": [
+              32,
+              213
+            ],
+            "sequence_interval_s": [
+              12.566666666666666,
+              18.6
+            ],
+            "seam_weighted_joint_mse": 0.00018112401644781548
+          },
+          {
+            "phase": "after_left",
+            "source": "/home/cjh/GMR/ACCAD/Female1Walking_c3d/B3_-_walk1_stageii.npz",
+            "robot_clip": "/home/cjh/kimodo/outputs/front8_review/v8_continuity/walk.pkl",
+            "frame_range_exclusive": [
+              5,
+              175
+            ],
+            "sequence_interval_s": [
+              18.0,
+              23.666666666666668
+            ],
+            "seam_weighted_joint_mse": 7.152187702453563e-05
+          },
+          {
+            "phase": "turn_right",
+            "source": "/home/cjh/GMR/ACCAD/Female1Walking_c3d/B3_-_walk1_stageii.npz",
+            "robot_clip": "/home/cjh/kimodo/outputs/front8_review/v8_continuity/right.pkl",
+            "frame_range_exclusive": [
+              5,
+              233
+            ],
+            "sequence_interval_s": [
+              23.066666666666666,
+              30.666666666666668
+            ],
+            "seam_weighted_joint_mse": 1.0345037317767487e-10
+          },
+          {
+            "phase": "after_right",
+            "source": "/home/cjh/GMR/ACCAD/Female1Walking_c3d/B3_-_walk1_stageii.npz",
+            "robot_clip": "/home/cjh/kimodo/outputs/front8_review/v8_continuity/walk.pkl",
+            "frame_range_exclusive": [
+              25,
+              195
+            ],
+            "sequence_interval_s": [
+              30.066666666666666,
+              35.733333333333334
+            ],
+            "seam_weighted_joint_mse": 3.106323358796937e-05
+          },
+          {
+            "phase": "turn_around",
+            "source": "/home/cjh/GMR/ACCAD/Female1Walking_c3d/B3_-_walk1_stageii.npz",
+            "robot_clip": "/home/cjh/kimodo/outputs/front8_review/v8_continuity/around.pkl",
+            "frame_range_exclusive": [
+              25,
+              319
+            ],
+            "sequence_interval_s": [
+              35.13333333333333,
+              44.93333333333333
+            ],
+            "seam_weighted_joint_mse": 5.270583885252107e-07
+          },
+          {
+            "phase": "after_turn_around",
+            "source": "/home/cjh/GMR/ACCAD/Female1Walking_c3d/B3_-_walk1_stageii.npz",
+            "robot_clip": "/home/cjh/kimodo/outputs/front8_review/v8_continuity/walk.pkl",
+            "frame_range_exclusive": [
+              35,
+              262
+            ],
+            "sequence_interval_s": [
+              44.333333333333336,
+              51.9
+            ],
+            "seam_weighted_joint_mse": 2.9055420397410126e-05
+          },
+          {
+            "phase": "stop",
+            "source": "/home/cjh/GMR/ACCAD/Female1Walking_c3d/B2_-_walk_to_stand_stageii.npz",
+            "robot_clip": "/home/cjh/kimodo/outputs/front8_review/v8_continuity/stop.pkl",
+            "frame_range_exclusive": [
+              0,
+              171
+            ],
+            "sequence_interval_s": [
+              51.3,
+              57.0
+            ],
+            "seam_weighted_joint_mse": 0.0205883039995048,
+            "source_resampling": {
+              "first_frame": 28,
+              "last_frame": 170,
+              "output_frames": 171,
+              "description": "Phase-matched captured stop slowed continuously to fill its interval."
+            }
+          }
+        ],
+        "overlap_frames": 18,
+        "walking_source_lengths_frames": [
+          170,
+          170,
+          170,
+          227
+        ],
+        "turn_labels_deg": [
+          90,
+          -90,
+          180
+        ],
+        "visible_sole_grounding": {
+          "method": "Lowest collision sphere or visible shoe mesh at 1mm"
+        },
+        "standing_adaptation": {
+          "description": "Last captured swings land at standing feet; torso settles with both feet planted. No extra closing steps."
+        },
+        "description": "ACCAD captured start/stop and averaged captured straight strides; gait-phase matched joins. Turns use captured stride style on gradual curved landings instead of sharp pivot; 8deg knee extension reserve and temporal priors."
+      },
+      "sample_span_s": 59.96666666666667,
+      "playback_duration_s": 60.0,
+      "motion_weight": 1.0,
+      "normalized_sampling_probability": 0.25
+    },
+    "walk_backward": {
+      "frames": 1200,
+      "fps": 30.0,
+      "root_height_m": {
+        "min": 0.7690836191177368,
+        "mean": 0.7756552777687709,
+        "max": 0.7891951203346252
+      },
+      "root_displacement_world_m": [
+        -11.420372009277344,
+        0.0,
+        0.0
+      ],
+      "root_displacement_initial_root_m": [
+        -11.420372009277344,
+        0.0,
+        0.0
+      ],
+      "root_yaw_change_deg": 0.0,
+      "max_joint_speed_rad_s": 5.8740634471178055,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            -0.013319261591581612,
+            0.20541296122329333,
+            0.011925901703552427
+          ],
+          "max": [
+            0.059751106825845626,
+            0.20856031372254874,
+            0.017506096037759364
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            -0.013501980848569267,
+            -0.20826427958291857,
+            0.011948940963006319
+          ],
+          "max": [
+            0.059586222144730465,
+            -0.20571366613908243,
+            0.017543440157820764
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            -0.13065382670003686,
+            0.07556346597665195,
+            -0.7522859679134489
+          ],
+          "max": [
+            0.19960923250095808,
+            0.15230360028587672,
+            -0.650010404178126
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            -0.13493683586999256,
+            -0.1279492226992093,
+            -0.7522859679250415
+          ],
+          "max": [
+            0.2016996820996968,
+            -0.07618211576292008,
+            -0.6821258720018986
+          ]
+        }
+      },
+      "gmr_pkl": "sources/walk_backward.pkl",
+      "gmr_pkl_sha256": "0d2496efa4ea9e0f022a4652a46b36867398539f961ae2af8d765cc40ef4bbe4",
+      "visualization_file": "visualization/walk_backward.txt",
+      "visualization_sha256": "1a2916d3a93487fb1abdf438eff0e610fcb6a734eed1854a6d994c7de7694066",
+      "amp_file": "amp/walk_backward.txt",
+      "amp_sha256": "7476cfb5d324aaef815dd6a89aa953fdc37818e4bab3684453aee621ef042b5c",
+      "source_original": "/home/cjh/kimodo/outputs/backward_coordination_review/v2/g1_23_backward_stand_40s.pkl",
+      "source_origin": "Kimodo SOMA style; planned footstep sequence and coordination refinement",
+      "source_revision": 2,
+      "sequence_composition": {
+        "source": "/home/cjh/kimodo/outputs/natural_gait_review/g1_23_backward_045mps_01_refined_v2.pkl",
+        "duration_s": 40.0,
+        "frames": 1200,
+        "fps": 30.0,
+        "stand_start_s": 3.0,
+        "stand_end_s": 3.0,
+        "phase_intervals_s": {
+          "stand_start": [
+            0,
+            3.0
+          ],
+          "start": [
+            3.0,
+            5.0
+          ],
+          "walk": [
+            5.0,
+            35.0
+          ],
+          "stop": [
+            35.0,
+            37.0
+          ],
+          "stand_end": [
+            37.0,
+            40.0
+          ]
+        },
+        "source_cycle_frame_range_inclusive": [
+          118,
+          158
+        ],
+        "step_count": 50,
+        "half_step_interval_s": 0.66734693877551,
+        "swing_duration_s": 0.6,
+        "root_backward_distance_m": 11.420371855740086,
+        "target_swing_clearance_m": 0.04,
+        "walking_root_height_offset_m": -0.01,
+        "max_ik_position_error_m": 8.96506977512771e-09,
+        "max_ik_rotation_error_deg": 5.853670337121251e-06,
+        "description": "Same 40-second backward footstep plan and planted XY; quieter pelvis/trunk, step-coupled opposed arms, visible shoe clearance and exact standing holds.",
+        "direction": "backward",
+        "revision": 2,
+        "coordination_adaptation": {
+          "parent": "/home/cjh/kimodo/outputs/natural_gait_review/g1_23_backward_stand_40s.pkl",
+          "before": {
+            "steady_interval_frames": [
+              150,
+              1050
+            ],
+            "root_lateral_peak_to_peak_m": 0.06658095121383667,
+            "torso_yaw_pitch_roll_min_max_deg": [
+              [
+                -1.260330311640498,
+                -1.245605000575336,
+                -1.6167766710751255
+              ],
+              [
+                3.84284480785643,
+                3.126200052635924,
+                1.8040434512337915
+              ]
+            ],
+            "hip_yaw_peak_to_peak_LR_deg": [
+              8.255450720534835,
+              5.230169372190302
+            ],
+            "hip_roll_peak_to_peak_LR_deg": [
+              9.742265935857075,
+              9.788497351914776
+            ],
+            "same_side_hand_foot_foreaft_correlation_LR": [
+              0.04629456902020799,
+              -0.276740284167049
+            ],
+            "hand_foreaft_p05_p95_range_LR_m": [
+              0.14975456311872207,
+              0.1450117744169953
+            ],
+            "max_joint_frame_step_deg": 10.72020559103033,
+            "knee_minimum_LR_deg": [
+              11.27039952678966,
+              12.187053602087683
+            ]
+          },
+          "after": {
+            "steady_interval_frames": [
+              150,
+              1050
+            ],
+            "root_lateral_peak_to_peak_m": 0.029961428046226504,
+            "torso_yaw_pitch_roll_min_max_deg": [
+              [
+                -0.7806832276243538,
+                -0.2957430825776378,
+                -0.6127701737951421
+              ],
+              [
+                0.7591273613380481,
+                2.3273399493491054,
+                0.6481369905077643
+              ]
+            ],
+            "hip_yaw_peak_to_peak_LR_deg": [
+              4.879089982949824,
+              1.8783062999592854
+            ],
+            "hip_roll_peak_to_peak_LR_deg": [
+              5.649552322549655,
+              4.269472925043063
+            ],
+            "same_side_hand_foot_foreaft_correlation_LR": [
+              -0.951623937689132,
+              -0.9532566163736969
+            ],
+            "hand_foreaft_p05_p95_range_LR_m": [
+              0.07054592134728055,
+              0.07075590577424952
+            ],
+            "max_joint_frame_step_deg": 11.276981065825652,
+            "knee_minimum_LR_deg": [
+              7.5942574100971765,
+              8.947676574528906
+            ]
+          },
+          "lateral_motion_scale": 0.45,
+          "height_wave_scale": 0.65,
+          "arm_swing_scale_deg": 7.0,
+          "torso_yaw_soft_bound_deg": 1.0,
+          "torso_roll_soft_bound_deg": 0.8,
+          "standing_ground_offset_m": 0.0009091417854736176,
+          "maximum_additional_swing_shoe_lift_LR_m": [
+            0.005747700469972896,
+            0.0038753441024689185
+          ],
+          "source_minimum_visible_shoe_height_m": -0.005656842255446513,
+          "minimum_visible_shoe_height_m": 0.0009999999097641266,
+          "maximum_foot_world_xy_change_m": 2.960674698019084e-11,
+          "maximum_foot_world_z_change_m": 0.006656842267260751,
+          "maximum_foot_target_error_m": 1.0695344686380963e-10,
+          "maximum_foot_world_orientation_change_deg": 5.800814467360175e-08,
+          "maximum_ik_position_error_m": 1.0695344686380963e-10,
+          "root_x_identical": true,
+          "note": "Kinematic style adaptation of the accepted SOMA-derived footstep plan; no force/dynamics validation."
+        }
+      },
+      "sample_span_s": 39.96666666666667,
+      "playback_duration_s": 40.0,
+      "motion_weight": 1.0,
+      "normalized_sampling_probability": 0.25
+    },
+    "walk_left": {
+      "frames": 1200,
+      "fps": 30.0,
+      "root_height_m": {
+        "min": 0.770514965057373,
+        "mean": 0.7769629415373007,
+        "max": 0.7882859706878662
+      },
+      "root_displacement_world_m": [
+        0.0,
+        4.408277988433838,
+        0.0
+      ],
+      "root_displacement_initial_root_m": [
+        0.0,
+        4.408277988433838,
+        0.0
+      ],
+      "root_yaw_change_deg": 0.0,
+      "max_joint_speed_rad_s": 4.932010173797607,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            0.017376108408695773,
+            0.2057445979096614,
+            0.012216410641633757
+          ],
+          "max": [
+            0.030417318604243498,
+            0.20945615978123178,
+            0.01365772228760942
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            0.017774363077944243,
+            -0.20998413323476636,
+            0.012399202074752688
+          ],
+          "max": [
+            0.027483226780198614,
+            -0.20569531211559844,
+            0.013618473016307253
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            -0.0037818565201122754,
+            0.09484495542882089,
+            -0.7522859707413414
+          ],
+          "max": [
+            0.01962639273524277,
+            0.24365281119725388,
+            -0.6887500344102405
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            0.0011106334666417573,
+            -0.23849799056182283,
+            -0.7522859707646099
+          ],
+          "max": [
+            0.03208864399468236,
+            -0.11479818651577724,
+            -0.6881526452795806
+          ]
+        }
+      },
+      "gmr_pkl": "sources/walk_left.pkl",
+      "gmr_pkl_sha256": "6468fcfc162d49a00890e3e9a95cc7c194c3b61a3ee7af2c79e06c305cc98bb5",
+      "visualization_file": "visualization/walk_left.txt",
+      "visualization_sha256": "b36997151456ab6689b0df6ad76e419c3ff9f13af9257c3ad4f598cd6020936a",
+      "amp_file": "amp/walk_left.txt",
+      "amp_sha256": "98a9f8d457142c61c0a26718ecde6fbb868b339dc6cc59b09077a28deb385241",
+      "source_original": "/home/cjh/kimodo/outputs/side_gait_review/g1_23_side_left_stand_40s.pkl",
+      "source_origin": "Kimodo SOMA left side-step style; planned noncrossing footstep sequence",
+      "source_revision": null,
+      "sequence_composition": {
+        "direction": "left",
+        "source_robot": "/home/cjh/kimodo/outputs/side_gait_review/g1_23_left_01_refined.pkl",
+        "source_human": "/home/cjh/kimodo/outputs/side_gait_review/human_left_03mps/human_left_03mps_01.npz",
+        "standing_reference": "/home/cjh/kimodo/outputs/natural_gait_review/g1_23_backward_stand_40s.pkl",
+        "duration_s": 40.0,
+        "frames": 1200,
+        "fps": 30.0,
+        "stand_start_s": 3,
+        "stand_end_s": 3,
+        "phase_intervals_s": {
+          "stand_start": [
+            0,
+            3
+          ],
+          "start": [
+            3,
+            5
+          ],
+          "walk": [
+            5,
+            35
+          ],
+          "stop": [
+            35,
+            37
+          ],
+          "stand_end": [
+            37,
+            40
+          ]
+        },
+        "source_cycle_frame_range_inclusive": [
+          104,
+          154
+        ],
+        "source_left_swing": [
+          106,
+          119
+        ],
+        "source_right_swing": [
+          130,
+          142
+        ],
+        "step_count": 46,
+        "cycle_duration_s": 1.4524444444444446,
+        "swing_duration_s": 0.62,
+        "leading_step_size_m": 0.2,
+        "standing_foot_width_m": 0.23701290954506432,
+        "root_lateral_distance_m": 4.408278176922677,
+        "target_swing_clearance_m": 0.04,
+        "body_lowering_m": 0.015,
+        "stance_weight_shift_m": 0.018,
+        "swing_edge_blend_phase": 0.25,
+        "swing_pitch_roll_limits_deg": [
+          4.0,
+          3.0
+        ],
+        "vertical_template_smoothing_sigma_cycle": 0.07,
+        "max_ik_position_error_m": 1.0556280610176349e-08,
+        "max_ik_rotation_error_deg": 4.653542292967855e-06,
+        "description": "Human side-step cycle used for style; noncrossing robot footstep plan, IK, and exact standing holds. Not a new 40s human sample."
+      },
+      "sample_span_s": 39.96666666666667,
+      "playback_duration_s": 40.0,
+      "motion_weight": 1.0,
+      "normalized_sampling_probability": 0.25
+    },
+    "walk_right": {
+      "frames": 1200,
+      "fps": 30.0,
+      "root_height_m": {
+        "min": 0.770514965057373,
+        "mean": 0.7769629415373007,
+        "max": 0.7882859706878662
+      },
+      "root_displacement_world_m": [
+        0.0,
+        -4.408277988433838,
+        0.0
+      ],
+      "root_displacement_initial_root_m": [
+        0.0,
+        -4.408277988433838,
+        0.0
+      ],
+      "root_yaw_change_deg": 0.0,
+      "max_joint_speed_rad_s": 4.932010173797607,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            0.017774225380022827,
+            0.20570531204773607,
+            0.012399202074752688
+          ],
+          "max": [
+            0.027483350618702503,
+            0.20999413254640842,
+            0.013618473016307253
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            0.017376190381784895,
+            -0.20944616058274684,
+            0.012216410641633757
+          ],
+          "max": [
+            0.030417175283719206,
+            -0.20573459887593515,
+            0.01365772228760942
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            0.0011106334666417573,
+            0.11479818651577724,
+            -0.7522859707646099
+          ],
+          "max": [
+            0.03208864399468236,
+            0.23849799056182283,
+            -0.6881526452795806
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            -0.0037818565201122754,
+            -0.24365281119725388,
+            -0.7522859707413414
+          ],
+          "max": [
+            0.01962639273524277,
+            -0.09484495542882089,
+            -0.6887500344102405
+          ]
+        }
+      },
+      "gmr_pkl": "sources/walk_right.pkl",
+      "gmr_pkl_sha256": "42c69478dca66cb210a7b6cb841cc87705d725cacda08b47f377298156635ff6",
+      "visualization_file": "visualization/walk_right.txt",
+      "visualization_sha256": "ce11183126f85f6d173a78e5e7f4d04a5f216d931636c0164faa17a0b5066a23",
+      "amp_file": "amp/walk_right.txt",
+      "amp_sha256": "288da4b285b6d0a4779b75e9143f32e4b65da22a42d576f904d40d8d908866d7",
+      "source_original": "/home/cjh/kimodo/outputs/side_gait_review/g1_23_side_right_stand_40s.pkl",
+      "source_origin": "Robot mirror of the accepted left side-step sequence",
+      "source_revision": null,
+      "sequence_composition": {
+        "direction": "right",
+        "source_robot": "/home/cjh/kimodo/outputs/side_gait_review/g1_23_left_01_refined.pkl",
+        "source_human": "/home/cjh/kimodo/outputs/side_gait_review/human_left_03mps/human_left_03mps_01.npz",
+        "standing_reference": "/home/cjh/kimodo/outputs/natural_gait_review/g1_23_backward_stand_40s.pkl",
+        "duration_s": 40.0,
+        "frames": 1200,
+        "fps": 30.0,
+        "stand_start_s": 3,
+        "stand_end_s": 3,
+        "phase_intervals_s": {
+          "stand_start": [
+            0,
+            3
+          ],
+          "start": [
+            3,
+            5
+          ],
+          "walk": [
+            5,
+            35
+          ],
+          "stop": [
+            35,
+            37
+          ],
+          "stand_end": [
+            37,
+            40
+          ]
+        },
+        "source_cycle_frame_range_inclusive": [
+          104,
+          154
+        ],
+        "source_left_swing": [
+          106,
+          119
+        ],
+        "source_right_swing": [
+          130,
+          142
+        ],
+        "step_count": 46,
+        "cycle_duration_s": 1.4524444444444446,
+        "swing_duration_s": 0.62,
+        "leading_step_size_m": 0.2,
+        "standing_foot_width_m": 0.23701290954506432,
+        "root_lateral_distance_m": -4.408278176922677,
+        "target_swing_clearance_m": 0.04,
+        "body_lowering_m": 0.015,
+        "stance_weight_shift_m": 0.018,
+        "swing_edge_blend_phase": 0.25,
+        "swing_pitch_roll_limits_deg": [
+          4.0,
+          3.0
+        ],
+        "vertical_template_smoothing_sigma_cycle": 0.07,
+        "max_ik_position_error_m": 1.0556280610176349e-08,
+        "max_ik_rotation_error_deg": 4.653542292967855e-06,
+        "description": "Human side-step cycle used for style; noncrossing robot footstep plan, IK, and exact standing holds. Not a new 40s human sample.",
+        "mirrored_from": "/home/cjh/kimodo/outputs/side_gait_review/g1_23_side_left_stand_40s.pkl"
+      },
+      "sample_span_s": 39.96666666666667,
+      "playback_duration_s": 40.0,
+      "motion_weight": 1.0,
+      "normalized_sampling_probability": 0.25
+    }
+  }
+}

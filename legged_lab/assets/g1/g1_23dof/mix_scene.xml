@@ -49,9 +49,10 @@
 <geom name="stair_down_9" type="box" size="0.155 0.8 0.075" pos="7.50 0 0.225" material="stairs"/>
 <geom name="stair_down_10" type="box" size="0.155 0.8 0.075" pos="7.81 0 0.075" material="stairs"/>
 
-<!-- 独立 gap 地形: y=3.0, 仅中间 0.35m x 2.0m 区域无底  -->
+<!-- 独立 gap 地形: y=3.0, 中间为 0.35m x 2.0m 的有底沟槽  -->
 <geom name="gap_start_platform" type="box" size="1.5 1.0 0.25" pos="0 3.0 0.04" material="gap_platform" friction="1.0 0.005 0.0001"/>
 <geom name="gap_end_platform" type="box" size="4.0 1.0 0.25" pos="5.85 3.0 0.04" material="gap_platform" friction="1.0 0.005 0.0001"/>
+<geom name="gap_bottom" type="box" size="0.175 1.0 0.02" pos="1.675 3.0 -0.02" material="gap_platform" friction="1.0 0.005 0.0001"/>
 <geom name="gap_edge_before" type="box" size="0.02 1.0 0.001" pos="1.50 3.0 0.083" material="gap_platform" contype="0" conaffinity="0"/>
 <geom name="gap_edge_after" type="box" size="0.02 1.0 0.001" pos="1.85 3.0 0.083" material="gap_platform" contype="0" conaffinity="0"/>
 

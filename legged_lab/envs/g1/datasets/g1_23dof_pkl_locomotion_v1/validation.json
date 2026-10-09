@@ -1,0 +1,66 @@
+{
+  "passed": true,
+  "clips": {
+    "stand_to_walk_leg_v1": {
+      "frames": 593,
+      "fps": 39.974276527331185,
+      "sample_span_s": 14.809523809523812,
+      "root_xyz_joint_pose_max_abs_error": 4.999582192688479e-09,
+      "root_orientation_max_error_rad": 8.430973581668906e-09,
+      "joint_velocity_max_abs_error_rad_s": 4.999590463850012e-09,
+      "urdf_and_actual_env_feature_max_abs_error": 4.1184398030802427e-07,
+      "finite_and_joint_limits_passed": true,
+      "standing_holds_preserved": true
+    },
+    "walk_turn_around_leg_v1": {
+      "frames": 530,
+      "fps": 39.94147768836869,
+      "sample_span_s": 13.244377289377288,
+      "root_xyz_joint_pose_max_abs_error": 4.9979335670080616e-09,
+      "root_orientation_max_error_rad": 8.72492074589851e-09,
+      "joint_velocity_max_abs_error_rad_s": 4.999619773737862e-09,
+      "urdf_and_actual_env_feature_max_abs_error": 4.1299671454941844e-07,
+      "finite_and_joint_limits_passed": true,
+      "standing_holds_preserved": true
+    },
+    "walk_turn_left_leg_v1": {
+      "frames": 412,
+      "fps": 40.0,
+      "sample_span_s": 10.275,
+      "root_xyz_joint_pose_max_abs_error": 4.998185421101198e-09,
+      "root_orientation_max_error_rad": 7.8586844271936e-09,
+      "joint_velocity_max_abs_error_rad_s": 4.999971214836307e-09,
+      "urdf_and_actual_env_feature_max_abs_error": 4.124354545942399e-07,
+      "finite_and_joint_limits_passed": true,
+      "standing_holds_preserved": true
+    },
+    "walk_turn_right_leg_v1": {
+      "frames": 447,
+      "fps": 40.0,
+      "sample_span_s": 11.15,
+      "root_xyz_joint_pose_max_abs_error": 4.998591207616698e-09,
+      "root_orientation_max_error_rad": 8.261536520692534e-09,
+      "joint_velocity_max_abs_error_rad_s": 4.999994945853459e-09,
+      "urdf_and_actual_env_feature_max_abs_error": 4.105486625938237e-07,
+      "finite_and_joint_limits_passed": true,
+      "standing_holds_preserved": true
+    }
+  },
+  "total_frames": 1982,
+  "training_device_tested": "cpu",
+  "policy_control_dt_s": 0.02,
+  "amp_dimension": 50,
+  "discriminator_input_dimension": 100,
+  "preloaded_transitions": 200000,
+  "sampling_weights": [
+    0.25,
+    0.25,
+    0.25,
+    0.25
+  ],
+  "exact_20ms_pair_interpolation_passed": true,
+  "actual_loader_and_display_passed": true,
+  "actual_discriminator_forward_gradient_penalty_backward_reward_passed": true,
+  "env_code_sha256": "d4b2cfba86044c620db9861e4410f27268f2e5a5e7ebeb5df5462d1e683c4a55",
+  "note": "Full-source URDF FK and actual environment AMP method, evaluated without an Isaac simulation; live simulator parity is a separate check."
+}

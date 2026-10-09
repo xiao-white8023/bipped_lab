@@ -18,7 +18,7 @@
 
 """Helper functions."""
 
-from .motion_loader import AMPLoader
+from .motion_loader import AMPLoader, G1AnkleAMPLoader
 from .motion_loader_for_display import AMPLoaderDisplay
 from .recovery_amp_data import RecoveryAMPData
 from .recovery_amp_features import (
@@ -39,6 +39,7 @@ from .utils import (
 
 __all__ = [
     "AMPLoader",
+    "G1AnkleAMPLoader",
     "AMPLoaderDisplay",
     "RecoveryAMPData",
     "RecoveryAMPFeatureBuilder",

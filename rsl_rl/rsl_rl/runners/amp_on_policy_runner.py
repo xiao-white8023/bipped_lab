@@ -16,7 +16,7 @@ from rsl_rl.modules import (
     EmpiricalNormalization,
     MhaActorCritic,
 )
-from rsl_rl.utils import AMPLoader, Normalizer, RecoveryAMPData, store_code_state
+from rsl_rl.utils import AMPLoader, G1AnkleAMPLoader, Normalizer, RecoveryAMPData, store_code_state
 
 
 class AmpOnPolicyRunner:
@@ -83,12 +83,28 @@ class AmpOnPolicyRunner:
             # this is used by the symmetry function for handling different observation terms
             self.alg_cfg["symmetry_cfg"]["_env"] = env
 
-        # Keep the legacy TXT loader as the default while allowing standalone
-        # Recovery to select its Stage-3 NPZ adapter through configuration.
+        # Legacy 50-D remains the default; G1 full-joint and Recovery datasets
+        # select their own checked layouts explicitly.
         amp_data_class_name = train_cfg.get("amp_data_class_name", "AMPLoader")
         self.amp_data_class_name = amp_data_class_name
-        if amp_data_class_name == "AMPLoader":
-            amp_data = AMPLoader(
+        if amp_data_class_name in ("AMPLoader", "G1AnkleAMPLoader"):
+            loader_class = G1AnkleAMPLoader if amp_data_class_name == "G1AnkleAMPLoader" else AMPLoader
+            configured_dimension = train_cfg.get("amp_observation_dim", loader_class.FRAME_SIZE)
+            if configured_dimension != loader_class.FRAME_SIZE:
+                raise ValueError(
+                    "AMP cfg is inconsistent: amp_observation_dim and amp_data_class_name "
+                    "must select the same 50-D or 58-D layout."
+                )
+            if ("amp_joint_count" in train_cfg
+                    and train_cfg["amp_joint_count"] != loader_class.JOINT_POS_SIZE):
+                raise ValueError("AMP cfg joint count does not match its selected loader.")
+            amp_obs_demo = self.env.get_amp_obs_for_expert_trans()
+            if amp_obs_demo.shape[1] != loader_class.FRAME_SIZE:
+                raise ValueError(
+                    f"AMP environment/cfg mismatch: environment={amp_obs_demo.shape[1]}, "
+                    f"loader={loader_class.FRAME_SIZE}. Check the task's AMP cfg switch."
+                )
+            amp_data = loader_class(
                 device,
                 time_between_frames=self.env.step_dt,
                 preload_transitions=True,
@@ -112,8 +128,8 @@ class AmpOnPolicyRunner:
         else:
             raise ValueError(
                 "Unsupported AMP data class "
-                f"{amp_data_class_name!r}; expected 'AMPLoader' or "
-                "'RecoveryAMPData'."
+                f"{amp_data_class_name!r}; expected 'AMPLoader', "
+                "'G1AnkleAMPLoader', or 'RecoveryAMPData'."
             )
         
         print(f"DEBUG: 数据集的维度: {amp_data.observation_dim}")
@@ -125,6 +141,12 @@ class AmpOnPolicyRunner:
                 "AMP observation dimension mismatch: "
                 f"dataset={amp_data.observation_dim}, policy={amp_obs_demo.shape[1]}."
             )
+        if (
+            amp_data_class_name in ("AMPLoader", "G1AnkleAMPLoader")
+            and amp_data.joint_names is not None
+            and amp_data.joint_names != getattr(self.env, "amp_joint_names", None)
+        ):
+            raise ValueError("AMP expert joint order differs from the robot AMP observation order.")
         
         amp_normalizer = Normalizer(amp_data.observation_dim)
         discriminator = Discriminator(
@@ -591,6 +613,15 @@ class AmpOnPolicyRunner:
 
     def load(self, path: str, load_optimizer: bool = True):
         loaded_dict = torch.load(path, weights_only=False)
+        if self.cfg.get("amp_observation_dim") in (50, 58):
+            saved_width = loaded_dict["discriminator_state_dict"]["trunk.0.weight"].shape[1]
+            current_width = self.alg.discriminator.input_dim
+            if saved_width != current_width:
+                raise ValueError(
+                    f"AMP checkpoint is {saved_width // 2}-D but current cfg is {current_width // 2}-D. "
+                    "Use the matching task AMP cfg switch to restore it, or start a new run "
+                    "with resume=False. No policy weights have been loaded."
+                )
         # -- Load model
         resumed_training = self.alg.policy.load_state_dict(loaded_dict["model_state_dict"])
         self.alg.discriminator.load_state_dict(loaded_dict["discriminator_state_dict"])

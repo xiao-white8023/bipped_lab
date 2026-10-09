@@ -1,0 +1,130 @@
+g1_persistent_elevation_map:
+  ros__parameters:
+    # 与 Phase 2 完全相同的 FAST-LIO 输入和策略坐标约定。
+    cloud_topic: /cloud_registered
+    odometry_topic: /Odometry
+    world_frame: g1_world
+    lio_world_frame: camera_init
+    lio_body_frame: body
+    capture_frame: capture_torso_yaw
+    pose_sync_tolerance: 0.03
+    sync_queue_size: 40
+    # 只保留 DDS 中最新输入；过载时丢旧帧，避免延迟不断累积。
+    input_qos_depth: 1
+    drop_superseded_clouds: true
+
+    resolution: 0.1
+    internal_size_x: 3.2
+    internal_size_y: 3.2
+    output_size_x: 1.6
+    output_size_y: 1.0
+    capture_z_min: -1.5
+    capture_z_max: 0.5
+
+    # 下面两个参数只为复用 Phase 2 基类而保留；Phase 3 不使用十秒队列。
+    history_seconds: 10.0
+    history_max_frames: 200
+    confidence_observations: 3
+
+    head_filter_enabled: true
+    head_x_min: -0.05
+    head_x_max: 0.15
+    head_y_min: -0.25
+    head_y_max: 0.25
+    head_z_min: 0.15
+    head_z_max: 0.50
+
+    height_offset: 0.5
+    height_scale: 1.0
+    height_clip_min: -1.0
+    height_clip_max: 1.0
+    invalid_height: -1.1
+    report_every: 10
+
+    # 世界固定稀疏高程格。2.5 m 半径可完整覆盖 3.2 x 3.2 m 内部窗口，
+    # 但地图会随机器人移动而裁掉远处格子，因此内存不会无限增长。
+    persistent_resolution: 0.1
+    retention_radius: 2.5
+
+    # 单点高度测量方差 = 雷达高度噪声 + 距离项 + Odometry 位姿协方差传播。
+    sensor_z_std: 0.02
+    sensor_z_range_std_scale: 0.001
+    measurement_variance_min: 0.00001
+    measurement_variance_max: 0.04
+
+    # 栅格状态方差及可用门限。方差超过 0.01 m^2（标准差 10 cm）时，
+    # 该格保持在地图中但不会发送为有效策略观测。
+    cell_variance_min: 0.00001
+    cell_variance_max: 0.04
+    max_valid_variance: 0.01
+
+    # 没有新观测时缓慢增加不确定度；这不是固定寿命。
+    # 1e-6 m^2/s 意味着停止 60 s 只增加 0.00006 m^2。
+    variance_growth_per_second: 0.000001
+
+    # 新高度与旧高度严重冲突时，不允许单帧覆盖；连续三帧一致才替换。
+    mahalanobis_threshold: 3.0
+    candidate_confirmations: 3
+    candidate_tolerance: 0.05
+    candidate_timeout: 1.0
+    conflict_variance_increase: 0.0004
+
+    # 0 表示没有按时间硬删除，所以原地停止超过 10 s 后近场仍然存在。
+    # 地图仍会按 retention_radius 做空间裁剪。
+    max_cell_age_seconds: 0.0
+
+    # 世界格最近邻查询使用 2 cm Schmitt 迟滞。定位在 10 cm 格边界附近
+    # 小幅抖动时保持原格；真实跨过边界 2 cm 后再切换，不插值台阶高度。
+    sampling_hysteresis_enabled: true
+    sampling_hysteresis_m: 0.02
+
+    # 地图仍按点云约 10 Hz 融合；策略图独立按 50 Hz、使用最新预测位姿采样。
+    # FAST-LIO 的 Odometry.twist 实测全为零，所以速度由最近 0.25 s 位姿拟合。
+    policy_publish_rate: 50.0
+    # 控制节点使用的原子 LP 输入；旧 policy_heights/policy_valid 继续保留调试。
+    policy_input_topic: /g1/elevation/policy_input
+    pose_prediction_enabled: true
+    prediction_window_seconds: 0.25
+    prediction_minimum_span_seconds: 0.10
+    prediction_maximum_horizon_seconds: 0.25
+    prediction_maximum_clock_age_seconds: 1.0
+    # 8 cm/s 以下视为定位静止噪声；实测可消除静止段的虚假位姿外推，
+    # 同时不影响 G1 正常行走速度下的延迟补偿。
+    prediction_linear_deadband: 0.08
+    prediction_yaw_rate_deadband: 0.04
+    # 转向预测只用拟合角速度的一半；Phase 3 bag 上全量外推会在转弯减速时过冲。
+    prediction_yaw_gain: 0.5
+    prediction_maximum_linear_speed: 1.5
+    prediction_maximum_vertical_speed: 0.5
+    prediction_maximum_yaw_rate: 2.0
+
+    # 50 Hz 实时路径只发布 policy_heights + policy_valid。年龄、方差、
+    # 延迟等诊断降到 10 Hz，避免诊断序列化拖慢控制输入。
+    diagnostic_publish_rate: 10.0
+
+    # 调试点云只需供 RViz 观察；降到 2 Hz，策略数组仍为 50 Hz。
+    debug_cloud_publish_rate: 2.0
+
+    # FAST-LIO 重定位/跳变保护。触发时宁可清图并回到 VP，也不混用两套世界系。
+    pose_jump_translation: 0.5
+    pose_jump_yaw: 0.7853981633974483
+
+g1_baseline_elevation_analyzer:
+  ros__parameters:
+    height_topic: /g1/elevation/policy_heights
+    valid_topic: /g1/elevation/policy_valid
+    valid_ratio_topic: /g1/elevation/valid_ratio
+    sync_error_topic: /g1/elevation/pose_sync_error
+    policy_cloud_topic: /g1/elevation/policy_cloud
+    expected_cloud_frame: capture_torso_yaw
+    pair_timeout_sec: 0.05
+    idle_timeout_sec: 3.0
+    duration_sec: 0.0
+    max_frames: 0
+    max_stored_frames: 20000
+    self_hit_x_min: -0.05
+    self_hit_x_max: 0.15
+    self_hit_y_min: -0.25
+    self_hit_y_max: 0.25
+    self_hit_z_min: 0.15
+    self_hit_z_max: 0.50

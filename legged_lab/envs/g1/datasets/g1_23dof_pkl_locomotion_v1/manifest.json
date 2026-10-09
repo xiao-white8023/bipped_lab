@@ -1,0 +1,884 @@
+{
+  "dataset": "g1_23dof_pkl_locomotion_v1",
+  "format_version": 2,
+  "robot": "Unitree G1 23-DoF",
+  "task": "g1_renet",
+  "curation": "Four revised PKLs; no backward/lateral clips",
+  "mjcf": "legged_lab/assets/g1/g1_23dof/g1_23dof_rev_1_0.xml",
+  "mjcf_sha256": "85cd118a279013d5530b59f569b84a0952f019396e3cf88dc7dda3e9723c3f7a",
+  "urdf": "legged_lab/assets/g1/g1_23dof/g1_23dof_rev_1_0.urdf",
+  "urdf_sha256": "8e2cd509732bde755eaca83fc6c17d28052d2f97a86b8a5cdd6c8c64e998346e",
+  "joint_order_23": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint"
+  ],
+  "amp_joint_order": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "waist_yaw_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint"
+  ],
+  "amp_joint_order_19": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "waist_yaw_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint"
+  ],
+  "amp_joint_count": 19,
+  "amp_dimension": 50,
+  "includes_ankles": false,
+  "amp_feature_layout": "g1_amp_joint_pos_vel_end_effectors_v1",
+  "amp_end_effector_order": [
+    "left_wrist_roll_rubber_hand",
+    "right_wrist_roll_rubber_hand",
+    "left_ankle_roll_link",
+    "right_ankle_roll_link"
+  ],
+  "amp_layout": {
+    "joint_pos": [
+      0,
+      19
+    ],
+    "joint_vel": [
+      19,
+      38
+    ],
+    "left_hand_pos_b": [
+      38,
+      41
+    ],
+    "right_hand_pos_b": [
+      41,
+      44
+    ],
+    "left_foot_pos_b": [
+      44,
+      47
+    ],
+    "right_foot_pos_b": [
+      47,
+      50
+    ]
+  },
+  "visualization_layout": {
+    "root_xyz": [
+      0,
+      3
+    ],
+    "root_euler_xyz": [
+      3,
+      6
+    ],
+    "joint_pos": [
+      6,
+      29
+    ],
+    "root_lin_vel_w": [
+      29,
+      32
+    ],
+    "root_ang_vel_b": [
+      32,
+      35
+    ],
+    "joint_vel": [
+      35,
+      58
+    ]
+  },
+  "units": "metres, radians, seconds",
+  "fps": "Per-clip source FPS preserved",
+  "frames_total": 1982,
+  "sample_span_total_s": 49.4789010989011,
+  "training_transition_dt_s": 0.02,
+  "sampling": "MotionWeight=1 per clip; uniform valid start time; Clamp, no wrapping.",
+  "derivative": "Central finite differences and second-order one-sided endpoints at each source FPS.",
+  "pose_conversion": "No resampling, cropping, root height correction, speed scaling, smoothing or new IK. Source joint/root poses and standing endings preserved.",
+  "feature_conversion": "19 non-ankle joint positions/velocities; full 23-joint FK for hand/ankle link origins in pelvis frame.",
+  "limitations": "Kinematic references. Conversion validates training features, not physical tracking. Root travel direction is not part of 50-D AMP.",
+  "clips": {
+    "stand_to_walk_leg_v1": {
+      "frames": 593,
+      "fps": 39.974276527331185,
+      "root_height_m": {
+        "min": 0.7338871677239093,
+        "mean": 0.7884752753710176,
+        "max": 0.8207228642990326
+      },
+      "root_displacement_world_m": [
+        4.968277837343463,
+        4.749798712696296,
+        -0.02766339964408071
+      ],
+      "root_displacement_initial_root_m": [
+        -6.859178994489902,
+        0.4165747343527353,
+        0.15253444233005933
+      ],
+      "root_yaw_change_deg": -15.473727441692365,
+      "max_joint_speed_rad_s": 16.84194395418479,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            -0.09870871556658402,
+            0.10718863284583924,
+            0.01007397666794825
+          ],
+          "max": [
+            0.17436490757293235,
+            0.22570660536696543,
+            0.049439338162595284
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            -0.08972683730261048,
+            -0.22638628984583434,
+            0.008542670262434618
+          ],
+          "max": [
+            0.125446212789663,
+            -0.15944288981605864,
+            0.03670789792223551
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            -0.19367776446012971,
+            0.06902356719758285,
+            -0.7568397962805656
+          ],
+          "max": [
+            0.31248962956905724,
+            0.1813760069542133,
+            -0.6669468018591437
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            -0.22568296784015474,
+            -0.1917491359499206,
+            -0.7561382626766243
+          ],
+          "max": [
+            0.3170290297055715,
+            -0.04870169879173745,
+            -0.6522960960414029
+          ]
+        }
+      },
+      "gmr_pkl": "sources/stand_to_walk_leg_v1.pkl",
+      "gmr_pkl_sha256": "5b0bba61f06585f364ffab148483fc02236befb16f1dfa9f70f44e62c8cf09cb",
+      "visualization_file": "visualization/stand_to_walk_leg_v1.txt",
+      "visualization_sha256": "b519c32e8b427310e8fde79f0b34f195fb4bbf30902d04fbefc70c8e99453d3e",
+      "amp_file": "amp/stand_to_walk_leg_v1.txt",
+      "amp_sha256": "fbe69d6498e57e3ce0338a4d2916f20b406560316324f85b6688d9facf86ca7f",
+      "source_original": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/stand_to_walk_leg_v1.pkl",
+      "sample_span_s": 14.809523809523812,
+      "ending_alignment": {
+        "source": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/stand_to_walk.pkl",
+        "source_sha256": "a2fbd3877717f373756cbf505c91ee8447f7eebbced839665386877e83fa4bb4",
+        "output": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/stand_to_walk_end_aligned.pkl",
+        "fps": 39.974276527331185,
+        "source_frames": 517,
+        "source_samples_unchanged": false,
+        "all_ankle_angles_zero": true,
+        "ik_used": false,
+        "walking_deceleration_added": false,
+        "closure_duration_s": 0.4002574002574003,
+        "hold_duration_s": 1.5009652509652511,
+        "output_frames": 593,
+        "output_duration_s": 14.809523809523812,
+        "final_foot_separation_forward_lateral_vertical_m": [
+          -4.163336342344337e-16,
+          0.23701291000000052,
+          0.0
+        ],
+        "final_shoe_bottom_heights_m": [
+          0.0010000001267717225,
+          0.0010000000000000876
+        ],
+        "final_foot_yaw_pitch_roll_deg_LR": [
+          [
+            -148.27697599427384,
+            0.0,
+            0.0
+          ],
+          [
+            -148.27697599427384,
+            0.0,
+            0.0
+          ]
+        ],
+        "minimum_closure_shoe_height_m": 0.0009999999999999454,
+        "new_joint_limit_violation_rad": 0.0,
+        "note": "Only appended pose closure and static hold; original gait/torso/feet unchanged. Kinematic preview.",
+        "source_sample_changes": [
+          "left_hip_roll_joint",
+          "left_hip_yaw_joint"
+        ],
+        "standing_hold_unchanged": true
+      },
+      "left_leg_refinement": {
+        "input": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/stand_to_walk_end_aligned.pkl",
+        "input_sha256": "6e55c70e3dbcb0ed0796bbd5d5cd38d1cccbe00db69404da935bb8d228800d4a",
+        "output": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/stand_to_walk_leg_v1.pkl",
+        "frames": 593,
+        "fps": 39.974276527331185,
+        "modified_joints": [
+          "left_hip_roll_joint",
+          "left_hip_yaw_joint"
+        ],
+        "inward_roll_threshold_deg": -2.0,
+        "inward_yaw_threshold_deg": -6.0,
+        "inward_roll_excess_retained_fraction": 0.35,
+        "inward_yaw_excess_retained_fraction": 0.55,
+        "hip_roll_min_deg_before_after": [
+          -5.315294859602971,
+          -3.485352069358464
+        ],
+        "hip_yaw_min_deg_before_after": [
+          -13.434259765799052,
+          -10.538842557191849
+        ],
+        "left_foot_yaw_relative_pelvis_min_deg_before_after": [
+          -14.564968373915411,
+          -11.5762723796347
+        ],
+        "left_knee_lateral_from_hip_min_m_before_after": [
+          -0.02539037266594755,
+          -0.02337093970803692
+        ],
+        "maximum_left_ankle_position_change_m": 0.019664652194139768,
+        "right_ankle_positions_unchanged": true,
+        "minimum_shoe_height_LR_m_before": [
+          -0.07139518883356534,
+          -0.08322907511137505
+        ],
+        "minimum_shoe_height_LR_m_after": [
+          -0.07142055864325329,
+          -0.08322907511137505
+        ],
+        "maximum_modified_joint_frame_step_deg_before_after": [
+          5.263743532242621,
+          5.263743532242621
+        ],
+        "root_pose_unchanged": true,
+        "other_21_joints_unchanged": true,
+        "ankle_angles_all_zero": true,
+        "standing_hold_unchanged": true,
+        "modified_joint_limit_violation_rad": 0.0,
+        "ik_used": false,
+        "note": "Direct smooth joint-angle attenuation. Foot paths change slightly; contacts are not re-solved. Kinematic preview only."
+      },
+      "motion_weight": 1.0,
+      "normalized_sampling_probability": 0.25
+    },
+    "walk_turn_around_leg_v1": {
+      "frames": 530,
+      "fps": 39.94147768836869,
+      "root_height_m": {
+        "min": 0.7342996634805062,
+        "mean": 0.7734009216467861,
+        "max": 0.81514478268433
+      },
+      "root_displacement_world_m": [
+        0.16140368181302645,
+        0.3139429404281051,
+        0.028223871908436338
+      ],
+      "root_displacement_initial_root_m": [
+        -0.3155002268504037,
+        -0.1582458849290289,
+        0.028735901818486596
+      ],
+      "root_yaw_change_deg": -162.444335160809,
+      "max_joint_speed_rad_s": 6.383233378253336,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            -0.09083113805246282,
+            0.16486845452246598,
+            0.009430840976960508
+          ],
+          "max": [
+            0.181720289193966,
+            0.2735864620574293,
+            0.07150357604795402
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            -0.07662207221022212,
+            -0.23297512571863122,
+            0.009542634514680737
+          ],
+          "max": [
+            0.1432669100283953,
+            -0.17240637060646788,
+            0.04379144934085458
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            -0.2584990240638529,
+            0.0473037601500933,
+            -0.7569055131981501
+          ],
+          "max": [
+            0.3661906126345296,
+            0.2073169561674247,
+            -0.6441571166697571
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            -0.24207588846745895,
+            -0.19502617822323468,
+            -0.7553103314009081
+          ],
+          "max": [
+            0.35346408394459927,
+            -0.05728664852312816,
+            -0.6249846922768704
+          ]
+        }
+      },
+      "gmr_pkl": "sources/walk_turn_around_leg_v1.pkl",
+      "gmr_pkl_sha256": "d985e8dbf23eb314ee7d26371ff34fd4c41b87f54597e5857dbc7caba9e316f6",
+      "visualization_file": "visualization/walk_turn_around_leg_v1.txt",
+      "visualization_sha256": "6ba30f0e5a09aa0103b071004f6455bd57e3e1c9e9784ff8dbb15033f6198c94",
+      "amp_file": "amp/walk_turn_around_leg_v1.txt",
+      "amp_sha256": "36fe117f52d44b99e0e3d3891bfbad7e212c95ee640e72dd50d9e295c520464a",
+      "source_original": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/walk_turn_around_leg_v1.pkl",
+      "sample_span_s": 13.244377289377288,
+      "ending_alignment": {
+        "source": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/walk_turn_around.pkl",
+        "source_sha256": "c1b962908ab57d602629965067f912c4d31aba8cf3dd9ff79bb1e87efc75851a",
+        "output": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/walk_turn_around_end_aligned.pkl",
+        "fps": 39.94147768836869,
+        "source_frames": 454,
+        "source_samples_unchanged": false,
+        "all_ankle_angles_zero": true,
+        "ik_used": false,
+        "walking_deceleration_added": false,
+        "closure_duration_s": 0.4005860805860806,
+        "hold_duration_s": 1.5021978021978022,
+        "output_frames": 530,
+        "output_duration_s": 13.244377289377288,
+        "final_foot_separation_forward_lateral_vertical_m": [
+          6.938893903907228e-17,
+          0.23701290999999924,
+          0.0
+        ],
+        "final_shoe_bottom_heights_m": [
+          0.0010000001267716774,
+          0.0010000000000000252
+        ],
+        "final_foot_yaw_pitch_roll_deg_LR": [
+          [
+            53.56266429310004,
+            0.0,
+            0.0
+          ],
+          [
+            53.56266429310004,
+            0.0,
+            0.0
+          ]
+        ],
+        "minimum_closure_shoe_height_m": 0.0009999999999998795,
+        "new_joint_limit_violation_rad": 0.0,
+        "note": "Only appended pose closure and static hold; original gait/torso/feet unchanged. Kinematic preview.",
+        "source_sample_changes": [
+          "left_hip_roll_joint",
+          "left_hip_yaw_joint"
+        ],
+        "standing_hold_unchanged": true
+      },
+      "left_leg_refinement": {
+        "input": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/walk_turn_around_end_aligned.pkl",
+        "input_sha256": "525912f00e0185c8c927afbf13ad1a0065881c01a0e5d713c11d90ad88e48cdf",
+        "output": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/walk_turn_around_leg_v1.pkl",
+        "frames": 530,
+        "fps": 39.94147768836869,
+        "modified_joints": [
+          "left_hip_roll_joint",
+          "left_hip_yaw_joint"
+        ],
+        "inward_roll_threshold_deg": -2.0,
+        "inward_yaw_threshold_deg": -6.0,
+        "inward_roll_excess_retained_fraction": 0.35,
+        "inward_yaw_excess_retained_fraction": 0.55,
+        "hip_roll_min_deg_before_after": [
+          -9.02086227913076,
+          -4.782301797695352
+        ],
+        "hip_yaw_min_deg_before_after": [
+          -31.036197162371735,
+          -20.219908439304458
+        ],
+        "left_foot_yaw_relative_pelvis_min_deg_before_after": [
+          -28.886312035743067,
+          -19.110480911690395
+        ],
+        "left_knee_lateral_from_hip_min_m_before_after": [
+          -0.03125118539048796,
+          -0.0231468390030158
+        ],
+        "maximum_left_ankle_position_change_m": 0.038166074641184745,
+        "right_ankle_positions_unchanged": true,
+        "minimum_shoe_height_LR_m_before": [
+          -0.06260168817934948,
+          -0.07924228979922088
+        ],
+        "minimum_shoe_height_LR_m_after": [
+          -0.0632393217183802,
+          -0.07924228979922088
+        ],
+        "maximum_modified_joint_frame_step_deg_before_after": [
+          5.2156595127079886,
+          3.7491247406928303
+        ],
+        "root_pose_unchanged": true,
+        "other_21_joints_unchanged": true,
+        "ankle_angles_all_zero": true,
+        "standing_hold_unchanged": true,
+        "modified_joint_limit_violation_rad": 0.0,
+        "ik_used": false,
+        "note": "Direct smooth joint-angle attenuation. Foot paths change slightly; contacts are not re-solved. Kinematic preview only."
+      },
+      "motion_weight": 1.0,
+      "normalized_sampling_probability": 0.25
+    },
+    "walk_turn_left_leg_v1": {
+      "frames": 412,
+      "fps": 40.0,
+      "root_height_m": {
+        "min": 0.7460446193340537,
+        "mean": 0.7845892406285732,
+        "max": 0.8174970775737238
+      },
+      "root_displacement_world_m": [
+        -5.073398496774772,
+        -2.4790928198906554,
+        0.020305302836618577
+      ],
+      "root_displacement_initial_root_m": [
+        4.715388704647615,
+        3.1051866645770545,
+        0.09279528138718894
+      ],
+      "root_yaw_change_deg": 52.74072121484604,
+      "max_joint_speed_rad_s": 6.110350556882477,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            -0.08221701726281926,
+            0.14546416579537025,
+            0.008011254267599258
+          ],
+          "max": [
+            0.1692492076961996,
+            0.20868324002349034,
+            0.05941357884974671
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            -0.04668959629188882,
+            -0.2093164708098085,
+            0.007985985174334631
+          ],
+          "max": [
+            0.11665523329927976,
+            -0.1752339456958477,
+            0.03247281623700754
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            -0.21903787018576618,
+            0.052601063786987486,
+            -0.7567447911889346
+          ],
+          "max": [
+            0.3491853631650789,
+            0.15957501812768488,
+            -0.6471117298555426
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            -0.2115263196901084,
+            -0.17988545297437303,
+            -0.7557275710028786
+          ],
+          "max": [
+            0.3375809599107608,
+            -0.04554578331034009,
+            -0.6309338473836029
+          ]
+        }
+      },
+      "gmr_pkl": "sources/walk_turn_left_leg_v1.pkl",
+      "gmr_pkl_sha256": "af8ff494223e1c4a765dc32494f36d6c7814a11b30eff741c0689e461356f2fc",
+      "visualization_file": "visualization/walk_turn_left_leg_v1.txt",
+      "visualization_sha256": "1eb072a6553e3e566fef4b1cd587cb89341f4ee21744a0ecbe215a54508b3c5e",
+      "amp_file": "amp/walk_turn_left_leg_v1.txt",
+      "amp_sha256": "39c12edab351ef0fd0c96ddb37cdd64d22fd59845b6d0b2b6ffac2dafa796bf6",
+      "source_original": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/walk_turn_left_leg_v1.pkl",
+      "sample_span_s": 10.275,
+      "ending_alignment": {
+        "source": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/walk_turn_left.pkl",
+        "source_sha256": "38355245802eda087d4355873afc690d9628e38a255880a3b81ebb0c7d79782d",
+        "output": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/walk_turn_left_end_aligned.pkl",
+        "fps": 40.0,
+        "source_frames": 336,
+        "source_samples_unchanged": false,
+        "all_ankle_angles_zero": true,
+        "ik_used": false,
+        "walking_deceleration_added": false,
+        "closure_duration_s": 0.4,
+        "hold_duration_s": 1.5,
+        "output_frames": 412,
+        "output_duration_s": 10.275,
+        "final_foot_separation_forward_lateral_vertical_m": [
+          5.551115123125783e-16,
+          0.23701290999999974,
+          0.0
+        ],
+        "final_shoe_bottom_heights_m": [
+          0.00100000012677166,
+          0.0010000000000000356
+        ],
+        "final_foot_yaw_pitch_roll_deg_LR": [
+          [
+            -134.58551914829405,
+            0.0,
+            0.0
+          ],
+          [
+            -134.58551914829405,
+            0.0,
+            0.0
+          ]
+        ],
+        "minimum_closure_shoe_height_m": 0.0009999999999999454,
+        "new_joint_limit_violation_rad": 0.0,
+        "note": "Only appended pose closure and static hold; original gait/torso/feet unchanged. Kinematic preview.",
+        "source_sample_changes": [
+          "left_hip_roll_joint",
+          "left_hip_yaw_joint"
+        ],
+        "standing_hold_unchanged": true
+      },
+      "left_leg_refinement": {
+        "input": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/walk_turn_left_end_aligned.pkl",
+        "input_sha256": "26f06e3bd94a3fb225840b30f6311068d1c71833d2a95d061e145b618c582568",
+        "output": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/walk_turn_left_leg_v1.pkl",
+        "frames": 412,
+        "fps": 40.0,
+        "modified_joints": [
+          "left_hip_roll_joint",
+          "left_hip_yaw_joint"
+        ],
+        "inward_roll_threshold_deg": -2.0,
+        "inward_yaw_threshold_deg": -6.0,
+        "inward_roll_excess_retained_fraction": 0.35,
+        "inward_yaw_excess_retained_fraction": 0.55,
+        "hip_roll_min_deg_before_after": [
+          -7.950198621614328,
+          -4.407569517535067
+        ],
+        "hip_yaw_min_deg_before_after": [
+          -25.435420240222047,
+          -17.139481132122125
+        ],
+        "left_foot_yaw_relative_pelvis_min_deg_before_after": [
+          -27.681821303714983,
+          -18.886318366232963
+        ],
+        "left_knee_lateral_from_hip_min_m_before_after": [
+          -0.03607944956237942,
+          -0.02272343570908727
+        ],
+        "maximum_left_ankle_position_change_m": 0.02479075606692372,
+        "right_ankle_positions_unchanged": true,
+        "minimum_shoe_height_LR_m_before": [
+          -0.05702017391027904,
+          -0.06771179569485355
+        ],
+        "minimum_shoe_height_LR_m_after": [
+          -0.05694735565877745,
+          -0.06771179569485355
+        ],
+        "maximum_modified_joint_frame_step_deg_before_after": [
+          4.227818653076489,
+          3.1015007117954516
+        ],
+        "root_pose_unchanged": true,
+        "other_21_joints_unchanged": true,
+        "ankle_angles_all_zero": true,
+        "standing_hold_unchanged": true,
+        "modified_joint_limit_violation_rad": 0.0,
+        "ik_used": false,
+        "note": "Direct smooth joint-angle attenuation. Foot paths change slightly; contacts are not re-solved. Kinematic preview only."
+      },
+      "motion_weight": 1.0,
+      "normalized_sampling_probability": 0.25
+    },
+    "walk_turn_right_leg_v1": {
+      "frames": 447,
+      "fps": 40.0,
+      "root_height_m": {
+        "min": 0.7304414462281662,
+        "mean": 0.7881600147460619,
+        "max": 0.8196844210591512
+      },
+      "root_displacement_world_m": [
+        5.246075069799344,
+        2.4337590408228524,
+        -0.022586297585504678
+      ],
+      "root_displacement_initial_root_m": [
+        5.1243352793366554,
+        -2.641551507928745,
+        0.45649799944895075
+      ],
+      "root_yaw_change_deg": -65.0695838950382,
+      "max_joint_speed_rad_s": 6.508165360285886,
+      "max_joint_limit_violation_rad": 0.0,
+      "collision_grounding_height_shift_m": {
+        "min": 0.0,
+        "mean": 0.0,
+        "max": 0.0
+      },
+      "end_effector_position_range_m": {
+        "left_wrist_roll_rubber_hand": {
+          "min": [
+            -0.0864673412713164,
+            0.15385268118934126,
+            0.009878548850517407
+          ],
+          "max": [
+            0.20493142377715948,
+            0.22098035541628408,
+            0.07817785743252761
+          ]
+        },
+        "right_wrist_roll_rubber_hand": {
+          "min": [
+            -0.07385198414577057,
+            -0.20278790104655167,
+            0.007465209053266558
+          ],
+          "max": [
+            0.1371702612262325,
+            -0.16259898633296052,
+            0.045236502506168466
+          ]
+        },
+        "left_ankle_roll_link": {
+          "min": [
+            -0.23260978461996493,
+            0.06025650604707685,
+            -0.756781384526755
+          ],
+          "max": [
+            0.39013386206585193,
+            0.18755766822490338,
+            -0.6243127632827306
+          ]
+        },
+        "right_ankle_roll_link": {
+          "min": [
+            -0.21643665248513924,
+            -0.18000975195854285,
+            -0.7548396707480444
+          ],
+          "max": [
+            0.35581316497156323,
+            -0.03887253331912922,
+            -0.6214830654048832
+          ]
+        }
+      },
+      "gmr_pkl": "sources/walk_turn_right_leg_v1.pkl",
+      "gmr_pkl_sha256": "4ccc75c94bfc9aab3199340e223715e3c146ec4e76304d1d7587c736f34ff783",
+      "visualization_file": "visualization/walk_turn_right_leg_v1.txt",
+      "visualization_sha256": "2627df0200b21945d6808996c57ac4ce21a6873742a8f2f72160ef7398f7c304",
+      "amp_file": "amp/walk_turn_right_leg_v1.txt",
+      "amp_sha256": "fae0a51a68b776d5e4f13a43ef0f9e1c64af3efd60e79edf64e2549f8c83e962",
+      "source_original": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/walk_turn_right_leg_v1.pkl",
+      "sample_span_s": 11.15,
+      "ending_alignment": {
+        "source": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/walk_turn_right.pkl",
+        "source_sha256": "616c71faff10023288ea673bd1fe4d2f0a247b9cf42ed57115061dd89dec6c91",
+        "output": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/walk_turn_right_end_aligned.pkl",
+        "fps": 40.0,
+        "source_frames": 371,
+        "source_samples_unchanged": false,
+        "all_ankle_angles_zero": true,
+        "ik_used": false,
+        "walking_deceleration_added": false,
+        "closure_duration_s": 0.4,
+        "hold_duration_s": 1.5,
+        "output_frames": 447,
+        "output_duration_s": 11.15,
+        "final_foot_separation_forward_lateral_vertical_m": [
+          1.5265566588595902e-16,
+          0.23701290999999994,
+          0.0
+        ],
+        "final_shoe_bottom_heights_m": [
+          0.0010000001267716566,
+          0.0010000000000000321
+        ],
+        "final_foot_yaw_pitch_roll_deg_LR": [
+          [
+            -12.86108675803051,
+            0.0,
+            0.0
+          ],
+          [
+            -12.86108675803051,
+            0.0,
+            0.0
+          ]
+        ],
+        "minimum_closure_shoe_height_m": 0.0009999999999999454,
+        "new_joint_limit_violation_rad": 0.0,
+        "note": "Only appended pose closure and static hold; original gait/torso/feet unchanged. Kinematic preview.",
+        "source_sample_changes": [
+          "left_hip_roll_joint",
+          "left_hip_yaw_joint"
+        ],
+        "standing_hold_unchanged": true
+      },
+      "left_leg_refinement": {
+        "input": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/walk_turn_right_end_aligned.pkl",
+        "input_sha256": "5f0b49b49d2139acadcb838d4cd8b7186f53777ef231f0bfd4afc418d7f8fae9",
+        "output": "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/pkl/refined/walk_turn_right_leg_v1.pkl",
+        "frames": 447,
+        "fps": 40.0,
+        "modified_joints": [
+          "left_hip_roll_joint",
+          "left_hip_yaw_joint"
+        ],
+        "inward_roll_threshold_deg": -2.0,
+        "inward_yaw_threshold_deg": -6.0,
+        "inward_roll_excess_retained_fraction": 0.35,
+        "inward_yaw_excess_retained_fraction": 0.55,
+        "hip_roll_min_deg_before_after": [
+          -5.764546661095943,
+          -3.6425911437865914
+        ],
+        "hip_yaw_min_deg_before_after": [
+          -15.222565086866855,
+          -11.522410788994147
+        ],
+        "left_foot_yaw_relative_pelvis_min_deg_before_after": [
+          -16.3707634787433,
+          -12.611503951924178
+        ],
+        "left_knee_lateral_from_hip_min_m_before_after": [
+          -0.023401507329789968,
+          -0.016537415391111268
+        ],
+        "maximum_left_ankle_position_change_m": 0.02233330984650156,
+        "right_ankle_positions_unchanged": true,
+        "minimum_shoe_height_LR_m_before": [
+          -0.06157311685730229,
+          -0.08092657790455612
+        ],
+        "minimum_shoe_height_LR_m_after": [
+          -0.06156021681013852,
+          -0.08092657790455612
+        ],
+        "maximum_modified_joint_frame_step_deg_before_after": [
+          8.055732702871877,
+          5.8396105264513665
+        ],
+        "root_pose_unchanged": true,
+        "other_21_joints_unchanged": true,
+        "ankle_angles_all_zero": true,
+        "standing_hold_unchanged": true,
+        "modified_joint_limit_violation_rad": 0.0,
+        "ik_used": false,
+        "note": "Direct smooth joint-angle attenuation. Foot paths change slightly; contacts are not re-solved. Kinematic preview only."
+      },
+      "motion_weight": 1.0,
+      "normalized_sampling_probability": 0.25
+    }
+  }
+}

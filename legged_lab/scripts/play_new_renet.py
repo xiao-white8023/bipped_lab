@@ -25,6 +25,12 @@ if LOCAL_RSL_RL_PATH not in sys.path:
 from isaaclab.app import AppLauncher
 
 
+def parse_lp_height_source(value):
+    if value != "pgtt_full_atten":
+        raise argparse.ArgumentTypeError("g1_renet supports only pgtt_full_atten")
+    return value
+
+
 parser = argparse.ArgumentParser(description="Play a trained g1_renet policy.")
 parser.add_argument("--task", type=str, default="g1_renet", help="Registered task name.")
 parser.add_argument("--num_envs", type=int, default=1, help="Number of parallel environments (default: 1).")
@@ -47,7 +53,11 @@ parser.add_argument(
     help="Optional terrain override; the task terrain is used when omitted.",
 )
 parser.add_argument("--depth_noise", action="store_true", help="Keep the configured training-time depth noise.")
-parser.add_argument("--lidar_noise", action="store_true", help="Keep the configured training-time LiDAR noise.")
+parser.add_argument(
+    "--lp_noise",
+    action="store_true",
+    help="Keep the configured training-time AME height-map noise.",
+)
 parser.add_argument("--depth_debug_vis", action="store_true", help="Visualize depth-camera rays.")
 parser.add_argument(
     "--no_export",
@@ -66,6 +76,15 @@ parser.add_argument(
     help="Export directory (default: <checkpoint_run>/exported).",
 )
 parser.add_argument("--no_gamepad", action="store_true", help="Disable Linux evdev gamepad input.")
+parser.add_argument(
+    "--lp_height_source", type=parse_lp_height_source,
+    metavar="{pgtt_full_atten}", default=None,
+    help="Override the complete LP contract, not only the sensor source.",
+)
+parser.add_argument(
+    "--checkpoint_path", "--checkpoint-path", dest="checkpoint_path", default=None,
+    help="Direct checkpoint path; takes precedence over --load_run/--checkpoint.",
+)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
@@ -82,6 +101,7 @@ from isaaclab_tasks.utils import get_checkpoint_path  # noqa: E402
 
 import legged_lab.utils.cli_args as cli_args  # noqa: E402
 from legged_lab.envs import *  # noqa: F401,F403,E402
+from legged_lab.envs.g1.RENet_cfg import configure_agent_for_lp_source  # noqa: E402
 from legged_lab.terrains import (  # noqa: E402
     Flat_terrain,
     GRAVEL_TERRAINS_CFG,
@@ -110,6 +130,8 @@ def configure_playback(env_cfg):
     """Turn the training configuration into a deterministic playback setup."""
 
     env_cfg.scene.num_envs = args_cli.num_envs
+    if args_cli.lp_height_source is not None:
+        env_cfg.renet.lp_height_source = args_cli.lp_height_source
     env_cfg.scene.env_spacing = 2.5
     env_cfg.noise.add_noise = False
 
@@ -128,9 +150,11 @@ def configure_playback(env_cfg):
     env_cfg.scene.height_scanner.debug_vis = False
     env_cfg.scene.height_scanner.drift_range = (0.0, 0.0)
     env_cfg.scene.camera.add_camera_noise = bool(args_cli.depth_noise)
+    env_cfg.depth_noise_force_active = bool(args_cli.depth_noise)
     env_cfg.scene.camera.camera.debug_vis = bool(args_cli.depth_debug_vis)
-    if hasattr(env_cfg.scene.lidar, "noise"):
-        env_cfg.scene.lidar.noise.enable = bool(args_cli.lidar_noise)
+    if hasattr(env_cfg, "lp_height"):
+        env_cfg.lp_height.noise.enable = bool(args_cli.lp_noise)
+        env_cfg.lp_height.noise.force_active = bool(args_cli.lp_noise)
 
     # Playback owns the LP/VP choice for every terrain cell.
     env_cfg.renet.mask_mode = args_cli.estimator
@@ -296,6 +320,7 @@ def play():
     env_cfg, agent_cfg = task_registry.get_cfgs(args_cli.task)
     env_cfg = configure_playback(env_cfg)
     agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
+    configure_agent_for_lp_source(env_cfg, agent_cfg)
     env_cfg.scene.seed = agent_cfg.seed
 
     # The runner constructs AMP components even for inference.  One transition
@@ -316,7 +341,12 @@ def play():
 
     log_root_path = os.path.join(REPO_ROOT, "logs", agent_cfg.experiment_name)
     print(f"[INFO] Loading experiment from directory: {log_root_path}")
-    resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
+    if args_cli.checkpoint_path is not None:
+        resume_path = os.path.abspath(os.path.expanduser(args_cli.checkpoint_path))
+        if not os.path.isfile(resume_path):
+            raise FileNotFoundError(f"Checkpoint does not exist: {resume_path}")
+    else:
+        resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
     log_dir = os.path.dirname(resume_path)
     print(f"[INFO] Loading model checkpoint: {resume_path}")
 
@@ -336,11 +366,19 @@ def play():
             if args_cli.export_dir is not None
             else os.path.join(log_dir, "exported")
         )
+        export_metadata = {
+            "lp_height_source": env.lp_height_source,
+            "lp_observation_contract": env.lp_observation_contract,
+        }
+        if runner.lp_encoder_contract is not None:
+            export_metadata["lp_encoder_contract"] = runner.lp_encoder_contract
+        export_metadata["vp_encoder_contract"] = runner.vp_encoder_contract
         export_policy_as_jit(
             policy_model,
             runner.obs_normalizer,
             path=export_model_dir,
             filename="policy.pt",
+            metadata=export_metadata,
         )
         export_policy_as_onnx(
             policy_model,
@@ -399,7 +437,6 @@ def play():
                         f"requested={estimator.upper()}, "
                         f"modes(VP/LP)={vp_count}/{lp_count}"
                     )
-
                 step_counter += 1
     finally:
         if gamepad is not None:

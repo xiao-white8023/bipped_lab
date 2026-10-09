@@ -10,11 +10,25 @@ if local_rsl_rl_path not in sys.path:
 
 from isaaclab.app import AppLauncher
 
+
+def parse_lp_height_source(value):
+    if value != "pgtt_full_atten":
+        raise argparse.ArgumentTypeError("g1_renet supports only pgtt_full_atten")
+    return value
+
+
 # --- 修复 2: 基础参数解析 (避开 __init__.py 陷阱) ---
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
+parser.add_argument("--lp_height_source", type=parse_lp_height_source,
+                    metavar="{pgtt_full_atten}", default=None,
+                    help="g1_renet LP input source (default from cfg)")
+parser.add_argument(
+    "--checkpoint_path", "--checkpoint-path", dest="checkpoint_path", default=None,
+    help="Direct checkpoint path; takes precedence over --load_run/--checkpoint and implies resume.",
+)
 
 # 仅添加 AppLauncher 引擎启动参数并解析
 AppLauncher.add_app_launcher_args(parser)
@@ -48,6 +62,7 @@ from rsl_rl.runners import AmpOnPolicyRunner, ConstrainedOnPolicyRunner, OnPolic
 from rsl_rl.runners.g1_student_on_policy_runner import G1StudentOnPolicyRunner
 
 from legged_lab.envs import * # noqa:F401, F403
+from legged_lab.envs.g1.RENet_cfg import configure_agent_for_lp_source
 from legged_lab.utils.cli_args import update_rsl_rl_cfg
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -67,6 +82,12 @@ def train():
         env_cfg.scene.num_envs = args_cli.num_envs
 
     agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
+    if args_cli.lp_height_source is not None:
+        if not hasattr(env_cfg, "lp_height"):
+            raise ValueError("--lp_height_source is only supported by g1_renet")
+        env_cfg.renet.lp_height_source = args_cli.lp_height_source
+    if hasattr(env_cfg, "lp_height"):
+        configure_agent_for_lp_source(env_cfg, agent_cfg)
     env_cfg.scene.seed = agent_cfg.seed
 
     if args_cli.distributed:
@@ -119,7 +140,13 @@ def train():
         device=agent_cfg.device,
     )
 
-    if agent_cfg.resume:
+    if args_cli.checkpoint_path is not None:
+        resume_path = os.path.abspath(os.path.expanduser(args_cli.checkpoint_path))
+        if not os.path.isfile(resume_path):
+            raise FileNotFoundError(f"Checkpoint does not exist: {resume_path}")
+        print(f"[INFO]: Loading direct model checkpoint from: {resume_path}")
+        runner.load(resume_path)
+    elif agent_cfg.resume:
         # get path to previous checkpoint
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
@@ -128,6 +155,8 @@ def train():
 
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
+    if hasattr(env, "lp_observation_contract"):
+        dump_yaml(os.path.join(log_dir, "params", "lp_observation_contract.yaml"), env.lp_observation_contract)
 
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
 

@@ -428,6 +428,7 @@ class RollingElevationMap:
         *,
         height_offset: float,
         height_scale: float,
+        sample_xy: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return current body-yaw-aligned height and confidence maps."""
 
@@ -439,8 +440,8 @@ class RollingElevationMap:
             torso_yaw[:, None],
             self.fused_torso_xy_w[:, None, :],
             self.fused_torso_yaw_w[:, None],
-            self._output_x,
-            self._output_y,
+            self._output_x if sample_xy is None else sample_xy[..., 0].to(self.device),
+            self._output_y if sample_xy is None else sample_xy[..., 1].to(self.device),
         ).squeeze(1)
 
         sampled_height = F.grid_sample(

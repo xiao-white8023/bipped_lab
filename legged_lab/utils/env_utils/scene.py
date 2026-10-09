@@ -94,7 +94,7 @@ class SceneCfg(InteractiveSceneCfg):
                 drift_range=config.height_scanner.drift_range,
             )
 
-        if config.lidar.enable_lidar:
+        if config.lidar is not None and config.lidar.enable_lidar:
             self.lidar = GroupedRayCasterCfg(
                 prim_path="{ENV_REGEX_NS}/Robot/" + config.lidar.body_name,
                 offset=GroupedRayCasterCfg.OffsetCfg(pos=config.lidar.offset_pos, rot=config.lidar.offset_rot),
