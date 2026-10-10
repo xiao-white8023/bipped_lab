@@ -58,7 +58,7 @@ import legged_lab
 LEGGED_LAB_ROOT = os.path.dirname(legged_lab.__file__)
 # AMP 格式开关：50 = 原始 PKL 四段的 no_ankle 格式；58 = 同四段含脚踝格式。
 # 只修改这一行即可同步切换；与 RENet_cfg.py 的开关相互独立。
-G1_ROUGH_AMP_DIM = 50
+G1_ROUGH_AMP_DIM = 58
 if type(G1_ROUGH_AMP_DIM) is not int or G1_ROUGH_AMP_DIM not in (50, 58):
     raise ValueError("G1_ROUGH_AMP_DIM must be 50 or 58.")
 G1_ROUGH_AMP_DATASET_NAME = (
@@ -227,8 +227,7 @@ class Reward:
 class G129WALK_ROUGHENVCFG:
     amp_observation_dim: int = G1_ROUGH_AMP_DIM
     amp_motion_files_display = [
-        f"{G1_ROUGH_AMP_DISPLAY_DIR}/{name}.txt"
-        for name in G1_ROUGH_AMP_CLIP_NAMES
+        "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/make_g1_23dof/training/visualization/walk_turns_40s.txt"
     ]
     device: str = "cuda:0"
     scene: BaseSceneCfg = BaseSceneCfg(  
@@ -507,8 +506,7 @@ class G129WALK_ROUGHAGENTENV:
     amp_joint_count = (G1_ROUGH_AMP_DIM - 12) // 2
     amp_data_class_name = "G1AnkleAMPLoader" if G1_ROUGH_AMP_DIM == 58 else "AMPLoader"
     amp_motion_files = [
-        f"{G1_ROUGH_AMP_DATASET_DIR}/{name}.txt"
-        for name in G1_ROUGH_AMP_CLIP_NAMES
+        "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/make_g1_23dof/training/amp_full/walk_turns_40s.txt"
     ]
     amp_num_preload_transitions = 200000 
     '''

@@ -107,6 +107,11 @@ def _add_arguments(parser: argparse.ArgumentParser) -> None:
         help="Initial camera direction.",
     )
     parser.add_argument(
+        "--follow_root",
+        action="store_true",
+        help="Follow the root translation with the viewport camera during playback.",
+    )
+    parser.add_argument(
         "--print_every",
         type=int,
         default=25,
@@ -372,8 +377,7 @@ def validate_robot_joint_order(robot, clip: MotionClip) -> None:
         )
 
 
-def set_camera_for_clip(sim: SimulationContext, clip: MotionClip) -> None:
-    center_xy = np.median(clip.root_pos_w[:, :2], axis=0)
+def set_camera_for_position(sim: SimulationContext, center_xy) -> None:
     target = (
         float(center_xy[0]),
         float(center_xy[1]),
@@ -391,6 +395,15 @@ def set_camera_for_clip(sim: SimulationContext, clip: MotionClip) -> None:
         eye = (target[0] + scale, target[1] + scale, h)
 
     sim.set_camera_view(eye=eye, target=target)
+
+
+def set_camera_for_clip(sim: SimulationContext, clip: MotionClip) -> None:
+    center_xy = (
+        clip.root_pos_w[0, :2]
+        if args.follow_root
+        else np.median(clip.root_pos_w[:, :2], axis=0)
+    )
+    set_camera_for_position(sim, center_xy)
 
 
 def prepare_tensors(robot, clip: MotionClip) -> dict[str, torch.Tensor]:
@@ -445,6 +458,8 @@ def write_frame(
     # Exact data playback: update FK/rendering but do not integrate physics.
     sim.forward()
     scene.update(dt)
+    if args.follow_root:
+        set_camera_for_position(sim, tensors["root_pose"][frame_id, :2].cpu().tolist())
     sim.render()
 
 
