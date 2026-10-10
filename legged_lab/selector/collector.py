@@ -7,12 +7,14 @@ from typing import Any
 import torch
 from .config import CollectionConfig, SelectorConfig, RuntimeConfig
 from .dataset import SelectorBatch, SelectorDatasetWriter
+from .collection_audit import CollectionAudit, collection_audit_contract
 from .faults import FaultSnapshot, SelectorFaultManager
 from .features import FeatureHistory, SensorHealthTracker, build_selector_frame
 from .feature_contract import selector_feature_contract
 from .labels import (
     RolloutOutcome,
     SafetyOutcomeAccumulator,
+    capture_safety_step,
     safety_label_contract,
     step_with_safety_capture,
 )
@@ -507,6 +509,9 @@ class CounterfactualCollector:
         first, _ = self._rollout(mask_value, record_trajectory=False)
         self._restore(snapshot)
         second, _ = self._rollout(mask_value, record_trajectory=False)
+        second.first_failure_cause_stable = (
+            first.first_failure_flags == second.first_failure_flags
+        )
         return second, outcome_replay_stability(first, second)
 
     def _advance_behavior(self):
@@ -532,6 +537,14 @@ class CounterfactualCollector:
                 changed if step == 0 else torch.zeros_like(changed),
                 emergency if step == 0 else torch.zeros_like(emergency),
             )
+            audit = getattr(self, "_collection_audit", None)
+            if audit is not None:
+                audit.observe_behavior_plans(self.episode_serial, self.stream.faults)
+
+    def finalize_audit(self):
+        audit = getattr(self, "_collection_audit", None)
+        if audit is not None:
+            self.writer.metadata["collection_audit"] = audit.summary()
 
     @torch.no_grad()
     def validate_replay(
@@ -706,6 +719,9 @@ class CounterfactualCollector:
         metadata["safety_label_contract"] = safety_label_contract()
         metadata["selector_feature_contract"] = selector_feature_contract()
         metadata["collection_config"] = asdict(self.collection_cfg)
+        metadata["collection_audit_contract"] = collection_audit_contract()
+        self._collection_audit = CollectionAudit(self.env.num_envs, self.device)
+        self._collection_audit.observe_behavior_plans(self.episode_serial, self.stream.faults)
         filters = {
             "insufficient_episode_horizon": 0,
             "invalid_lp_outcome": 0,
@@ -736,6 +752,7 @@ class CounterfactualCollector:
         collected = 0
         while collected < self.collection_cfg.target_samples:
             if self.batch_index >= self.collection_cfg.max_candidate_batches:
+                self.finalize_audit()
                 self.writer.close()
                 raise RuntimeError(
                     f"candidate limit reached ({collected} accepted); inspect manifest coverage and use a new output directory"
@@ -753,6 +770,19 @@ class CounterfactualCollector:
             history = self.feature_history.buffer.clone()
             level, terrain = self._terrain_metadata()
             faults = self.stream.faults.audit_metadata()
+            parameters = self.stream.faults.audit_parameters()
+            event_identity = torch.stack((
+                torch.arange(self.env.num_envs, device=self.device),
+                self.episode_serial, self.stream.faults.schedule_count,
+            ), -1).clone()
+            initial = capture_safety_step(self.env, self.env.command_generator.command)
+            # Invalid raw measurements remain explicitly marked; JSON/reporting
+            # uses the validity column instead of interpreting replacement zeros.
+            candidate_safety = torch.stack((
+                initial.tilt, initial.clearance, initial.torso_contact.float(),
+                initial.valid.float(),
+            ), -1)
+            candidate_safety = torch.nan_to_num(candidate_safety, nan=0.0, posinf=0.0, neginf=0.0)
             scenario = torch.where(
                 faults[:, 6].bool(),
                 torch.where(faults[:, 7].bool(), 3, 2),
@@ -762,7 +792,9 @@ class CounterfactualCollector:
             filters["unobservable_future_fault"] += int(
                 (self.feature_history.initialized & future_fault).sum()
             )
-            valid = self.feature_history.initialized & ~future_fault
+            history_ready = self.feature_history.initialized.clone()
+            observable = history_ready & ~future_fault
+            valid = observable.clone()
             enough = (
                 self.env.max_episode_length - self.env.episode_length_buf
                 >= self.collection_cfg.long_horizon_steps
@@ -782,6 +814,9 @@ class CounterfactualCollector:
             filters["invalid_lp_outcome"] += int((valid & ~lp.label_valid).sum())
             filters["invalid_vp_outcome"] += int((valid & ~vp.label_valid).sum())
             good = valid & stable & lp.label_valid & vp.label_valid
+            labels = torch.stack(
+                (lp.fail_short, lp.fail_long, vp.fail_short, vp.fail_long), -1
+            )
             selected = []
             for category in range(4):
                 mask = scenario == category
@@ -800,9 +835,6 @@ class CounterfactualCollector:
                 accepted[category] += len(ids)
             ids = torch.cat(selected)
             if len(ids):
-                labels = torch.stack(
-                    (lp.fail_short, lp.fail_long, vp.fail_short, vp.fail_long), -1
-                )
                 groups = [
                     f"terrain_seed{self.seed}:type{int(terrain[i])}:level{int(level[i])}"
                     for i in ids.tolist()
@@ -827,6 +859,15 @@ class CounterfactualCollector:
                     ),
                     self.last_feature_time[ids].clone(),
                     execution[ids],
+                    event_identity=event_identity[ids],
+                    fault_parameters=parameters[ids],
+                    first_failure_flags=torch.stack(
+                        (lp.first_failure_flags, vp.first_failure_flags), -1
+                    )[ids],
+                    first_failure_cause_stable=torch.stack(
+                        (lp.first_failure_cause_stable, vp.first_failure_cause_stable), -1
+                    )[ids],
+                    candidate_safety=candidate_safety[ids],
                 )
                 self.writer.append(batch)
                 collected += len(ids)
@@ -848,8 +889,16 @@ class CounterfactualCollector:
                     coverage["phase_counts"][name] += int(
                         (faults[ids, 3] == value).sum()
                     )
+            written = torch.zeros(self.env.num_envs, dtype=torch.bool, device=self.device)
+            written[ids] = True
+            self._collection_audit.record_candidates(
+                faults, labels,
+                (history_ready, observable, valid, valid & lp.label_valid & vp.label_valid, good),
+                written,
+            )
             self.batch_index += 1
             if self.batch_index % 10 == 0:
+                self.finalize_audit()
                 print(
                     f"[SelectorCollector] candidates={self.batch_index} accepted={collected}/{self.collection_cfg.target_samples} scenarios={accepted}",
                     flush=True,
@@ -857,3 +906,4 @@ class CounterfactualCollector:
             if collected < self.collection_cfg.target_samples:
                 self._advance_behavior()
         metadata["collection_complete"] = True
+        self.finalize_audit()

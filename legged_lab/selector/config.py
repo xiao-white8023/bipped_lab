@@ -45,7 +45,7 @@ class FaultConfig:
     lp_invalid_height: float = -1.1
     lp_height_clip: tuple[float, float] = (-1.0, 1.0)
     scenario_probabilities: tuple[float, float, float, float] = (0.30, 0.25, 0.25, 0.20)
-    severity_probabilities: tuple[float, float, float] = (0.40, 0.40, 0.20)
+    severity_probabilities: tuple[float, float, float] = (0.10, 0.30, 0.60)
 
     def validate(self) -> None:
         for name in ("update_period_s", "lp_resolution_m", "vp_depth_max_m"):

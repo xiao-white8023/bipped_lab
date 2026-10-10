@@ -44,6 +44,8 @@ import torch
 
 from legged_lab.selector.collector import CounterfactualCollector, outcome_replay_stability
 from legged_lab.selector.config import CollectionConfig
+from legged_lab.selector.faults import SelectorFaultManager
+from legged_lab.selector.runtime import ActionBlender
 from legged_lab.selector.labels import (
     FUTURE_METRIC_ORDER, SafetyOutcomeAccumulator, SafetyStepMetrics,
     capture_safety_step, dataset_safety_label_contract, local_clearance,
@@ -315,11 +317,21 @@ def test_collector_rollout_consumes_terminal_capture_not_returned_state():
     collector.observations = torch.zeros(1, 1)
     collector.adapter = SimpleNamespace(evaluate=lambda obs: SimpleNamespace(lp_action=torch.zeros(1, 23), vp_action=torch.zeros(1, 23)))
     collector.stream = SimpleNamespace(depth_end=0, reset_envs=lambda ids: None,
-                                       process=lambda obs, **kwargs: (obs, False))
+                                       process=lambda obs, **kwargs: (obs, False),
+                                       query_health=lambda now: None)
     collector.feature_history = SimpleNamespace(reset=lambda ids: None)
     collector._sensor_timestamps = lambda: (torch.zeros(1), torch.zeros(1))
     collector._time = lambda: env.control_steps * .02
     collector.episode_serial = torch.zeros(1).long()
+    collector.behavior_mask = torch.zeros(1)
+    collector.last_behavior_switch = torch.zeros(1, dtype=torch.float64)
+    collector.behavior_deadline = torch.zeros(1, dtype=torch.float64)
+    collector.lp_invalid_count = torch.zeros(1).long()
+    collector.vp_invalid_count = torch.zeros(1).long()
+    collector.blender = ActionBlender(1, 23)
+    collector._availability = lambda: (torch.ones(1).bool(), torch.ones(1).bool())
+    collector._sample_dwell = lambda ids: torch.ones(len(ids), dtype=torch.float64)
+    collector._quality = lambda: {}
     outcome, trajectory = collector._rollout(0., preserve_as_behavior=True)
     assert outcome.label_valid.item() and outcome.fail_short.item()
     assert outcome.min_clearance.item() == pytest.approx(.3)
@@ -334,21 +346,27 @@ def test_collector_persists_only_complete_valid_pairs():
     env.episode_length_buf[:] = torch.tensor([0, 0, 951, 950])
     collector = CounterfactualCollector.__new__(CounterfactualCollector)
     collector.env, collector.device, collector.seed = env, torch.device("cpu"), 42
-    collector.collection_cfg = CollectionConfig(num_envs=count, target_samples=1, allow_nonproduction_num_envs=True)
+    collector.collection_cfg = CollectionConfig(num_envs=count, target_samples=1, allow_nonproduction_num_envs=True, balanced_scenarios=False)
     collector.observations = torch.zeros(count, 1)
     collector.feature_history = SimpleNamespace(buffer=torch.arange(count).float()[:, None, None].expand(-1, 5, 283), initialized=torch.ones(count).bool())
-    collector.stream = SimpleNamespace(control_steps_per_sensor_update=5, faults=SimpleNamespace(
-        audit_metadata=lambda: torch.zeros(count, 8).long(),
-        unobservable_onset_within=lambda frames: torch.zeros(count).bool()))
+    faults = SelectorFaultManager(count)
+    faults.audit_metadata = lambda: torch.zeros(count, 8).long()
+    faults.unobservable_onset_within = lambda frames: torch.zeros(count).bool()
+    collector.stream = SimpleNamespace(control_steps_per_sensor_update=5, faults=faults)
     collector.validate_replay = lambda: {"passed": True}
     collector._terrain_metadata = lambda: (torch.zeros(count).long(), torch.zeros(count).long())
     collector.behavior_mask, collector.last_behavior_switch = torch.zeros(count), torch.zeros(count)
+    collector.episode_serial = torch.zeros(count).long()
+    collector.last_feature_time = torch.ones(count, dtype=torch.float64)
+    collector.blender = ActionBlender(count, 23)
     collector.batch_index = 0
     collector._time = lambda: 1.
     collector._capture = lambda: SimpleNamespace(behavior_mask=torch.zeros(count))
     collector._restore = lambda snapshot: None
     lp = _finish(SafetyOutcomeAccumulator(count, device="cpu", short_horizon_steps=1, long_horizon_steps=1))
     vp = copy.deepcopy(lp)
+    lp.first_failure_cause_stable = torch.ones(count).bool()
+    vp.first_failure_cause_stable = torch.ones(count).bool()
     lp.label_valid[0], vp.label_valid[1] = False, False
     collector._repeated_branch_rollout = lambda snapshot, mask, **kwargs: (lp if mask else vp, torch.ones(count).bool())
     saved = []
@@ -359,7 +377,8 @@ def test_collector_persists_only_complete_valid_pairs():
     assert saved[0].features[0, 0, 0].item() == 3.
     assert saved[0].future_metrics.shape == (1, 2, len(FUTURE_METRIC_ORDER))
     assert collector.writer.metadata["safety_label_filter"] == {
-        "insufficient_episode_horizon": 1, "invalid_lp_outcome": 1, "invalid_vp_outcome": 1}
+        "insufficient_episode_horizon": 1, "invalid_lp_outcome": 1, "invalid_vp_outcome": 1,
+        "unobservable_future_fault": 0}
     assert dataset_safety_label_contract({"metadata": collector.writer.metadata}) == safety_label_contract()
 
 
