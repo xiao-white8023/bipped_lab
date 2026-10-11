@@ -5,10 +5,15 @@ from __future__ import annotations
 import argparse
 import copy
 from dataclasses import asdict, replace
+from datetime import datetime, timezone
 import hashlib
+import json
 from pathlib import Path
+import platform
+import subprocess
 import sys
 import traceback
+import uuid
 
 
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -46,6 +51,10 @@ parser.add_argument("--prepass-steps", type=int, default=5000)
 parser.add_argument("--prepass-burn-in", type=int, default=4000)
 parser.add_argument("--terrain-prepass-only", action="store_true")
 parser.add_argument(
+    "--replay-check-only", action="store_true",
+    help="Diagnose restored LP/VP rollouts in both orders; write no dataset or policy export.",
+)
+parser.add_argument(
     "--smoke-test",
     action="store_true",
     help="Allow a small non-production dataset to validate the complete paired-rollout path.",
@@ -57,6 +66,11 @@ parser.add_argument("--fault-max-start-delay-frames", type=int, default=30)
 parser.add_argument("--fault-min-recovery-frames", type=int, default=5)
 parser.add_argument("--fault-max-recovery-frames", type=int, default=30)
 parser.add_argument("--fault-max-dual-stagger-frames", type=int, default=10)
+parser.add_argument(
+    "--fault-severity-probabilities", nargs=3, type=float, default=(0.10, 0.30, 0.60),
+    metavar=("LIGHT", "MEDIUM", "HEAVY"),
+    help="Scheduled fault-plan sampling probabilities, default: 0.10 0.30 0.60.",
+)
 parser.add_argument("--behavior-min-dwell-frames", type=int, default=10)
 parser.add_argument("--behavior-max-dwell-frames", type=int, default=50)
 parser.add_argument("--max-candidate-batches", type=int, default=100000)
@@ -85,6 +99,7 @@ from legged_lab.selector.config import (  # noqa: E402
     SelectorConfig,
 )
 from legged_lab.selector.dataset import SelectorDatasetWriter  # noqa: E402
+from legged_lab.selector.analysis import write_collection_analysis  # noqa: E402
 from legged_lab.selector.faults import SelectorFaultManager  # noqa: E402
 from legged_lab.selector.frozen_policy import (  # noqa: E402
     load_frozen_adapter,
@@ -110,6 +125,34 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def collection_run_info(seed: int) -> dict:
+    def git_value(arguments):
+        try:
+            return subprocess.run(
+                ["git", *arguments], cwd=REPO_ROOT, check=True,
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return None
+
+    source_paths = sorted((REPO_ROOT / "legged_lab/selector").glob("*.py"))
+    source_paths += [Path(__file__).resolve()]
+    return {
+        "collection_run_id": uuid.uuid4().hex,
+        "started_at_utc": datetime.now(timezone.utc).isoformat(),
+        "argv": list(sys.argv),
+        "seed": seed,
+        "fault_seed": seed + 2000,
+        "terrain_sampling_seed": seed + 1000,
+        "git_commit": git_value(["rev-parse", "HEAD"]),
+        "git_tracked_changes": git_value(["status", "--porcelain", "--untracked-files=no"]),
+        "selector_source_sha256": {str(p.relative_to(REPO_ROOT)): sha256(p) for p in source_paths},
+        "python_version": platform.python_version(),
+        "torch_version": str(torch.__version__),
+        "cuda_version": torch.version.cuda,
+    }
 
 
 def patch_mask(
@@ -169,7 +212,31 @@ def export_dual_branch(
     )
 
 
+def run_replay_diagnostics(collector, output: Path, metadata: dict) -> dict:
+    """Persist all available probes even if a later probe raises an exception."""
+    reports = {}
+    order = (("lp_before_vp", 1.0), ("vp_after_lp", 0.0),
+             ("vp_before_lp", 0.0), ("lp_after_vp", 1.0))
+    try:
+        for name, mask in order:
+            reports[name] = collector.validate_replay(mask_value=mask)
+            print(f"[selector] replay {name}: {reports[name]}")
+    finally:
+        report = {
+            **metadata,
+            "diagnostic_only": True,
+            "passed": len(reports) == len(order) and all(r["passed"] for r in reports.values()),
+            "probes": reports,
+        }
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"[selector] replay diagnostics: {output}")
+    return report
+
+
 def main() -> None:
+    if args_cli.terrain_prepass_only and args_cli.replay_check_only:
+        raise ValueError("choose only one of --terrain-prepass-only and --replay-check-only")
     if args_cli.task != "g1_renet":
         raise ValueError("selector collection is isolated to task='g1_renet'")
     if args_cli.num_envs != 4096 and not args_cli.smoke_test:
@@ -192,7 +259,7 @@ def main() -> None:
         / ("dataset" if args_cli.terrain_mode == "main" else "dataset_ood_7_9")
     )
     output = (args_cli.output or default_output).expanduser().resolve()
-    if not args_cli.terrain_prepass_only:
+    if not args_cli.terrain_prepass_only and not args_cli.replay_check_only:
         if (output / "manifest.json").exists() or any(output.glob("*/shard_*.pt")):
             raise FileExistsError(
                 f"refusing to overwrite an existing selector dataset: {output}"
@@ -205,6 +272,7 @@ def main() -> None:
                 "dual-branch export exists; use --skip-dual-branch-export or a new run directory"
             )
     fault_cfg = FaultConfig(
+        severity_probabilities=tuple(args_cli.fault_severity_probabilities),
         min_duration_frames=args_cli.fault_min_duration_frames,
         max_duration_frames=args_cli.fault_max_duration_frames,
         max_start_delay_frames=args_cli.fault_max_start_delay_frames,
@@ -313,6 +381,32 @@ def main() -> None:
         ood_levels=(7, 8, 9) if args_cli.terrain_mode == "ood" else None,
     )
     observations, _ = env.get_observations()
+    faults = SelectorFaultManager(
+        env.num_envs,
+        lp_shape=tuple(env.lp_observation_shape),
+        vp_shape=(env.depth_history_frames, env.camera_height, env.camera_width),
+        device=env.device,
+        seed=args_cli.seed + 2000,
+        cfg=fault_cfg,
+    )
+    if args_cli.replay_check_only:
+        collector = CounterfactualCollector(
+            env, adapter, None, faults=faults, selector_cfg=SelectorConfig(),
+            collection_cfg=collection_cfg, seed=args_cli.seed,
+        )
+        diagnostic_path = output.parent / "replay_diagnostics.json"
+        report = run_replay_diagnostics(collector, diagnostic_path, {
+            "run_info": collection_run_info(args_cli.seed),
+            "fault_config": asdict(fault_cfg),
+            "collection_config": asdict(collection_cfg),
+            "checkpoint": str(checkpoint_path),
+            "checkpoint_sha256": sha256(checkpoint_path),
+            "terrain_distribution": str(histogram_path),
+            "terrain_distribution_sha256": sha256(histogram_path),
+        })
+        if not report["passed"]:
+            raise RuntimeError(f"replay diagnostics failed; inspect {diagnostic_path}")
+        return
     if not args_cli.skip_dual_branch_export:
         artifact = export_dual_branch(
             adapter,
@@ -335,6 +429,7 @@ def main() -> None:
         "lp_encoder_contract": frozen_metadata["lp_encoder_contract"],
         "frozen_policy": frozen_metadata,
         "terrain_distribution": str(histogram_path),
+        "terrain_distribution_sha256": sha256(histogram_path),
         "terrain_observed_mean": distribution.mean_level,
         "terrain_mode": args_cli.terrain_mode,
         "smoke_test": args_cli.smoke_test,
@@ -344,6 +439,8 @@ def main() -> None:
         "frozen_policy_action_parity": parity,
         "protected_source_sha256": protected_before,
         "fault_config": asdict(fault_cfg),
+        "collection_config": asdict(collection_cfg),
+        "run_info": collection_run_info(args_cli.seed),
         "collection_complete": False,
     }
     writer = SelectorDatasetWriter(
@@ -353,13 +450,8 @@ def main() -> None:
         metadata=metadata,
         fixed_split="test" if args_cli.terrain_mode == "ood" else None,
     )
-    faults = SelectorFaultManager(
-        env.num_envs,
-        lp_shape=tuple(env.lp_observation_shape),
-        vp_shape=(env.depth_history_frames, env.camera_height, env.camera_width),
-        device=env.device,
-        seed=args_cli.seed + 2000,
-        cfg=fault_cfg,
+    (output / "collection_run.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     collector = CounterfactualCollector(
         env,
@@ -373,7 +465,17 @@ def main() -> None:
     try:
         collector.collect()
     finally:
+        collection_failed = sys.exc_info()[0] is not None
+        collector.finalize_audit()
         manifest = writer.close()
+        try:
+            analysis = write_collection_analysis(output)
+            print(f"[selector] collection analysis: {analysis}")
+        except Exception:
+            if not collection_failed:
+                raise
+            print("[selector] partial analysis failed; preserving original collection error", file=sys.stderr)
+            traceback.print_exc()
     protected_after = {str(path): sha256(path) for path in PROTECTED_FILES}
     if protected_before != protected_after:
         raise RuntimeError(
@@ -394,5 +496,5 @@ if __name__ == "__main__":
         # A prepass-only process owns no dataset writer and exits immediately;
         # full Kit teardown can take minutes on large cloned scenes.
         simulation_app.close(
-            skip_cleanup=failed or args_cli.terrain_prepass_only or args_cli.smoke_test
+            skip_cleanup=failed or args_cli.terrain_prepass_only or args_cli.replay_check_only or args_cli.smoke_test
         )

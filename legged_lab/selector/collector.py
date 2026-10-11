@@ -1,18 +1,21 @@
 """Aligned 10 Hz candidates and isolated 1 s counterfactual label forks."""
 
 from __future__ import annotations
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import math
 from typing import Any
 import torch
 from .config import CollectionConfig, SelectorConfig, RuntimeConfig
 from .dataset import SelectorBatch, SelectorDatasetWriter
+from .collection_audit import CollectionAudit, collection_audit_contract
 from .faults import FaultSnapshot, SelectorFaultManager
 from .features import FeatureHistory, SensorHealthTracker, build_selector_frame
 from .feature_contract import selector_feature_contract
 from .labels import (
     RolloutOutcome,
     SafetyOutcomeAccumulator,
+    capture_safety_step,
     safety_label_contract,
     step_with_safety_capture,
 )
@@ -26,28 +29,233 @@ from .randomness import (
 )
 
 
+REPLAY_STABILITY_FIELDS = ("fail_short", "fail_long", "label_valid")
+LEGACY_REPLAY_STABILITY_FIELDS = (
+    "fail_short", "fail_long", "first_failure_step", "first_reset_step",
+    "terminated", "torso_contact", "label_valid", "first_timeout_step",
+    "first_invalid_step", "observed_steps",
+)
+REPLAY_AUDIT_FIELDS = (*LEGACY_REPLAY_STABILITY_FIELDS, "first_failure_flags")
+REPLAY_TIMING_FIELDS = ("first_failure_step", "first_reset_step", "observed_steps")
+
+
+def replay_filter_contract() -> dict:
+    return {
+        "version": 2,
+        "repetitions_per_branch": 2,
+        "hard_conditions": ["fail_short_equal", "fail_long_equal", "both_replays_label_valid"],
+        "pair_acceptance": "both LP and VP satisfy all hard conditions",
+        "audit_fields": list(REPLAY_AUDIT_FIELDS),
+        "audit_value_source": "second replay; time and cause differences do not reject valid agreeing labels",
+        "legacy_comparison": "old persistence gate: ten legacy discrete fields equal and both outcomes valid",
+        "both_replays_valid_scope": "all four LP/VP rollouts, before scenario quotas",
+        "startup_hard_checks": ["initial_restore", "label_agreement", "label_validity_agreement"],
+        "startup_label_agreement_min": 0.999,
+        "startup_timing_scope": "audit only",
+    }
+
+
+def replay_mismatch_masks(first: RolloutOutcome, second: RolloutOutcome) -> dict:
+    """Return audit mismatches, including fields that no longer reject a row."""
+    return {name: getattr(first, name) != getattr(second, name)
+            for name in REPLAY_AUDIT_FIELDS}
+
+
+def replay_rejection_masks(first, second) -> dict:
+    return {
+        "label_flip": (first.fail_short != second.fail_short) | (first.fail_long != second.fail_long),
+        "first_replay_invalid": ~first.label_valid,
+        "second_replay_invalid": ~second.label_valid,
+    }
+
+
+def legacy_outcome_replay_stability(first, second) -> torch.Tensor:
+    """The old persistence gate, including its separate outcome-validity gate."""
+    return (torch.stack([getattr(first, name) == getattr(second, name)
+                         for name in LEGACY_REPLAY_STABILITY_FIELDS]).all(dim=0)
+            & first.label_valid & second.label_valid)
+
+
 def outcome_replay_stability(
     first: RolloutOutcome, second: RolloutOutcome
 ) -> torch.Tensor:
-    """Return environments whose discrete safety outcome is replay-stable.
+    """Keep only valid agreeing 20/50-step labels; timing and causes are audit."""
+    return ~torch.stack(list(replay_rejection_masks(first, second).values())).any(dim=0)
 
-    Continuous states are intentionally excluded: PhysX GPU contact caches are
-    not part of the public snapshot API.  Persisted candidates must still agree
-    exactly on both labels and on the first failure/reset timing.
-    """
 
-    return (
-        (first.fail_short == second.fail_short)
-        & (first.fail_long == second.fail_long)
-        & (first.first_failure_step == second.first_failure_step)
-        & (first.first_reset_step == second.first_reset_step)
-        & (first.terminated == second.terminated)
-        & (first.torso_contact == second.torso_contact)
-        & (first.label_valid == second.label_valid)
-        & (first.first_timeout_step == second.first_timeout_step)
-        & (first.first_invalid_step == second.first_invalid_step)
-        & (first.observed_steps == second.observed_steps)
-    )
+def replay_disagreement_summary(first, second, eligible=None) -> dict:
+    """Count label flips separately from agreeing labels with timing jitter."""
+    mismatch = replay_mismatch_masks(first, second)
+    if eligible is None:
+        eligible = torch.ones_like(first.fail_long, dtype=torch.bool)
+    reasons = replay_rejection_masks(first, second)
+    rejected = ~outcome_replay_stability(first, second)
+    legacy_rejected = ~legacy_outcome_replay_stability(first, second)
+    audit_difference = torch.stack(list(mismatch.values())).any(dim=0)
+    label_flip = reasons["label_flip"]
+    non_timing = torch.stack([value for name, value in mismatch.items()
+                              if name not in REPLAY_TIMING_FIELDS]).any(dim=0)
+    both_failed = (first.first_failure_step > 0) & (second.first_failure_step > 0)
+    delta = (first.first_failure_step - second.first_failure_step).abs()
+
+    def count(mask):
+        return int((eligible & mask).sum().item())
+
+    return {
+        "checked": int(eligible.sum().item()),
+        "rejected": count(rejected),
+        "label_flip": count(label_flip),
+        "label_invalid": count(reasons["first_replay_invalid"] | reasons["second_replay_invalid"]),
+        "first_replay_invalid": count(reasons["first_replay_invalid"]),
+        "second_replay_invalid": count(reasons["second_replay_invalid"]),
+        "labels_agree_but_rejected": count(rejected & ~label_flip),
+        "legacy_rejected": count(legacy_rejected),
+        "retained_despite_legacy_difference": count(~rejected & legacy_rejected),
+        "retained_with_audit_difference": count(~rejected & audit_difference),
+        "retained_with_timing_only_difference": count(~rejected & audit_difference & ~non_timing),
+        # Field counts overlap; the categories above must not be added to them.
+        "field_mismatch": {name: count(value) for name, value in mismatch.items()},
+        "failure_step_changes": {
+            "appeared": count((first.first_failure_step < 0) & (second.first_failure_step > 0)),
+            "disappeared": count((first.first_failure_step > 0) & (second.first_failure_step < 0)),
+            "one_step": count(both_failed & (delta == 1)),
+            "two_steps": count(both_failed & (delta == 2)),
+            "three_to_five_steps": count(both_failed & (delta >= 3) & (delta <= 5)),
+            "more_than_five_steps": count(both_failed & (delta > 5)),
+        },
+    }
+
+
+def _add_replay_counts(total, update):
+    for name, value in update.items():
+        if isinstance(value, dict):
+            _add_replay_counts(total.setdefault(name, {}), value)
+        else:
+            total[name] = total.get(name, 0) + value
+
+
+def _robot_diagnostic_tensors(env) -> dict:
+    """Read controller buffers plus independent PhysX state when available."""
+    robot = env.robot
+    data = robot.data
+    result = {}
+    for name in ("root_state_w", "joint_pos", "joint_vel", "joint_pos_target",
+                 "joint_vel_target", "joint_effort_target", "joint_stiffness",
+                 "joint_damping", "computed_torque", "applied_torque"):
+        value = getattr(data, name, None)
+        if isinstance(value, torch.Tensor):
+            result[name] = value.clone()
+    for name in ("_joint_pos_target_sim", "_joint_vel_target_sim", "_joint_effort_target_sim",
+                 "_external_force_b", "_external_torque_b"):
+        value = getattr(robot, name, None)
+        if isinstance(value, torch.Tensor):
+            result[name] = value.clone()
+    view = getattr(robot, "root_physx_view", None)
+    for name in ("get_root_transforms", "get_root_velocities", "get_dof_positions", "get_dof_velocities"):
+        getter = getattr(view, name, None)
+        if callable(getter):
+            # Unsupported backend getters are reported, without preventing the
+            # remaining diagnostic fields from being captured.
+            try:
+                value = getter()
+                if isinstance(value, torch.Tensor):
+                    result[f"physx.{name}"] = value.clone()
+            except (AttributeError, NotImplementedError, RuntimeError) as error:
+                result.setdefault("getter_errors", {})[name] = str(error)
+    return result
+
+
+@contextmanager
+def capture_physics_substeps(env, diagnostics):
+    """Observe the first control step, restoring both hooks even on errors."""
+    if diagnostics is None:
+        yield
+        return
+    sim_step = getattr(env.sim, "step", None)
+    scene_update = getattr(env.scene, "update", None)
+    if not callable(sim_step) or not callable(scene_update):
+        diagnostics["physics_trace_unavailable"] = "sim.step or scene.update is unavailable"
+        yield
+        return
+    trace = diagnostics["physics_substeps"] = []
+    missing = object()
+    previous = [(obj, name, vars(obj).get(name, missing))
+                for obj, name in ((env.sim, "step"), (env.scene, "update"))]
+
+    def traced_step(*args, **kwargs):
+        trace.append({"before_sim_step": _robot_diagnostic_tensors(env)})
+        return sim_step(*args, **kwargs)
+
+    def traced_update(*args, **kwargs):
+        result = scene_update(*args, **kwargs)
+        if trace:
+            trace[-1]["after_scene_update"] = _robot_diagnostic_tensors(env)
+        return result
+
+    try:
+        env.sim.step = traced_step
+        env.scene.update = traced_update
+        yield
+    finally:
+        for obj, name, value in previous:
+            if value is missing:
+                vars(obj).pop(name, None)
+            else:
+                setattr(obj, name, value)
+
+
+def _diagnostic_tensor_errors(first, second, live, atol):
+    errors = {}
+    for name in sorted(set(first) | set(second)):
+        a, b = first.get(name), second.get(name)
+        if not isinstance(a, torch.Tensor) or not isinstance(b, torch.Tensor):
+            if name == "getter_errors":
+                errors[name] = {"first": a, "second": b}
+            else:
+                errors[name] = {"first_present": isinstance(a, torch.Tensor),
+                                "second_present": isinstance(b, torch.Tensor)}
+            continue
+        if a.shape != b.shape:
+            errors[name] = {"shape_changed": [list(a.shape), list(b.shape)]}
+            continue
+        delta = (a.to(torch.float64) - b.to(torch.float64)).abs()
+        delta = torch.where(a == b, torch.zeros_like(delta), delta)
+        delta = torch.nan_to_num(delta, nan=float("inf"), posinf=float("inf"))
+        masked = delta[live] if delta.ndim and delta.shape[0] == len(live) else delta
+
+        def maximum(value):
+            if not value.numel():
+                return None
+            result = float(value.max().item())
+            return result if math.isfinite(result) else "nonfinite"
+
+        errors[name] = {
+            "max_abs_error": maximum(delta),
+            "no_reset_max_abs_error": maximum(masked),
+            "elements_above_atol": int((delta > atol).sum().item()),
+        }
+    return errors
+
+
+def physics_substep_comparison(first, second, atol):
+    trace_a, trace_b = first.get("physics_substeps", []), second.get("physics_substeps", [])
+    if not trace_a or not trace_b:
+        return {"available": False, "reason": [first.get("physics_trace_unavailable"),
+                                                second.get("physics_trace_unavailable")]}
+    live = ~(first["reset"] | second["reset"])
+    rows = []
+    for index, (a, b) in enumerate(zip(trace_a, trace_b), 1):
+        rows.append({"physics_substep": index, **{
+            phase: _diagnostic_tensor_errors(a.get(phase, {}), b.get(phase, {}), live, atol)
+            for phase in ("before_sim_step", "after_scene_update")
+        }})
+    return {
+        "available": True,
+        "first_substep_count": len(trace_a), "second_substep_count": len(trace_b),
+        "substeps": rows,
+        "torque_note": "applied/computed torque is telemetry; implicit actuator telemetry does not establish the solver's actual joint effort",
+        "scope": "first control step only; unobserved simulator state is not proven equal by these fields",
+    }
 
 
 @dataclass
@@ -431,15 +639,26 @@ class CounterfactualCollector:
         self.behavior_mask.copy_(target)
         return changed, emergency
 
-    def _control_step(self, target, switched, emergency):
+    def _control_step(self, target, switched, emergency, diagnostics=None):
         branches = self.adapter.evaluate(self.observations)
         actions = self.blender.step(
             branches.lp_action, branches.vp_action, target, switched, emergency
         )
         self.observations = self._set_mask(self.observations, target)
         command = self.env.command_generator.command.clone()
-        result, metrics = step_with_safety_capture(self.env, actions, command)
+        if diagnostics is not None:
+            diagnostics["observations"] = self.observations.clone()
+            diagnostics["actions"] = actions.clone()
+            diagnostics["commands"] = command.clone()
+        with capture_physics_substeps(self.env, diagnostics):
+            result, metrics = step_with_safety_capture(self.env, actions, command)
         raw, _, dones, extras = result
+        if diagnostics is not None:
+            diagnostics["reset"] = dones.clone()
+            diagnostics["applied_actions"] = self.env.action.clone()
+            torque = getattr(self.env.robot.data, "applied_torque", None)
+            if isinstance(torque, torch.Tensor):
+                diagnostics["applied_torque"] = torque.clone()
         reset_ids = dones.nonzero().flatten()
         if len(reset_ids):
             self.stream.reset_envs(reset_ids)
@@ -459,10 +678,13 @@ class CounterfactualCollector:
         self.observations = self._set_mask(self.observations, target)
         if tick:
             self._append_feature(self.observations, target)
+        if diagnostics is not None:
+            diagnostics["next_observations"] = self.observations.clone()
         return metrics, dones, extras
 
     def _rollout(
-        self, mask_value, *, preserve_as_behavior=False, record_trajectory=True
+        self, mask_value, *, preserve_as_behavior=False, record_trajectory=True,
+        start_diagnostics=None,
     ):
         target = (
             torch.as_tensor(mask_value, device=self.device, dtype=torch.float32)
@@ -483,6 +705,7 @@ class CounterfactualCollector:
                 target,
                 switched if step == 0 else torch.zeros_like(switched),
                 emergency if step == 0 else torch.zeros_like(emergency),
+                diagnostics=start_diagnostics if step == 0 else None,
             )
             outcome.update(metrics, dones, extras["time_outs"])
             if record_trajectory:
@@ -507,7 +730,100 @@ class CounterfactualCollector:
         first, _ = self._rollout(mask_value, record_trajectory=False)
         self._restore(snapshot)
         second, _ = self._rollout(mask_value, record_trajectory=False)
+        second.first_failure_cause_stable = (
+            first.first_failure_flags == second.first_failure_flags
+        )
+        second.replay_label_valid = first.label_valid & second.label_valid
+        if not hasattr(self, "_last_replay_comparisons"):
+            self._last_replay_comparisons = {}
+        self._last_replay_comparisons["LP" if mask_value else "VP"] = (first, second)
         return second, outcome_replay_stability(first, second)
+
+    def _record_replay_rejections(self, eligible, written=None):
+        """Account for the joint LP/VP filter without blaming the wrong branch."""
+        audit = self.writer.metadata.setdefault("per_candidate_replay_diagnostics", {
+            "version": 2,
+            "filter_contract": replay_filter_contract(),
+            "eligible_scope": "same rows as per_candidate_replay_filter.checked, before outcome-validity filtering",
+            "retained_scope": "eligible rows passing the new replay gate, before scenario quotas; written counters apply quotas",
+            "field_counts_overlap": True,
+            "diagnostic_label_note": "second-replay labels classify rejected rows; they are not reliable ground truth",
+            "by_branch": {"LP": {}, "VP": {}},
+            "joint": {},
+            "by_second_replay_1s": {"both_safe": {}, "any_failure": {}},
+            "examples": [], "examples_limit": 64,
+            "retained_examples": [], "retained_examples_limit": 64,
+        })
+        comparisons = getattr(self, "_last_replay_comparisons", {})
+        if set(comparisons) != {"LP", "VP"}:
+            # Alternate/test rollout implementations may provide stability
+            # masks without retaining both outcomes. Do not fabricate reasons.
+            audit["unavailable_batches"] = audit.get("unavailable_batches", 0) + 1
+            return
+        masks = {branch: replay_mismatch_masks(*pair)
+                 for branch, pair in comparisons.items()}
+        unstable = {branch: ~outcome_replay_stability(*pair)
+                    for branch, pair in comparisons.items()}
+        legacy_unstable = {branch: ~legacy_outcome_replay_stability(*pair)
+                           for branch, pair in comparisons.items()}
+        reasons = {branch: replay_rejection_masks(*pair) for branch, pair in comparisons.items()}
+        for branch, pair in comparisons.items():
+            _add_replay_counts(audit["by_branch"][branch], replay_disagreement_summary(*pair, eligible))
+        lp, vp = unstable["LP"], unstable["VP"]
+        rejected = lp | vp
+        legacy_rejected = legacy_unstable["LP"] | legacy_unstable["VP"]
+        audit_difference = torch.stack([value for fields in masks.values()
+                                        for value in fields.values()]).any(dim=0)
+        label_flip = reasons["LP"]["label_flip"] | reasons["VP"]["label_flip"]
+        label_invalid = torch.stack([~outcome.label_valid for pair in comparisons.values()
+                                     for outcome in pair]).any(dim=0)
+        written = torch.zeros_like(eligible) if written is None else written
+
+        def count(mask):
+            return int((eligible & mask).sum().item())
+
+        _add_replay_counts(audit["joint"], {
+            "checked": int(eligible.sum().item()), "rejected": count(rejected),
+            "lp_only_mismatch": count(lp & ~vp),
+            "vp_only_mismatch": count(vp & ~lp),
+            "both_branch_mismatch": count(lp & vp),
+            "label_flip": count(label_flip),
+            "label_invalid": count(label_invalid),
+            "labels_agree_but_rejected": count(rejected & ~label_flip),
+            "legacy_rejected": count(legacy_rejected),
+            "retained_despite_legacy_difference": count(~rejected & legacy_rejected),
+            "retained_with_audit_difference": count(~rejected & audit_difference),
+            "written": count(written),
+            "written_retained_despite_legacy_difference": count(written & ~rejected & legacy_rejected),
+            "written_retained_with_audit_difference": count(written & ~rejected & audit_difference),
+        })
+        any_failure = comparisons["LP"][1].fail_long | comparisons["VP"][1].fail_long
+        for name, group in (("both_safe", ~any_failure), ("any_failure", any_failure)):
+            _add_replay_counts(audit["by_second_replay_1s"][name], {
+                "checked": count(group), "rejected": count(group & rejected),
+                "label_flip": count(group & label_flip),
+                "label_invalid": count(group & label_invalid),
+                "labels_agree_but_rejected": count(group & rejected & ~label_flip),
+                "legacy_rejected": count(group & legacy_rejected),
+                "retained_despite_legacy_difference": count(group & ~rejected & legacy_rejected),
+                "written": count(group & written),
+                "written_retained_despite_legacy_difference": count(group & written & ~rejected & legacy_rejected),
+            })
+        for key, selection in (("examples", rejected), ("retained_examples", ~rejected & audit_difference)):
+            room = audit[f"{key}_limit"] - len(audit[key])
+            for env_id in (eligible & selection).nonzero().flatten()[:max(0, room)].tolist():
+                row = {"candidate_batch": self.batch_index, "env_id": env_id, "branches": {},
+                       "accepted_by_replay_filter": not bool(rejected[env_id]),
+                       "legacy_filter_accepted": not bool(legacy_rejected[env_id]),
+                       "written": bool(written[env_id])}
+                for branch, pair in comparisons.items():
+                    row["branches"][branch] = {
+                        "mismatched_fields": [name for name, mask in masks[branch].items() if bool(mask[env_id])],
+                        "rejection_reasons": [name for name, mask in reasons[branch].items() if bool(mask[env_id])],
+                        "values": {name: [getattr(outcome, name)[env_id].item() for outcome in pair]
+                                   for name in REPLAY_AUDIT_FIELDS},
+                    }
+                audit[key].append(row)
 
     def _advance_behavior(self):
         now = self._time()
@@ -532,41 +848,50 @@ class CounterfactualCollector:
                 changed if step == 0 else torch.zeros_like(changed),
                 emergency if step == 0 else torch.zeros_like(emergency),
             )
+            audit = getattr(self, "_collection_audit", None)
+            if audit is not None:
+                audit.observe_behavior_plans(self.episode_serial, self.stream.faults)
+
+    def finalize_audit(self):
+        audit = getattr(self, "_collection_audit", None)
+        if audit is not None:
+            self.writer.metadata["collection_audit"] = audit.summary()
 
     @torch.no_grad()
     def validate_replay(
-        self, steps: int = 10, atol: float = 1.0e-4
-    ) -> dict[str, float | bool | int]:
+        self, steps: int = 10, atol: float = 1.0e-4, *, mask_value: float | None = None
+    ) -> dict[str, Any]:
+        if steps <= 0:
+            raise ValueError("replay trajectory prefix must contain at least one step")
         if self.observations is None:
             self.initialize()
         snapshot = self._capture()
+        try:
+            return self._validate_replay_snapshot(snapshot, steps, atol, mask_value)
+        finally:
+            self._restore(snapshot)
+
+    def _validate_replay_snapshot(self, snapshot, steps, atol, mask_value):
+        branch = float(self.behavior_mask[0].item()) if mask_value is None else float(mask_value)
+        if branch not in (0.0, 1.0):
+            raise ValueError("replay branch must be LP=1.0 or VP=0.0")
         # Replay validation uses the normal rollout path and compares only the
         # requested prefix; the full 1 s rollout remains the label contract.
+        # Both repetitions must start after restoration, just like persisted
+        # candidates. Comparing a live run with a restored run tests a different
+        # path and can confound the startup result with restore-side effects.
+        self._restore(snapshot)
+        first_initial_error = self._initial_restore_error(snapshot)
+        first_start = {}
         first_outcome, first = self._rollout(
-            float(self.behavior_mask[0].item()), preserve_as_behavior=False
+            branch, preserve_as_behavior=False, start_diagnostics=first_start
         )
         self._restore(snapshot)
-        restored_initial = torch.cat(
-            (
-                self.env.robot.data.root_state_w,
-                self.env.robot.data.joint_pos,
-                self.env.robot.data.joint_vel,
-            ),
-            dim=-1,
-        )
-        expected_initial = torch.cat(
-            (
-                snapshot.environment.root_state,
-                snapshot.environment.joint_position,
-                snapshot.environment.joint_velocity,
-            ),
-            dim=-1,
-        )
-        initial_restore_error = float(
-            (restored_initial - expected_initial).abs().max().item()
-        )
+        second_initial_error = self._initial_restore_error(snapshot)
+        initial_restore_error = max(first_initial_error, second_initial_error)
+        second_start = {}
         second_outcome, second = self._rollout(
-            float(self.behavior_mask[0].item()), preserve_as_behavior=False
+            branch, preserve_as_behavior=False, start_diagnostics=second_start
         )
         first, second = first[:steps], second[:steps]
         error = (first - second).abs()
@@ -614,24 +939,71 @@ class CounterfactualCollector:
         per_step_max = masked_error.amax(dim=(1, 2))
         divergent = torch.nonzero(per_step_max > atol, as_tuple=False).flatten()
         first_divergent_step = int(divergent[0].item() + 1) if len(divergent) else -1
+        checks = {
+            "initial_restore": initial_restore_error <= 1.0e-6,
+            "label_agreement": float(labels_equal_per_env.float().mean().item()) >= 0.999,
+            "label_validity_agreement": float(validity_equal_per_env.float().mean().item()) >= 0.999,
+        }
+        timing_checks = {
+            "failure_step_agreement": float(failure_step_equal_per_env.float().mean().item()) >= 0.995,
+            "reset_step_agreement": float(reset_step_equal_per_env.float().mean().item()) >= 0.995,
+        }
+        stable = outcome_replay_stability(first_outcome, second_outcome)
+        audit_mismatch = replay_mismatch_masks(first_outcome, second_outcome)
+        rejection_masks = replay_rejection_masks(first_outcome, second_outcome)
+        audit_difference = torch.stack(list(audit_mismatch.values())).any(dim=0)
+
+        def details(selected):
+            rows = []
+            for env_id in selected.nonzero().flatten()[:64].tolist():
+                row = {"env_id": env_id,
+                       "mismatched_fields": [name for name, mask in audit_mismatch.items() if bool(mask[env_id])],
+                       "rejection_reasons": [name for name, mask in rejection_masks.items() if bool(mask[env_id])]}
+                for name in REPLAY_AUDIT_FIELDS:
+                    row[name] = [getattr(outcome, name)[env_id].item()
+                                 for outcome in (first_outcome, second_outcome)]
+                rows.append(row)
+            return rows
+        first_step_errors = {}
+        for name in ("observations", "actions", "commands", "applied_actions",
+                     "applied_torque", "next_observations"):
+            if name not in first_start or name not in second_start:
+                first_step_errors[name] = None
+                continue
+            delta = (first_start[name] - second_start[name]).abs()
+            # Returned observations and torques may belong to a new episode.
+            # Keep their raw maximum, but compare original-episode rows separately.
+            live = ~(first_start["reset"] | second_start["reset"])
+            masked = delta[live]
+            first_step_errors[name] = {
+                "max_abs_error": float(delta.max().item()),
+                "no_reset_max_abs_error": float(masked.max().item()) if masked.numel() else None,
+            }
         result = {
-            # PhysX does not expose its contact warm-start cache through the
-            # public tensor API, so future floating-point trajectories need
-            # not be bit-identical after a rewind.  The approved acceptance
-            # contract is exact initial-state restoration plus a high raw
-            # agreement rate; exactness is enforced per persisted candidate.
-            # The startup probe diagnoses the raw PhysX rewind quality.  A
-            # tiny fraction of marginal 4096-way GPU simulations can cross a
-            # discrete boundary because contact warm-start caches are not
-            # restorable.  Collection therefore duplicates every LP and VP
-            # branch and rejects every such candidate before persistence.
-            "passed": bool(
-                initial_restore_error <= 1.0e-6
-                and float(labels_equal_per_env.float().mean().item()) >= 0.999
-                and float(failure_step_equal_per_env.float().mean().item()) >= 0.995
-                and float(reset_step_equal_per_env.float().mean().item()) >= 0.995
-                and float(validity_equal_per_env.float().mean().item()) >= 0.999
-            ),
+            # Initial-state and label thresholds remain hard checks; event
+            # timing and continuous trajectories are explicit audit results.
+            "passed": all(checks.values()),
+            "failed_checks": [name for name, passed in checks.items() if not passed],
+            "audit_checks": timing_checks,
+            "replay_filter_contract": replay_filter_contract(),
+            "branch": "LP" if branch else "VP",
+            "comparison": "restored_vs_restored",
+            "first_initial_restore_max_abs_error": first_initial_error,
+            "second_initial_restore_max_abs_error": second_initial_error,
+            "first_control_step_errors": first_step_errors,
+            "physics_substep_comparison": physics_substep_comparison(first_start, second_start, atol),
+            "rejection_reasons": replay_disagreement_summary(first_outcome, second_outcome),
+            "actuator_models": {
+                name: {"class": f"{type(actuator).__module__}.{type(actuator).__name__}",
+                       "implicit": bool(getattr(actuator, "is_implicit_model", False))}
+                for name, actuator in getattr(self.env.robot, "actuators", {}).items()
+            },
+            "candidate_stable_count": int(stable.sum().item()),
+            "candidate_mismatch_count": int((~stable).sum().item()),
+            "mismatch_details": details(~stable),
+            "retained_audit_difference_details": details(stable & audit_difference),
+            "audit_mismatch_count": int(audit_difference.sum().item()),
+            "mismatch_details_limit": 64,
             "trajectory_within_atol": bool(max_error <= atol),
             "trajectory_env_agreement": float(
                 (per_env_trajectory_max <= atol).float().mean().item()
@@ -678,8 +1050,17 @@ class CounterfactualCollector:
             "second_replay_fail_long_count": int(second_outcome.fail_long.sum().item()),
             "atol": float(atol),
         }
-        self._restore(snapshot)
         return result
+
+    def _initial_restore_error(self, snapshot):
+        restored = torch.cat((self.env.robot.data.root_state_w,
+                              self.env.robot.data.joint_pos,
+                              self.env.robot.data.joint_vel), dim=-1)
+        expected = torch.cat((snapshot.environment.root_state,
+                              snapshot.environment.joint_position,
+                              snapshot.environment.joint_velocity), dim=-1)
+        error = (restored - expected).abs()
+        return float(error.max().item()) if torch.isfinite(error).all() else float("inf")
 
     def _terrain_metadata(self) -> tuple[torch.Tensor, torch.Tensor]:
         terrain = getattr(self.env.scene, "terrain", None)
@@ -698,14 +1079,18 @@ class CounterfactualCollector:
         if self.observations is None:
             self.initialize()
         replay = self.validate_replay()
-        if not replay["passed"]:
-            raise RuntimeError(f"paired rollout replay check failed: {replay}")
         metadata = self.writer.metadata
         metadata["collection_complete"] = False
+        metadata["replay_filter_contract"] = replay_filter_contract()
         metadata["snapshot_replay_validation"] = replay
+        if not replay["passed"]:
+            raise RuntimeError(f"paired rollout replay check failed: {replay}")
         metadata["safety_label_contract"] = safety_label_contract()
         metadata["selector_feature_contract"] = selector_feature_contract()
         metadata["collection_config"] = asdict(self.collection_cfg)
+        metadata["collection_audit_contract"] = collection_audit_contract()
+        self._collection_audit = CollectionAudit(self.env.num_envs, self.device)
+        self._collection_audit.observe_behavior_plans(self.episode_serial, self.stream.faults)
         filters = {
             "insufficient_episode_horizon": 0,
             "invalid_lp_outcome": 0,
@@ -736,6 +1121,7 @@ class CounterfactualCollector:
         collected = 0
         while collected < self.collection_cfg.target_samples:
             if self.batch_index >= self.collection_cfg.max_candidate_batches:
+                self.finalize_audit()
                 self.writer.close()
                 raise RuntimeError(
                     f"candidate limit reached ({collected} accepted); inspect manifest coverage and use a new output directory"
@@ -753,6 +1139,19 @@ class CounterfactualCollector:
             history = self.feature_history.buffer.clone()
             level, terrain = self._terrain_metadata()
             faults = self.stream.faults.audit_metadata()
+            parameters = self.stream.faults.audit_parameters()
+            event_identity = torch.stack((
+                torch.arange(self.env.num_envs, device=self.device),
+                self.episode_serial, self.stream.faults.schedule_count,
+            ), -1).clone()
+            initial = capture_safety_step(self.env, self.env.command_generator.command)
+            # Invalid raw measurements remain explicitly marked; JSON/reporting
+            # uses the validity column instead of interpreting replacement zeros.
+            candidate_safety = torch.stack((
+                initial.tilt, initial.clearance, initial.torso_contact.float(),
+                initial.valid.float(),
+            ), -1)
+            candidate_safety = torch.nan_to_num(candidate_safety, nan=0.0, posinf=0.0, neginf=0.0)
             scenario = torch.where(
                 faults[:, 6].bool(),
                 torch.where(faults[:, 7].bool(), 3, 2),
@@ -762,7 +1161,9 @@ class CounterfactualCollector:
             filters["unobservable_future_fault"] += int(
                 (self.feature_history.initialized & future_fault).sum()
             )
-            valid = self.feature_history.initialized & ~future_fault
+            history_ready = self.feature_history.initialized.clone()
+            observable = history_ready & ~future_fault
+            valid = observable.clone()
             enough = (
                 self.env.max_episode_length - self.env.episode_length_buf
                 >= self.collection_cfg.long_horizon_steps
@@ -779,9 +1180,14 @@ class CounterfactualCollector:
             replay_filter["agreement"] = 1.0 - replay_filter["rejected"] / max(
                 1, replay_filter["checked"]
             )
-            filters["invalid_lp_outcome"] += int((valid & ~lp.label_valid).sum())
-            filters["invalid_vp_outcome"] += int((valid & ~vp.label_valid).sum())
-            good = valid & stable & lp.label_valid & vp.label_valid
+            lp_valid = getattr(lp, "replay_label_valid", lp.label_valid)
+            vp_valid = getattr(vp, "replay_label_valid", vp.label_valid)
+            filters["invalid_lp_outcome"] += int((valid & ~lp_valid).sum())
+            filters["invalid_vp_outcome"] += int((valid & ~vp_valid).sum())
+            good = valid & stable & lp_valid & vp_valid
+            labels = torch.stack(
+                (lp.fail_short, lp.fail_long, vp.fail_short, vp.fail_long), -1
+            )
             selected = []
             for category in range(4):
                 mask = scenario == category
@@ -800,9 +1206,6 @@ class CounterfactualCollector:
                 accepted[category] += len(ids)
             ids = torch.cat(selected)
             if len(ids):
-                labels = torch.stack(
-                    (lp.fail_short, lp.fail_long, vp.fail_short, vp.fail_long), -1
-                )
                 groups = [
                     f"terrain_seed{self.seed}:type{int(terrain[i])}:level{int(level[i])}"
                     for i in ids.tolist()
@@ -827,6 +1230,15 @@ class CounterfactualCollector:
                     ),
                     self.last_feature_time[ids].clone(),
                     execution[ids],
+                    event_identity=event_identity[ids],
+                    fault_parameters=parameters[ids],
+                    first_failure_flags=torch.stack(
+                        (lp.first_failure_flags, vp.first_failure_flags), -1
+                    )[ids],
+                    first_failure_cause_stable=torch.stack(
+                        (lp.first_failure_cause_stable, vp.first_failure_cause_stable), -1
+                    )[ids],
+                    candidate_safety=candidate_safety[ids],
                 )
                 self.writer.append(batch)
                 collected += len(ids)
@@ -848,8 +1260,17 @@ class CounterfactualCollector:
                     coverage["phase_counts"][name] += int(
                         (faults[ids, 3] == value).sum()
                     )
+            written = torch.zeros(self.env.num_envs, dtype=torch.bool, device=self.device)
+            written[ids] = True
+            self._record_replay_rejections(valid, written)
+            self._collection_audit.record_candidates(
+                faults, labels,
+                (history_ready, observable, valid, valid & lp_valid & vp_valid, good),
+                written,
+            )
             self.batch_index += 1
             if self.batch_index % 10 == 0:
+                self.finalize_audit()
                 print(
                     f"[SelectorCollector] candidates={self.batch_index} accepted={collected}/{self.collection_cfg.target_samples} scenarios={accepted}",
                     flush=True,
@@ -857,3 +1278,4 @@ class CounterfactualCollector:
             if collected < self.collection_cfg.target_samples:
                 self._advance_behavior()
         metadata["collection_complete"] = True
+        self.finalize_audit()

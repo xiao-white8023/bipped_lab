@@ -506,7 +506,8 @@ class G129WALK_ROUGHAGENTENV:
     amp_joint_count = (G1_ROUGH_AMP_DIM - 12) // 2
     amp_data_class_name = "G1AnkleAMPLoader" if G1_ROUGH_AMP_DIM == 58 else "AMPLoader"
     amp_motion_files = [
-        "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/make_g1_23dof/training/amp_full/walk_turns_40s.txt"
+        "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/make_g1_23dof/training/amp_full/walk_turns_40s.txt",
+        "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/make_g1_23dof/training/amp_full/walk_backward_20s.txt",
     ]
     amp_num_preload_transitions = 200000 
     '''

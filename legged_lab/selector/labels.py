@@ -36,6 +36,13 @@ import torch
 TILT_LIMIT_RAD = 0.8
 CLEARANCE_LIMIT_M = 0.45
 GROUND_RADIUS_M = 0.15
+# A bitmask preserves simultaneous triggers on the first failure step.
+FIRST_FAILURE_BITS = {
+    "non_timeout_termination": 1,
+    "torso_contact": 2,
+    "tilt": 4,
+    "low_clearance": 8,
+}
 FUTURE_METRIC_ORDER = (
     "first_failure_step", "first_reset_step", "max_tilt", "min_clearance",
     "max_tracking_error", "terminated", "torso_contact", "first_timeout_step",
@@ -184,6 +191,8 @@ class RolloutOutcome:
     first_timeout_step: torch.Tensor
     first_invalid_step: torch.Tensor
     observed_steps: torch.Tensor
+    first_failure_flags: torch.Tensor | None = None
+    first_failure_cause_stable: torch.Tensor | None = None
 
     def metrics(self) -> torch.Tensor:
         return torch.stack(
@@ -232,6 +241,7 @@ class SafetyOutcomeAccumulator:
         self.fail_short = torch.zeros(n, dtype=torch.bool, device=self.device)
         self.fail_long = torch.zeros(n, dtype=torch.bool, device=self.device)
         self.first_failure_step = torch.full((n,), -1, dtype=torch.long, device=self.device)
+        self.first_failure_flags = torch.zeros(n, dtype=torch.uint8, device=self.device)
         self.first_reset_step = torch.full((n,), -1, dtype=torch.long, device=self.device)
         self.finished = torch.zeros(n, dtype=torch.bool, device=self.device)
         self.max_tilt = torch.zeros(n, device=self.device)
@@ -284,6 +294,13 @@ class SafetyOutcomeAccumulator:
         )
         newly_failed = failure & (self.first_failure_step < 0)
         self.first_failure_step[newly_failed] = self.step_index + 1
+        flags = (
+            non_timeout_termination.to(torch.uint8)
+            | (torso_contact.to(torch.uint8) * 2)
+            | ((measurement_valid & (tilt > self.tilt_limit_rad)).to(torch.uint8) * 4)
+            | ((measurement_valid & (clearance < self.clearance_limit_m)).to(torch.uint8) * 8)
+        )
+        self.first_failure_flags[newly_failed] = flags[newly_failed]
         newly_reset = active & dones.bool()
         self.first_reset_step[newly_reset] = self.step_index + 1
         if self.step_index < self.short_horizon_steps:
@@ -325,4 +342,5 @@ class SafetyOutcomeAccumulator:
             first_timeout_step=self.first_timeout_step.clone(),
             first_invalid_step=self.first_invalid_step.clone(),
             observed_steps=self.observed_steps.clone(),
+            first_failure_flags=self.first_failure_flags.clone(),
         )

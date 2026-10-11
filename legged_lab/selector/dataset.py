@@ -15,6 +15,7 @@ from torch.utils.data import Dataset, Sampler
 
 from .config import CollectionConfig, SelectorConfig
 from .labels import FUTURE_METRIC_ORDER
+from .collection_audit import FAULT_PARAMETER_ORDER, CANDIDATE_SAFETY_ORDER
 
 
 SPLIT_NAMES = ("train", "validation", "test")
@@ -78,6 +79,11 @@ class SelectorBatch:
     candidate_time: torch.Tensor | None = None
     feature_end_time: torch.Tensor | None = None
     execution_metadata: torch.Tensor | None = None
+    event_identity: torch.Tensor | None = None
+    fault_parameters: torch.Tensor | None = None
+    first_failure_flags: torch.Tensor | None = None
+    first_failure_cause_stable: torch.Tensor | None = None
+    candidate_safety: torch.Tensor | None = None
 
     def validate(self, selector_cfg: SelectorConfig | None = None) -> None:
         selector_cfg = selector_cfg or SelectorConfig()
@@ -139,6 +145,33 @@ class SelectorBatch:
             raise ValueError(
                 "execution_metadata must contain mode, dwell and remaining blend steps"
             )
+        if self.event_identity is not None and (
+            self.event_identity.shape != (batch, 3)
+            or self.event_identity.dtype != torch.int64
+            or (self.event_identity < 0).any()
+        ):
+            raise ValueError("event_identity must be nonnegative int64 [batch, 3]")
+        for name, columns in (
+            ("fault_parameters", len(FAULT_PARAMETER_ORDER)),
+            ("candidate_safety", len(CANDIDATE_SAFETY_ORDER)),
+        ):
+            value = getattr(self, name)
+            if value is not None and (
+                value.shape != (batch, columns) or not torch.isfinite(value).all()
+            ):
+                raise ValueError(f"{name} must have finite [batch, {columns}] values")
+        if (self.first_failure_flags is None) != (self.first_failure_cause_stable is None):
+            raise ValueError("first failure flags and replay agreement must be supplied together")
+        if self.first_failure_flags is not None:
+            if (self.first_failure_flags.shape != (batch, 2)
+                or self.first_failure_flags.dtype != torch.uint8
+                or (self.first_failure_flags > 15).any()):
+                raise ValueError("first_failure_flags must be uint8 [batch, 2] bitmasks")
+            if (self.first_failure_cause_stable.shape != (batch, 2)
+                or self.first_failure_cause_stable.dtype != torch.bool):
+                raise ValueError("first_failure_cause_stable must be bool [batch, 2]")
+            if not torch.equal(self.first_failure_flags != 0, labels[:, [1, 3]]):
+                raise ValueError("first failure flags must agree with long-horizon labels")
 
 
 class SelectorDatasetWriter:
@@ -170,11 +203,21 @@ class SelectorDatasetWriter:
         self._counts = {name: 0 for name in SPLIT_NAMES}
         self._groups = {name: set() for name in SPLIT_NAMES}
         self.metadata = dict(metadata or {})
+        self._optional_fields: frozenset[str] | None = None
         for split in SPLIT_NAMES:
             (self.root / split).mkdir(exist_ok=True)
 
     def append(self, batch: SelectorBatch) -> None:
         batch.validate(self.selector_cfg)
+        optional_names = (
+            "future_metrics", "fault_metadata", "candidate_time", "feature_end_time",
+            "execution_metadata", "event_identity", "fault_parameters",
+            "first_failure_flags", "first_failure_cause_stable", "candidate_safety",
+        )
+        fields = frozenset(name for name in optional_names if getattr(batch, name) is not None)
+        if self._optional_fields is not None and fields != self._optional_fields:
+            raise ValueError("optional audit fields must be consistent across batches")
+        self._optional_fields = fields
         assignments: dict[str, list[int]] = {name: [] for name in SPLIT_NAMES}
         for index, group_id in enumerate(batch.group_ids):
             split = self.fixed_split or split_from_group(
@@ -215,6 +258,15 @@ class SelectorDatasetWriter:
                 value = getattr(batch, name)
                 if value is not None:
                     item[name] = value[ids].detach().cpu()
+            for name, dtype in (
+                ("event_identity", torch.int64), ("fault_parameters", torch.float32),
+                ("first_failure_flags", torch.uint8),
+                ("first_failure_cause_stable", torch.bool),
+                ("candidate_safety", torch.float32),
+            ):
+                value = getattr(batch, name)
+                if value is not None:
+                    item[name] = value[ids].detach().cpu().to(dtype)
             self._pending[split].append(item)
             self._pending_count[split] += len(indices)
             while self._pending_count[split] >= self.collection_cfg.shard_size:
@@ -414,4 +466,3 @@ class ShardBatchSampler(Sampler[list[int]]):
             pending.extend(rows[offset:])
         if pending and not self.drop_last:
             yield pending
-

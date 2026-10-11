@@ -53,6 +53,17 @@ def make_model(name):
     xml.set('model', f'G1_23DoF__{name}')
     compiler = xml.find('compiler')
     compiler.set('meshdir', str((MODEL.parent / compiler.get('meshdir', '')).resolve()))
+    # A visual floor makes swing clearance and the final planted stance visible.
+    asset = xml.find('asset')
+    ET.SubElement(asset, 'texture', name='motion_preview_grid', type='2d', builtin='checker',
+                  rgb1='.78 .80 .82', rgb2='.88 .90 .92', width='512', height='512')
+    ET.SubElement(asset, 'material', name='motion_preview_ground', texture='motion_preview_grid',
+                  texrepeat='2 2', texuniform='true', reflectance='.05')
+    world = xml.find('worldbody')
+    ET.SubElement(world, 'geom', name='motion_preview_floor', type='plane', size='20 20 .1',
+                  pos='0 0 0', material='motion_preview_ground', contype='0', conaffinity='0')
+    ET.SubElement(world, 'light', name='motion_preview_light', pos='0 0 3', dir='-.2 -.3 -1',
+                  directional='true', diffuse='.8 .8 .8', ambient='.3 .3 .3')
     model = mujoco.MjModel.from_xml_string(ET.tostring(xml, encoding='unicode'))
     if model.nq != 30 or model.njnt != 24:
         raise ValueError('Expected a floating base and 23 scalar G1 joints.')
@@ -97,7 +108,7 @@ def play(path, args):
 
     data.qpos[:] = poses[0]
     mujoco.mj_forward(model, data)
-    print(f'{path.name}: {count} frames, {fps:g} FPS, {(count - 1) / fps:.3f}s.', flush=True)
+    print(f'{path.name}: {count} frames, {fps:g} FPS, {count / fps:.3f}s.', flush=True)
     print('Space: pause/play; R: restart; S: half speed; arrows: step; close window: exit.', flush=True)
     with mujoco.viewer.launch_passive(model, data, key_callback=key_callback,
                                      show_left_ui=False, show_right_ui=False) as viewer:
@@ -126,7 +137,8 @@ def play(path, args):
                         state.update(frame=float(count - 1), paused=True)
                         print('Holding last frame. Press R to replay.', flush=True)
                 frame = int(state['frame'])
-                next_frame = (frame + 1) % count if args.loop else min(frame + 1, count - 1)
+                # Repeat by restarting, without blending different end/start locations.
+                next_frame = min(frame + 1, count - 1)
                 pose = interpolate(poses[frame], poses[next_frame], state['frame'] - frame)
             previous = now
             with viewer.lock():
@@ -229,7 +241,7 @@ def main():
         parser.error('--single requires one motion.')
     for path in args.motion:
         fps, poses = load_motion(path)
-        print(f'{path.name}: {len(poses)} frames, {(len(poses) - 1) / fps:.3f}s.', flush=True)
+        print(f'{path.name}: {len(poses)} frames, {fps:g} FPS, {len(poses) / fps:.3f}s.', flush=True)
         if args.check:
             model = make_model(path.stem)
             data = mujoco.MjData(model)

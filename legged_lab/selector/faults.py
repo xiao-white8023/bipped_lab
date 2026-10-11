@@ -370,6 +370,27 @@ class SelectorFaultManager:
             -1,
         )
 
+    def audit_parameters(self):
+        """Actual sampled plan parameters in FAULT_PARAMETER_ORDER, without RNG draws."""
+        dt = self.cfg.update_period_s
+        observed = (self.step_count - 1).clamp_min(0)
+        return torch.stack(
+            (
+                self.lp_duration_frames * dt, self.vp_duration_frames * dt,
+                self.lp_delay * dt, self.vp_delay * dt,
+                (self.lp_start_frame - observed) * dt,
+                (self.vp_start_frame - observed) * dt,
+                self.vp_scale, self.vp_bias * self.cfg.vp_depth_max_m,
+                self.vp_shift_x.float(), self.vp_shift_y.float(),
+                self.vp_occlusion_mask.float().mean((-2, -1)),
+                self.vp_collapse_value, self.lp_dropout,
+                self.lp_block_mask.float().mean((-2, -1)), self.lp_bias,
+                self.lp_translation_xy[:, 0], self.lp_translation_xy[:, 1],
+                self.lp_yaw, self.lp_drift_xy[:, 0], self.lp_drift_xy[:, 1],
+                self.lp_drift_yaw,
+            ), -1,
+        )
+
     def _delayed(self, buffer, delays):
         ids = torch.arange(self.num_envs, device=self.device)
         return buffer[ids, (self.cursor - delays) % (self.cfg.max_delay_frames + 1)]
@@ -646,4 +667,3 @@ class SelectorFaultManager:
         return FaultBatch(
             out_lp, out_vp, lp_time, vp_time, la, va, lv, vv, lp_packet, vp_packet
         )
-
