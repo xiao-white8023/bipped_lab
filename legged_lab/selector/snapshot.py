@@ -22,6 +22,7 @@ class ObjectTensorState:
     tensor_lists: dict[str, list[torch.Tensor]]
     tensor_dicts: dict[str, dict[Any, torch.Tensor]]
     scalars: dict[str, int | float | bool]
+    empty_buffers: tuple[str, ...] = ()
 
 
 @dataclass
@@ -43,6 +44,7 @@ def _capture_object(obj: Any) -> ObjectTensorState:
     scalars: dict[str, int | float | bool] = {}
     tensor_lists: dict[str, list[torch.Tensor]] = {}
     tensor_dicts: dict[str, dict[Any, torch.Tensor]] = {}
+    empty_buffers: list[str] = []
     if obj is None or not hasattr(obj, "__dict__"):
         return ObjectTensorState(
             tensors=tensors,
@@ -65,15 +67,17 @@ def _capture_object(obj: Any) -> ObjectTensorState:
             and all(isinstance(item, torch.Tensor) for item in value.values())
         ):
             tensor_dicts[name] = {key: item.clone() for key, item in value.items()}
-        elif name in ("_pointer", "cursor", "sim_step_counter") and isinstance(
-            value, (int, float, bool)
-        ):
+        elif isinstance(value, (int, float, bool)):
             scalars[name] = value
+        elif value is None and name in ("data", "_buffer"):
+            # Lazy TimestampedBuffer/DelayBuffer allocations are state too.
+            empty_buffers.append(name)
     return ObjectTensorState(
         tensors=tensors,
         tensor_lists=tensor_lists,
         tensor_dicts=tensor_dicts,
         scalars=scalars,
+        empty_buffers=tuple(empty_buffers),
     )
 
 
@@ -122,6 +126,28 @@ def _restore_object(obj: Any, state: ObjectTensorState) -> None:
             target_tensor.copy_(source)
     for name, value in state.scalars.items():
         setattr(obj, name, value)
+    for name in state.empty_buffers:
+        setattr(obj, name, None)
+
+
+def snapshot_restore_contract() -> dict:
+    return {
+        "version": 2,
+        "robot_state": ["root", "joints", "control_targets", "articulation_data", "timestamped_caches"],
+        "actuator_state": "tensor/scalar state plus nested delay/circular buffers",
+        "sensor_data_access": "cached _data; no lazy sensor update during capture/restore",
+        "restore_actuator_computations": 0,
+        "backend_target_restore": "direct PhysX setters, without an extra actuator/delay-buffer tick",
+        "physx_contact_solver_cache": "not exposed by the Python snapshot API; replay checks remain required",
+    }
+
+
+def _cached_sensor_data(sensor: Any) -> Any:
+    # Accessing sensor.data runs a lazy update. During restore that can read
+    # contact forces from the previous fork and alter history/timers.
+    if hasattr(sensor, "_data"):
+        return sensor._data
+    return getattr(sensor, "data", None)
 
 
 class RENetSnapshotManager:
@@ -176,8 +202,12 @@ class RENetSnapshotManager:
         sensors = {
             name: sensor for name, sensor in getattr(env.scene, "sensors", {}).items()
         }
-        return {
+        robot = env.robot
+        robot_data = robot.data
+        objects = {
             "env": env,
+            "robot": robot,
+            "robot_data": robot_data,
             "actor_obs_buffer": getattr(env, "actor_obs_buffer", None),
             "critic_obs_buffer": getattr(env, "critic_obs_buffer", None),
             "action_buffer": getattr(env, "action_buffer", None),
@@ -192,10 +222,39 @@ class RENetSnapshotManager:
             "pgtt_height_scanner": getattr(env, "pgtt_height_scanner", None),
             **{f"sensor_{name}": sensor for name, sensor in sensors.items()},
             **{
-                f"sensor_data_{name}": getattr(sensor, "data", None)
+                f"sensor_data_{name}": _cached_sensor_data(sensor)
                 for name, sensor in sensors.items()
             },
         }
+        for name, value in vars(robot_data).items():
+            if hasattr(value, "timestamp") and hasattr(value, "data"):
+                objects[f"robot_data_cache_{name}"] = value
+        for name, actuator in getattr(robot, "actuators", {}).items():
+            objects[f"actuator_{name}"] = actuator
+            for field, value in vars(actuator).items():
+                circular = getattr(value, "_circular_buffer", None)
+                if circular is not None:
+                    objects[f"actuator_{name}_delay_{field}"] = value
+                    objects[f"actuator_{name}_circular_{field}"] = circular
+        return objects
+
+    def _restore_control_targets(self) -> None:
+        robot = self.env.robot
+        view = getattr(robot, "root_physx_view", None)
+        if view is None:
+            return
+        fields = [("_joint_effort_target_sim", "set_dof_actuation_forces")]
+        if getattr(robot, "_has_implicit_actuators", False):
+            fields.extend((("_joint_pos_target_sim", "set_dof_position_targets"),
+                           ("_joint_vel_target_sim", "set_dof_velocity_targets")))
+        for field, method in fields:
+            target = getattr(robot, field, None)
+            if not isinstance(target, torch.Tensor):
+                continue
+            setter = getattr(view, method, None)
+            if not callable(setter):
+                raise RuntimeError(f"cannot restore robot control target: PhysX {method} is unavailable")
+            setter(target, indices=robot._ALL_INDICES)
 
     def capture(self) -> RENetSnapshot:
         env = self.env
@@ -258,19 +317,22 @@ class RENetSnapshotManager:
             if name not in objects or objects[name] is None:
                 raise RuntimeError(f"snapshot target object {name!r} is unavailable")
             _restore_object(objects[name], state)
-        torch.random.set_rng_state(snapshot.torch_rng)
-        if snapshot.cuda_rng is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all(snapshot.cuda_rng)
-        np.random.set_state(snapshot.numpy_rng)
-        random.setstate(snapshot.python_rng)
         if snapshot.simulator_time is not None and hasattr(env.sim, "_current_time"):
             env.sim._current_time = snapshot.simulator_time
         if snapshot.simulator_step is not None and hasattr(
             env.sim, "_current_time_step_index"
         ):
             env.sim._current_time_step_index = snapshot.simulator_step
-        env.scene.write_data_to_sim()
+        # scene.write_data_to_sim() invokes actuator.compute(), which advances
+        # delayed/LSTM actuators and uses the last fork's targets. Restore the
+        # already computed backend targets directly without that extra tick.
+        self._restore_control_targets()
         env.sim.forward()
+        torch.random.set_rng_state(snapshot.torch_rng)
+        if snapshot.cuda_rng is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(snapshot.cuda_rng)
+        np.random.set_state(snapshot.numpy_rng)
+        random.setstate(snapshot.python_rng)
 
 
 @torch.no_grad()

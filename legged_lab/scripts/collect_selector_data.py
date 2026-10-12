@@ -8,6 +8,8 @@ from dataclasses import asdict, replace
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
+import os
 from pathlib import Path
 import platform
 import subprocess
@@ -46,6 +48,40 @@ parser.add_argument("--output", type=Path, default=None)
 parser.add_argument("--target-samples", type=int, default=None)
 parser.add_argument("--terrain-mode", choices=("main", "ood"), default="main")
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--fault-seed", type=int, default=None)
+parser.add_argument("--behavior-seed", type=int, default=None)
+parser.add_argument("--base-dataset", type=Path, default=None)
+parser.add_argument("--supplement-split", choices=("train", "validation", "test"), default=None)
+parser.add_argument("--fault-profile", choices=("baseline", "mixed", "lp_map", "vp_hard", "dual", "recovery"), default=None,
+                    help="Default: baseline for original collection, mixed for supplements.")
+quota_args = parser.add_mutually_exclusive_group()
+quota_args.add_argument("--pair-quotas", nargs=4, type=int, default=None,
+                        metavar=("BOTH_SAFE", "LP_FAIL", "VP_FAIL", "BOTH_FAIL"))
+quota_args.add_argument("--no-outcome-quotas", action="store_true",
+                        help="Pilot source banks/stress sets: sample faults without result balancing.")
+parser.add_argument("--min-short-vp-only", type=int, default=None)
+parser.add_argument("--min-short-lp-only", type=int, default=None)
+parser.add_argument("--min-short-both-fail", type=int, default=None)
+parser.add_argument("--min-late-failure", type=int, default=None)
+parser.add_argument("--max-samples-per-event", type=int, default=8)
+parser.add_argument("--min-event-spacing-s", type=float, default=.2)
+parser.add_argument("--max-no-progress-batches", type=int, default=1000)
+parser.add_argument("--warmup-seconds", type=float, default=None,
+                    help="Real faulted behavior burn-in; production supplements default to 15 s.")
+parser.add_argument("--min-collection-span-seconds", type=float, default=None,
+                    help="Release sample slots over at least this real duration; supplement default 30 s.")
+parser.add_argument("--label-interval-frames", type=int, default=None,
+                    help="Label every N real 10 Hz frames; supplement default 10. Features remain 10 Hz.")
+phase_args = parser.add_mutually_exclusive_group()
+phase_args.add_argument("--randomize-label-phase", action="store_true", dest="randomize_label_phase", default=None,
+                        help="Randomize the 10 Hz label tick inside each interval; supplement default.")
+phase_args.add_argument("--fixed-label-phase", action="store_false", dest="randomize_label_phase", default=None)
+parser.add_argument("--max-samples-per-labelled-batch", type=int, default=0,
+                    help="Optional per-fork admission cap; 0 leaves only the time-release budget.")
+parser.add_argument("--heartbeat-seconds", type=float, default=30.)
+parser.add_argument("--analysis-timeout-seconds", type=float, default=600.)
+parser.add_argument("--full-sim-cleanup", action="store_true",
+                    help="Opt into slow full Kit teardown instead of fast success exit after saving.")
 parser.add_argument("--terrain-histogram", type=Path, default=None)
 parser.add_argument("--prepass-steps", type=int, default=5000)
 parser.add_argument("--prepass-burn-in", type=int, default=4000)
@@ -60,14 +96,14 @@ parser.add_argument(
     help="Allow a small non-production dataset to validate the complete paired-rollout path.",
 )
 parser.add_argument("--skip-dual-branch-export", action="store_true")
-parser.add_argument("--fault-min-duration-frames", type=int, default=3)
-parser.add_argument("--fault-max-duration-frames", type=int, default=50)
-parser.add_argument("--fault-max-start-delay-frames", type=int, default=30)
-parser.add_argument("--fault-min-recovery-frames", type=int, default=5)
-parser.add_argument("--fault-max-recovery-frames", type=int, default=30)
-parser.add_argument("--fault-max-dual-stagger-frames", type=int, default=10)
+parser.add_argument("--fault-min-duration-frames", type=int, default=None)
+parser.add_argument("--fault-max-duration-frames", type=int, default=None)
+parser.add_argument("--fault-max-start-delay-frames", type=int, default=None)
+parser.add_argument("--fault-min-recovery-frames", type=int, default=None)
+parser.add_argument("--fault-max-recovery-frames", type=int, default=None)
+parser.add_argument("--fault-max-dual-stagger-frames", type=int, default=None)
 parser.add_argument(
-    "--fault-severity-probabilities", nargs=3, type=float, default=(0.10, 0.30, 0.60),
+    "--fault-severity-probabilities", nargs=3, type=float, default=None,
     metavar=("LIGHT", "MEDIUM", "HEAVY"),
     help="Scheduled fault-plan sampling probabilities, default: 0.10 0.30 0.60.",
 )
@@ -81,7 +117,21 @@ parser.add_argument(
 )
 AppLauncher.add_app_launcher_args(parser)
 args_cli, _ = parser.parse_known_args()
+if not args_cli.replay_check_only and not args_cli.terrain_prepass_only:
+    analysis_files = (
+        CURRENT_DIR / "analyze_selector_collection.py",
+        REPO_ROOT / "legged_lab" / "selector" / "analysis.py",
+    )
+    missing_analysis = [str(path) for path in analysis_files if not path.is_file()]
+    if missing_analysis:
+        parser.error("missing selector analysis files: " + ", ".join(missing_analysis)
+                     + "; restore these files before launching collection. "
+                       "Already saved datasets can be analyzed separately without recollecting.")
 args_cli.enable_cameras = True
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(line_buffering=True, write_through=True)
+print("[selector stage] launch_simulation", flush=True)
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
@@ -99,8 +149,13 @@ from legged_lab.selector.config import (  # noqa: E402
     SelectorConfig,
 )
 from legged_lab.selector.dataset import SelectorDatasetWriter  # noqa: E402
-from legged_lab.selector.analysis import write_collection_analysis  # noqa: E402
+from legged_lab.selector.collection_progress import CollectionProgress, close_simulation  # noqa: E402
+from legged_lab.selector.collection_physics import create_collection_environment, collection_physics_settings  # noqa: E402
 from legged_lab.selector.faults import SelectorFaultManager  # noqa: E402
+from legged_lab.selector.supplement import fault_profile, SupplementConfig, scaled_pair_quotas  # noqa: E402
+from legged_lab.selector.supplement_dataset import (  # noqa: E402
+    base_collection_partition, restrict_terrain_distribution, compatible_manifests,
+)
 from legged_lab.selector.frozen_policy import (  # noqa: E402
     load_frozen_adapter,
     validate_actions,
@@ -110,6 +165,8 @@ from legged_lab.selector.terrain import (  # noqa: E402
     apply_frozen_distribution,
 )
 from legged_lab.utils import task_registry  # noqa: E402
+
+progress = None
 
 
 PROTECTED_FILES = (
@@ -144,7 +201,9 @@ def collection_run_info(seed: int) -> dict:
         "started_at_utc": datetime.now(timezone.utc).isoformat(),
         "argv": list(sys.argv),
         "seed": seed,
-        "fault_seed": seed + 2000,
+        "fault_seed": args_cli.fault_seed if args_cli.fault_seed is not None else seed + 2000,
+        "behavior_seed": args_cli.behavior_seed if args_cli.behavior_seed is not None else seed,
+        "terrain_generation_seed": getattr(args_cli, "terrain_generation_seed", seed),
         "terrain_sampling_seed": seed + 1000,
         "git_commit": git_value(["rev-parse", "HEAD"]),
         "git_tracked_changes": git_value(["status", "--porcelain", "--untracked-files=no"]),
@@ -220,7 +279,10 @@ def run_replay_diagnostics(collector, output: Path, metadata: dict) -> dict:
     try:
         for name, mask in order:
             reports[name] = collector.validate_replay(mask_value=mask)
-            print(f"[selector] replay {name}: {reports[name]}")
+            summary = {key: reports[name].get(key) for key in (
+                "passed", "failed_checks", "label_agreement", "label_mismatch_count",
+                "initial_restore_max_abs_error", "first_divergent_step", "physics_settings")}
+            print(f"[selector] replay {name}: {summary}", flush=True)
     finally:
         report = {
             **metadata,
@@ -234,7 +296,27 @@ def run_replay_diagnostics(collector, output: Path, metadata: dict) -> dict:
     return report
 
 
+def collection_fault_config(arguments):
+    """Pure configuration entry point, testable without starting a simulator."""
+    name = arguments.fault_profile or ("mixed" if arguments.supplement_split else "baseline")
+    cfg = fault_profile(name)
+    overrides = {key: getattr(arguments, "fault_"+key) for key in (
+        "min_duration_frames", "max_duration_frames", "max_start_delay_frames",
+        "min_recovery_frames", "max_recovery_frames", "max_dual_stagger_frames")
+        if getattr(arguments, "fault_"+key) is not None}
+    if arguments.fault_severity_probabilities is not None:
+        overrides["severity_probabilities"] = tuple(arguments.fault_severity_probabilities)
+    cfg = replace(cfg, **overrides)
+    cfg.validate()
+    return cfg
+
+
 def main() -> None:
+    global progress
+    progress = CollectionProgress(interval_s=args_cli.heartbeat_seconds).start()
+    progress.announce("validate_arguments")
+    if not math.isfinite(args_cli.analysis_timeout_seconds) or args_cli.analysis_timeout_seconds <= 0:
+        raise ValueError("analysis timeout must be positive and finite")
     if args_cli.terrain_prepass_only and args_cli.replay_check_only:
         raise ValueError("choose only one of --terrain-prepass-only and --replay-check-only")
     if args_cli.task != "g1_renet":
@@ -243,6 +325,33 @@ def main() -> None:
         raise ValueError(
             "the approved selector collection uses exactly 4096 environments"
         )
+    supplement_mode = args_cli.supplement_split is not None
+    args_cli.fault_profile = args_cli.fault_profile or ("mixed" if supplement_mode else "baseline")
+    if (args_cli.base_dataset is not None) != supplement_mode:
+        raise ValueError("use --base-dataset and --supplement-split together")
+    if not supplement_mode and (args_cli.pair_quotas is not None or args_cli.no_outcome_quotas
+                               or args_cli.min_short_vp_only is not None or args_cli.min_late_failure is not None):
+        raise ValueError("outcome quota options require supplement mode")
+    if not supplement_mode and (args_cli.min_short_lp_only is not None or args_cli.min_short_both_fail is not None):
+        raise ValueError("short outcome minimums require supplement mode")
+    if not supplement_mode and (args_cli.warmup_seconds is not None or args_cli.min_collection_span_seconds is not None
+                               or args_cli.label_interval_frames is not None or args_cli.randomize_label_phase is not None
+                               or args_cli.max_samples_per_labelled_batch):
+        raise ValueError("temporal sampling options require supplement mode")
+    base_index, allowed_groups, allowed_pairs = None, None, None
+    terrain_seed = args_cli.seed
+    if supplement_mode:
+        if args_cli.terrain_mode != "main" or args_cli.terrain_histogram is None:
+            raise ValueError("supplements require main terrain mode and the original --terrain-histogram")
+        progress.announce("read_base_partition")
+        base_index, allowed_groups, terrain_seed, allowed_pairs = base_collection_partition(
+            args_cli.base_dataset, args_cli.supplement_split)
+        base_info = base_index["manifest"]["metadata"].get("run_info", {})
+        base_fault_seed = base_info.get("fault_seed", int(base_info.get("seed", terrain_seed))+2000)
+        new_fault_seed = args_cli.fault_seed if args_cli.fault_seed is not None else args_cli.seed+2000
+        if (int(new_fault_seed) & 0xFFFFFFFF) == (int(base_fault_seed) & 0xFFFFFFFF):
+            raise ValueError("supplement needs a new --seed or --fault-seed, independent of the base run")
+        args_cli.terrain_generation_seed = terrain_seed
     checkpoint_path = (
         (args_cli.checkpoint_path or DEFAULT_CHECKPOINT_PATH).expanduser().resolve()
     )
@@ -271,23 +380,53 @@ def main() -> None:
             raise FileExistsError(
                 "dual-branch export exists; use --skip-dual-branch-export or a new run directory"
             )
-    fault_cfg = FaultConfig(
-        severity_probabilities=tuple(args_cli.fault_severity_probabilities),
-        min_duration_frames=args_cli.fault_min_duration_frames,
-        max_duration_frames=args_cli.fault_max_duration_frames,
-        max_start_delay_frames=args_cli.fault_max_start_delay_frames,
-        min_recovery_frames=args_cli.fault_min_recovery_frames,
-        max_recovery_frames=args_cli.fault_max_recovery_frames,
-        max_dual_stagger_frames=args_cli.fault_max_dual_stagger_frames,
-    )
-    fault_cfg.validate()
+    progress.status_path = output / "collection_status.json"
+    fault_cfg = collection_fault_config(args_cli)
 
     target_samples = args_cli.target_samples
     if target_samples is None:
         if args_cli.smoke_test:
             target_samples = args_cli.num_envs
         else:
-            target_samples = 1_048_576 if args_cli.terrain_mode == "main" else 131_072
+            target_samples = (sum(args_cli.pair_quotas) if args_cli.pair_quotas is not None
+                else 262_144 if supplement_mode and args_cli.supplement_split == "train"
+                else 32_768 if supplement_mode
+                else 1_048_576 if args_cli.terrain_mode == "main" else 131_072)
+
+    supplement_cfg = None
+    if supplement_mode:
+        is_train = args_cli.supplement_split == "train"
+        if not is_train and (args_cli.pair_quotas is not None or args_cli.min_short_vp_only is not None
+                             or args_cli.min_short_lp_only is not None or args_cli.min_short_both_fail is not None
+                             or args_cli.min_late_failure is not None):
+            raise ValueError("stress validation/test may not be balanced by outcomes")
+        quotas = (tuple(args_cli.pair_quotas) if args_cli.pair_quotas is not None
+                  else scaled_pair_quotas(target_samples) if is_train and not args_cli.no_outcome_quotas else None)
+        production_temporal = not args_cli.smoke_test and not args_cli.replay_check_only
+        supplement_cfg = SupplementConfig(split=args_cli.supplement_split, pair_quotas=quotas,
+            min_short_vp_only=(args_cli.min_short_vp_only if args_cli.min_short_vp_only is not None
+                              else target_samples//32 if quotas is not None else 0),
+            min_short_lp_only=(args_cli.min_short_lp_only if args_cli.min_short_lp_only is not None
+                              else target_samples//32 if quotas is not None else 0),
+            min_short_both_fail=(args_cli.min_short_both_fail if args_cli.min_short_both_fail is not None
+                                else target_samples//64 if quotas is not None else 0),
+            min_late_failure=(args_cli.min_late_failure if args_cli.min_late_failure is not None
+                              else target_samples//8 if quotas is not None else 0),
+            max_samples_per_event=args_cli.max_samples_per_event,
+            min_event_spacing_s=args_cli.min_event_spacing_s,
+            max_no_progress_batches=args_cli.max_no_progress_batches,
+            warmup_s=(args_cli.warmup_seconds if args_cli.warmup_seconds is not None
+                      else 15. if production_temporal else 0.),
+            min_collection_span_s=(args_cli.min_collection_span_seconds if args_cli.min_collection_span_seconds is not None
+                                   else 30. if production_temporal else 0.),
+            label_interval_frames=(args_cli.label_interval_frames if args_cli.label_interval_frames is not None
+                                   else 10 if production_temporal else 1),
+            randomize_label_phase=(args_cli.randomize_label_phase if args_cli.randomize_label_phase is not None
+                                   else production_temporal),
+            max_samples_per_labelled_batch=args_cli.max_samples_per_labelled_batch)
+        supplement_cfg.validate(target_samples)
+        if supplement_cfg.min_collection_span_s >= args_cli.max_candidate_batches*.1:
+            raise ValueError("candidate budget is shorter than the requested real collection span")
 
     collection_cfg = CollectionConfig(
         checkpoint_path=str(checkpoint_path),
@@ -296,19 +435,24 @@ def main() -> None:
         allow_nonproduction_num_envs=args_cli.smoke_test,
         behavior_min_dwell_frames=args_cli.behavior_min_dwell_frames,
         behavior_max_dwell_frames=args_cli.behavior_max_dwell_frames,
-        balanced_scenarios=not args_cli.unbalanced_scenarios,
+        balanced_scenarios=not args_cli.unbalanced_scenarios and not supplement_mode,
         max_candidate_batches=args_cli.max_candidate_batches,
     )
     collection_cfg.validate()
+    progress.announce("load_frozen_policy")
     protected_before = {str(path): sha256(path) for path in PROTECTED_FILES}
     adapter, reference, frozen_metadata = load_frozen_adapter(
         checkpoint_path,
         args_cli.reference_policy or DEFAULT_REFERENCE_POLICY_PATH,
     )
+    if supplement_mode:
+        temporary_manifest = dict(base_index["manifest"])
+        temporary_manifest["metadata"] = {**temporary_manifest["metadata"], "frozen_policy": frozen_metadata}
+        compatible_manifests(base_index["manifest"], temporary_manifest)
     env_cfg, agent_cfg = task_registry.get_cfgs(args_cli.task)
     env_cfg, agent_cfg = copy.deepcopy(env_cfg), copy.deepcopy(agent_cfg)
     env_cfg.scene.num_envs = args_cli.num_envs
-    env_cfg.scene.seed = args_cli.seed
+    env_cfg.scene.seed = terrain_seed
     agent_cfg.seed = args_cli.seed
     env_cfg.device = args_cli.device
     # Match the task's sole AME height-input contract.
@@ -328,11 +472,14 @@ def main() -> None:
         int(env_cfg.renet.alternate_interval_iters) * int(agent_cfg.num_steps_per_env),
     )
     env_class = task_registry.get_task_class(args_cli.task)
-    env_class.seed(args_cli.seed)
-    env = env_class(env_cfg, args_cli.headless)
+    env_class.seed(terrain_seed)
+    progress.announce("create_environment", num_envs=args_cli.num_envs)
+    env = create_collection_environment(env_class, env_cfg, args_cli.headless)
+    print(f"[selector physics] {json.dumps(collection_physics_settings(env))}", flush=True)
     fault_cfg = replace(fault_cfg, lp_resolution_m=float(env.lp_runtime_cfg.resolution))
     fault_cfg.validate()
     adapter = adapter.to(env.device).eval()
+    progress.announce("policy_parity")
 
     parity_observations, parity_extras = env.get_observations()
     if (
@@ -356,8 +503,12 @@ def main() -> None:
         else output.parent / "terrain_distribution.json"
     )
     if args_cli.terrain_histogram is not None:
+        progress.announce("load_terrain_distribution")
+        if supplement_mode and sha256(histogram_path) != base_index["manifest"]["metadata"].get("terrain_distribution_sha256"):
+            raise ValueError("supplements must use the unchanged original terrain histogram")
         distribution = TerrainDistribution.load(histogram_path, env.device)
     else:
+        progress.announce("terrain_prepass")
         distribution = run_terrain_prepass(
             env,
             adapter,
@@ -368,6 +519,8 @@ def main() -> None:
         )
     if args_cli.terrain_prepass_only:
         return
+    if supplement_mode:
+        restrict_terrain_distribution(distribution, allowed_pairs)
 
     terrain_generator = env.cfg.scene.terrain_generator
     if terrain_generator is not None:
@@ -386,13 +539,17 @@ def main() -> None:
         lp_shape=tuple(env.lp_observation_shape),
         vp_shape=(env.depth_history_frames, env.camera_height, env.camera_width),
         device=env.device,
-        seed=args_cli.seed + 2000,
+        seed=args_cli.fault_seed if args_cli.fault_seed is not None else args_cli.seed + 2000,
         cfg=fault_cfg,
     )
     if args_cli.replay_check_only:
+        progress.announce("replay_diagnostics")
         collector = CounterfactualCollector(
             env, adapter, None, faults=faults, selector_cfg=SelectorConfig(),
             collection_cfg=collection_cfg, seed=args_cli.seed,
+            terrain_seed=terrain_seed, behavior_seed=args_cli.behavior_seed,
+            supplement_cfg=supplement_cfg, allowed_groups=allowed_groups,
+            progress=progress,
         )
         diagnostic_path = output.parent / "replay_diagnostics.json"
         report = run_replay_diagnostics(collector, diagnostic_path, {
@@ -443,12 +600,17 @@ def main() -> None:
         "run_info": collection_run_info(args_cli.seed),
         "collection_complete": False,
     }
+    if supplement_mode:
+        metadata["supplement_source"] = {"version": 1, "split": args_cli.supplement_split,
+            "base_manifest_sha256": base_index["sha256"], "base_dataset": str(base_index["root"]),
+            "allowed_terrain_groups": sorted(allowed_groups), "terrain_generation_seed": terrain_seed,
+            "config": asdict(supplement_cfg), "fault_profile": args_cli.fault_profile}
     writer = SelectorDatasetWriter(
         output,
         collection_cfg=collection_cfg,
         selector_cfg=selector_cfg,
         metadata=metadata,
-        fixed_split="test" if args_cli.terrain_mode == "ood" else None,
+        fixed_split=args_cli.supplement_split or ("test" if args_cli.terrain_mode == "ood" else None),
     )
     (output / "collection_run.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -461,27 +623,43 @@ def main() -> None:
         selector_cfg=selector_cfg,
         collection_cfg=collection_cfg,
         seed=args_cli.seed,
+        terrain_seed=terrain_seed, behavior_seed=args_cli.behavior_seed,
+        supplement_cfg=supplement_cfg, allowed_groups=allowed_groups,
+        progress=progress,
     )
     try:
         collector.collect()
     finally:
         collection_failed = sys.exc_info()[0] is not None
+        progress.announce("finalize_collection_audit", collection_failed=collection_failed)
         collector.finalize_audit()
+        progress.announce("save_dataset_manifest")
         manifest = writer.close()
+        progress.announce("dataset_saved", manifest=str(manifest),
+                          collection_complete=writer.metadata.get("collection_complete", False))
         try:
-            analysis = write_collection_analysis(output)
-            print(f"[selector] collection analysis: {analysis}")
+            progress.announce("analyze_saved_dataset", timeout_s=args_cli.analysis_timeout_seconds)
+            # CPU work runs outside the Kit/PhysX thread pools. The parent
+            # heartbeat remains active if loading/reporting is slow.
+            analysis_env = {**os.environ, "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
+                            "OPENBLAS_NUM_THREADS": "1", "PYTHONUNBUFFERED": "1"}
+            subprocess.run([sys.executable, str(CURRENT_DIR / "analyze_selector_collection.py"),
+                            "--dataset", str(output), "--threads", "1"],
+                           check=True, env=analysis_env, timeout=args_cli.analysis_timeout_seconds)
+            print(f"[selector] collection analysis: {output / 'collection_analysis.json'}", flush=True)
         except Exception:
             if not collection_failed:
                 raise
             print("[selector] partial analysis failed; preserving original collection error", file=sys.stderr)
             traceback.print_exc()
+    progress.announce("verify_frozen_sources")
     protected_after = {str(path): sha256(path) for path in PROTECTED_FILES}
     if protected_before != protected_after:
         raise RuntimeError(
             "protected RENet source files changed during selector collection"
         )
-    print(f"[selector] dataset complete: {manifest}")
+    progress.announce("dataset_and_analysis_complete", manifest=str(manifest))
+    print(f"[selector] dataset complete: {manifest}", flush=True)
 
 
 if __name__ == "__main__":
@@ -493,8 +671,16 @@ if __name__ == "__main__":
         traceback.print_exc()
         raise
     finally:
-        # A prepass-only process owns no dataset writer and exits immediately;
-        # full Kit teardown can take minutes on large cloned scenes.
-        simulation_app.close(
-            skip_cleanup=failed or args_cli.terrain_prepass_only or args_cli.replay_check_only or args_cli.smoke_test
-        )
+        try:
+            if progress is not None:
+                progress.announce("shutdown_simulation", failed=failed,
+                                  requested_full_cleanup=args_cli.full_sim_cleanup)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            # All synchronous dataset writes and the CPU analysis process have
+            # finished before successful fast exit. Failures preserve shell status.
+            close_simulation(simulation_app, failed=failed,
+                             full_cleanup=args_cli.full_sim_cleanup)
+        finally:
+            if progress is not None:
+                progress.stop()

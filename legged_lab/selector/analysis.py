@@ -15,6 +15,7 @@ from .collection_audit import (
 )
 from .dataset import SPLIT_NAMES
 from .labels import CLEARANCE_LIMIT_M, FIRST_FAILURE_BITS, FUTURE_METRIC_ORDER, TILT_LIMIT_RAD
+from .lp_map_faults import NOISE_AUDIT_ORDER
 
 
 LABEL_ORDER = ("lp_0.4s", "lp_1.0s", "vp_0.4s", "vp_1.0s")
@@ -24,6 +25,7 @@ FAULT_NAMES = (
     "none", "freeze", "delay", "vp_occlusion", "vp_scale", "vp_bias", "vp_shift",
     "vp_collapse", "lp_random_dropout", "lp_block_dropout", "lp_height_bias",
     "lp_registration", "lp_drift", "lp_collapse",
+    "lp_map_drift", "lp_person", "lp_compound", "vp_compound", "vp_burst",
 )
 PARAMETERS_BY_KIND = {
     1: (), 2: ("delay_s",), 3: ("vp_occlusion_fraction",), 4: ("vp_scale",),
@@ -33,6 +35,10 @@ PARAMETERS_BY_KIND = {
     11: ("lp_translation_x_m", "lp_translation_y_m", "lp_yaw_deg"),
     12: ("lp_drift_x_m_per_s", "lp_drift_y_m_per_s", "lp_drift_yaw_deg_per_s"),
     13: (),
+    14: ("lp_drift_x_m_per_s", "lp_drift_y_m_per_s", "lp_drift_yaw_deg_per_s"),
+    15: (), 16: (),
+    17: ("delay_s", "vp_scale", "vp_bias_m", "vp_shift_x_px", "vp_shift_y_px", "vp_occlusion_fraction"),
+    18: ("vp_occlusion_fraction", "vp_bias_m"),
 }
 
 
@@ -41,10 +47,15 @@ class Counts:
         self.rows = 0
         self.positive = torch.zeros(4, dtype=torch.long)
         self.pairs = torch.zeros(2, 4, dtype=torch.long)
+        self.joint = torch.zeros(9, dtype=torch.long)
+        self.late = 0
 
     def add(self, labels):
         self.rows += len(labels)
         self.positive += labels.long().sum(0)
+        y = labels.long()
+        self.joint += torch.bincount((y[:, 0]+y[:, 1])*3+y[:, 2]+y[:, 3], minlength=9)
+        self.late += int(((y[:, 1] > y[:, 0]) | (y[:, 3] > y[:, 2])).sum())
         for h, (lp, vp) in enumerate(((0, 2), (1, 3))):
             self.pairs[h] += torch.bincount(
                 labels[:, lp].long() + labels[:, vp].long() * 2, minlength=4
@@ -57,6 +68,7 @@ class Counts:
             "positive_rate": [int(v) / self.rows if self.rows else None for v in self.positive],
             "pair_counts": self.pairs.tolist(),
             "pair_rates": [[int(v) / self.rows if self.rows else None for v in row] for row in self.pairs],
+            "joint_counts": self.joint.tolist(), "late_failure_rows": self.late,
         }
 
 
@@ -97,6 +109,7 @@ def analyze_selector_dataset(root: str | Path) -> dict:
     episodes, plans = {}, {}
     event_rows = 0
     parameter_summary = {}
+    noise_summary = {}
     audit_contract = manifest.get("metadata", {}).get("collection_audit_contract")
     has_new_contract = audit_contract is not None
     if has_new_contract and (
@@ -129,6 +142,22 @@ def analyze_selector_dataset(root: str | Path) -> dict:
                     if len(data[field]) != n:
                         raise ValueError(f"misaligned {field} in {path}")
                     fields[field] += n
+            if "noise_metadata" in data:
+                noise = data["noise_metadata"]
+                contract = manifest.get("metadata", {}).get("noise_audit_contract", {})
+                if contract.get("version") != 1 or contract.get("order") != list(NOISE_AUDIT_ORDER):
+                    raise ValueError(f"unknown noise audit order in {path}")
+                if noise.shape != (n, len(NOISE_AUDIT_ORDER)) or not torch.isfinite(noise).all():
+                    raise ValueError(f"invalid map noise metadata in {path}")
+                fields["noise_metadata"] += n
+                for column, name in enumerate(NOISE_AUDIT_ORDER):
+                    _parameter_update(noise_summary, name, noise[:, column])
+                advanced = data["fault_metadata"][:, 6].bool() & (data["fault_metadata"][:, 0] >= 14)
+                people = advanced & ((data["fault_metadata"][:, 0] == 15) | (data["fault_metadata"][:, 0] == 16))
+                _group_update(groups, "person_phase", noise[:, 7].long(), labels, people)
+                _group_update(groups, "lp_ghost_present", (noise[:, 8] > 0).long(), labels, advanced)
+                _group_update(groups, "lp_support_bin", torch.bucketize(noise[:, 11].contiguous(), torch.tensor([.05,.5,.95]), right=True), labels, advanced)
+                _group_update(groups, "lp_saturation_bin", torch.bucketize(noise[:, 12].contiguous(), torch.tensor([.01,.1,.5]), right=True), labels, advanced)
             if any(f in data for f in AUDIT_FIELDS) and not has_new_contract:
                 raise ValueError("new audit tensors require collection_audit_contract metadata")
             if ("first_failure_flags" in data) != ("first_failure_cause_stable" in data):
@@ -242,11 +271,14 @@ def analyze_selector_dataset(root: str | Path) -> dict:
             accepted_plans[category] += 1
     for value in parameter_summary.values():
         value["mean"] = value.pop("sum") / value["rows"]
+    for value in noise_summary.values():
+        value["mean"] = value.pop("sum") / value["rows"]
     return {
         "report_version": 2,
         "collection_complete": manifest.get("metadata", {}).get("collection_complete", False),
         "label_order": list(LABEL_ORDER), "branch_order": ["lp", "vp"],
         "horizon_order": ["0.4s", "1.0s"], "pair_order": list(PAIR_NAMES),
+        "joint_order": "LP safe/late/early x VP safe/late/early, row-major",
         "overall": overall.result(), "by_split": {s: c.result() for s, c in splits.items()},
         "group_key_legend": {
             "active_scenario": list(SCENARIO_NAMES), "severity": list(SEVERITY_NAMES),
@@ -257,9 +289,12 @@ def analyze_selector_dataset(root: str | Path) -> dict:
             "dwell_bin": ["[0,.4)", "[.4,1)", "[1,2)", "[2,inf)"],
             "transition_active": {"0": "no_blend", "1": "blending"},
             "initial_safety": {"0": "within_thresholds", "1": "already_violated"},
+            "person_phase": ["approach", "near", "depart", "residual"],
+            "lp_support_bin": ["<.05", ".05-.5", ".5-.95", ">=.95"],
+            "lp_saturation_bin": ["<.01", ".01-.1", ".1-.5", ">=.5"],
         },
         "by_group": {d: {k: c.result() for k, c in sorted(g.items())} for d, g in sorted(groups.items())},
-        "field_rows": {f: fields[f] for f in ("future_metrics", "fault_metadata", "execution_metadata", *AUDIT_FIELDS)},
+        "field_rows": {f: fields[f] for f in ("future_metrics", "fault_metadata", "execution_metadata", *AUDIT_FIELDS, "noise_metadata")},
         "first_failure_time": {
             "available_rows": time_rows, "control_dt_s": .02,
             "no_failure_within_1s": times[:, 0].tolist(),
@@ -288,6 +323,9 @@ def analyze_selector_dataset(root: str | Path) -> dict:
             "note": "plans include normal schedules; failure counts denote at least one failed counterfactual label, not real falls",
         },
         "fault_parameter_summary": parameter_summary,
+        "noise_parameter_summary": noise_summary,
+        "supplement_source": manifest.get("metadata", {}).get("supplement_source"),
+        "supplement_coverage": manifest.get("metadata", {}).get("supplement_coverage"),
         "collection_audit": manifest.get("metadata", {}).get("collection_audit"),
         "replay_filter_contract": manifest.get("metadata", {}).get("replay_filter_contract"),
         "per_candidate_replay_filter": manifest.get("metadata", {}).get("per_candidate_replay_filter"),
@@ -295,6 +333,9 @@ def analyze_selector_dataset(root: str | Path) -> dict:
         "snapshot_replay_validation": manifest.get("metadata", {}).get("snapshot_replay_validation"),
         "run_info": manifest.get("metadata", {}).get("run_info"),
         "fault_config": manifest.get("metadata", {}).get("fault_config"),
+        "coverage": manifest.get("metadata", {}).get("coverage"),
+        "safety_label_filter": manifest.get("metadata", {}).get("safety_label_filter"),
+        "sampling_progress": manifest.get("metadata", {}).get("sampling_progress"),
         "notes": [
             "10/30/60 controls scheduled-plan draws; accepted frame fractions also depend on durations and filtering.",
             "balanced_scenarios balances active fault categories, not safe/failure outcomes.",

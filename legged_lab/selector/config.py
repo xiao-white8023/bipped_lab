@@ -29,7 +29,7 @@ class FaultConfig:
     min_recovery_frames: int = 5
     max_recovery_frames: int = 30
     max_dual_stagger_frames: int = 10
-    vp_occlusion_fraction: tuple[float, float] = (0.10, 0.70)
+    vp_occlusion_fraction: tuple[float, float] = (0.1, 0.70)
     vp_scale_range: tuple[float, float] = (0.85, 1.15)
     vp_bias_m_range: tuple[float, float] = (-0.20, 0.20)
     vp_max_shift_pixels: int = 3
@@ -46,6 +46,23 @@ class FaultConfig:
     lp_height_clip: tuple[float, float] = (-1.0, 1.0)
     scenario_probabilities: tuple[float, float, float, float] = (0.30, 0.25, 0.25, 0.20)
     severity_probabilities: tuple[float, float, float] = (0.10, 0.30, 0.60)
+    # New families are opt-in. Existing V3 collection retains its original pool.
+    extended_faults: bool = False
+    profile: str = "baseline"
+    lp_kind_weights: tuple[float, ...] = ()
+    vp_kind_weights: tuple[float, ...] = ()
+    burst_on_frames: tuple[int, int] = (1, 5)
+    burst_off_frames: tuple[int, int] = (1, 4)
+    lp_map_translation_limit_m: float = 0.45
+    lp_map_yaw_limit_deg: float = 12.0
+    lp_map_height_limit_m: float = 0.25
+    lp_map_random_walk_m: float = 0.012
+    lp_map_correction_frames: tuple[int, int] = (15, 45)
+    lp_person_radius_m: tuple[float, float] = (0.14, 0.32)
+    lp_person_height_above_ground_m: tuple[float, float] = (0.25, 1.0)
+    lp_person_main_fraction: float = 0.65
+    lp_map_confirm_frames: int = 3
+    lp_map_retention_radius_m: float = 2.5
 
     def validate(self) -> None:
         for name in ("update_period_s", "lp_resolution_m", "vp_depth_max_m"):
@@ -58,6 +75,9 @@ class FaultConfig:
             raise ValueError("max_delay_frames must be in [1, 5]")
         if not 1 <= self.min_duration_frames <= self.max_duration_frames:
             raise ValueError("fault duration range is invalid")
+        if self.extended_faults and self.max_duration_frames < 15:
+            raise ValueError("extended faults need a parent event of at least 15 frames; "
+                             "use burst_on/off_frames for subsecond interruptions")
         if not 1 <= self.min_recovery_frames <= self.max_recovery_frames:
             raise ValueError("fault recovery range is invalid")
         if self.max_start_delay_frames < 0:
@@ -97,6 +117,28 @@ class FaultConfig:
         if (not math.isfinite(self.lp_invalid_height) or
                 self.lp_height_clip[0] <= self.lp_invalid_height <= self.lp_height_clip[1]):
             raise ValueError("lp_invalid_height must be finite and outside lp_height_clip")
+        for name, count in (("lp_kind_weights", 11), ("vp_kind_weights", 9)):
+            weights = getattr(self, name)
+            if weights and (not self.extended_faults or len(weights) != count
+                            or any(not math.isfinite(x) or x < 0 for x in weights)
+                            or abs(sum(weights) - 1.0) > 1e-6):
+                raise ValueError(f"{name} requires {count} normalized extended-family weights")
+        for name in ("burst_on_frames", "burst_off_frames", "lp_map_correction_frames"):
+            lo, hi = getattr(self, name)
+            if type(lo) is not int or type(hi) is not int or not 1 <= lo <= hi:
+                raise ValueError(f"{name} must contain positive integer frame bounds")
+        for name in ("lp_person_radius_m", "lp_person_height_above_ground_m"):
+            lo, hi = getattr(self, name)
+            if not 0 < lo <= hi or not all(math.isfinite(x) for x in (lo, hi)):
+                raise ValueError(f"{name} must contain positive finite bounds")
+        for name in ("lp_map_translation_limit_m", "lp_map_yaw_limit_deg",
+                     "lp_map_height_limit_m", "lp_map_retention_radius_m"):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive and finite")
+        if not math.isfinite(self.lp_map_random_walk_m) or self.lp_map_random_walk_m < 0:
+            raise ValueError("lp_map_random_walk_m must be nonnegative and finite")
+        if not 0 < self.lp_person_main_fraction < 1 or self.lp_map_confirm_frames < 1:
+            raise ValueError("person main fraction and map confirmation count are invalid")
 
 
 @dataclass(frozen=True)

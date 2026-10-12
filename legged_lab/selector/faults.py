@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 from .config import FaultConfig
 from .randomness import PerEnvironmentRNG
+from .lp_map_faults import ElevationMapFaults, NOISE_AUDIT_ORDER
 
 
 class FaultKind(IntEnum):
@@ -25,6 +26,11 @@ class FaultKind(IntEnum):
     LP_REGISTRATION = 11
     LP_DRIFT = 12
     LP_COLLAPSE = 13
+    LP_MAP_DRIFT = 14
+    LP_PERSON = 15
+    LP_COMPOUND = 16
+    VP_COMPOUND = 17
+    VP_BURST = 18
 
 
 VP_FAULTS = (
@@ -46,6 +52,8 @@ LP_FAULTS = (
     FaultKind.LP_DRIFT,
     FaultKind.LP_COLLAPSE,
 )
+EXTENDED_LP_FAULTS = LP_FAULTS + (FaultKind.LP_MAP_DRIFT, FaultKind.LP_PERSON, FaultKind.LP_COMPOUND)
+EXTENDED_VP_FAULTS = VP_FAULTS + (FaultKind.VP_COMPOUND, FaultKind.VP_BURST)
 
 
 @dataclass
@@ -53,6 +61,7 @@ class FaultSnapshot:
     tensors: dict[str, torch.Tensor]
     cursor: torch.Tensor
     generator_state: torch.Tensor
+    map_state: dict[str, torch.Tensor] | None = None
 
 
 @dataclass
@@ -107,6 +116,7 @@ class SelectorFaultManager:
             "vp_shift_x",
             "vp_shift_y",
             "schedule_count",
+            "vp_burst_on_frames", "vp_burst_off_frames",
         )
         scalar = (
             "vp_scale",
@@ -116,6 +126,7 @@ class SelectorFaultManager:
             "lp_bias",
             "lp_yaw",
             "lp_drift_yaw",
+            "lp_height_velocity",
         )
         for name in integer:
             setattr(self, name, torch.zeros(n, dtype=torch.long, device=self.device))
@@ -152,6 +163,9 @@ class SelectorFaultManager:
         self.vp_frozen_packet = torch.zeros_like(self.lp_frozen_time)
         self.lp_freeze_initialized = torch.zeros_like(self.buffer_initialized)
         self.vp_freeze_initialized = torch.zeros_like(self.buffer_initialized)
+        self.vp_observed_effect = torch.zeros_like(self.buffer_initialized)
+        self.map_faults = (ElevationMapFaults(n, lp_shape, self.device, self.cfg, self.generator)
+                           if self.cfg.extended_faults else None)
         self.cursor = torch.full((n,), -1, device=self.device, dtype=torch.long)
         self._SNAPSHOT_TENSORS = tuple(
             name
@@ -193,13 +207,17 @@ class SelectorFaultManager:
         )
         self.lp_kind[ids] = 0
         self.vp_kind[ids] = 0
-        for flags, kinds, target in (
-            ((scenario == 2) | (scenario == 3), LP_FAULTS, self.lp_kind),
-            ((scenario == 1) | (scenario == 3), VP_FAULTS, self.vp_kind),
+        for flags, kinds, target, weights in (
+            ((scenario == 2) | (scenario == 3), EXTENDED_LP_FAULTS if self.cfg.extended_faults else LP_FAULTS,
+             self.lp_kind, self.cfg.lp_kind_weights),
+            ((scenario == 1) | (scenario == 3), EXTENDED_VP_FAULTS if self.cfg.extended_faults else VP_FAULTS,
+             self.vp_kind, self.cfg.vp_kind_weights),
         ):
             chosen = ids[flags]
             options = torch.tensor([int(k) for k in kinds], device=self.device)
-            target[chosen] = options[self.generator.randint(0, len(kinds), chosen)]
+            choices = (self.generator.categorical(weights, chosen) if weights
+                       else self.generator.randint(0, len(kinds), chosen))
+            target[chosen] = options[choices]
         level = self.severity[ids]
         lo = level.float() * 0.35
         hi = torch.where(level == 2, 1.0, lo + 0.35)
@@ -267,6 +285,13 @@ class SelectorFaultManager:
         low, high = self.cfg.lp_drift_deg_per_s
         yaw_speed = low + self._severity_strength(ids) * (high - low)
         self.lp_drift_yaw[ids] = yaw_speed * torch.where(self.generator.uniform(ids) < 0.5, -1.0, 1.0)
+        if self.map_faults is not None:
+            self.map_faults.schedule(ids, strength)
+            self.lp_height_velocity[ids] = self._signed_range(ids, (-.05, .05))
+            self.vp_observed_effect[ids] = False
+            for name, bounds in (("vp_burst_on_frames", self.cfg.burst_on_frames),
+                                 ("vp_burst_off_frames", self.cfg.burst_off_frames)):
+                getattr(self, name)[ids] = self.generator.randint(bounds[0], bounds[1]+1, ids)
         self.lp_freeze_initialized[ids] = False
         self.vp_freeze_initialized[ids] = False
         self.schedule_count[ids] += 1
@@ -309,6 +334,7 @@ class SelectorFaultManager:
             {n: getattr(self, n).clone() for n in self._SNAPSHOT_TENSORS},
             self.cursor.clone(),
             self.generator.get_state(),
+            self.map_faults.snapshot() if self.map_faults is not None else None,
         )
 
     def restore(self, snapshot):
@@ -316,6 +342,10 @@ class SelectorFaultManager:
             getattr(self, name).copy_(value)
         self.cursor.copy_(snapshot.cursor)
         self.generator.set_state(snapshot.generator_state)
+        if self.map_faults is not None:
+            if snapshot.map_state is None:
+                raise ValueError("extended map state is missing from fault snapshot")
+            self.map_faults.restore(snapshot.map_state)
 
     def unobservable_onset_within(self, horizon_frames):
         lp_pending = (self.lp_start_frame >= self.step_count) & (
@@ -329,17 +359,33 @@ class SelectorFaultManager:
         reschedule = (self.next_schedule_frame >= self.step_count) & (
             self.next_schedule_frame < self.step_count + horizon_frames
         )
+        unseen = torch.zeros_like(reschedule)
+        if self.map_faults is not None:
+            # Persisted ghosts remain part of the same parent event. Internal
+            # bursts/corrections are continuations, not independently drawn onsets.
+            person = (self.lp_kind == int(FaultKind.LP_PERSON)) | (self.lp_kind == int(FaultKind.LP_COMPOUND))
+            reschedule &= ~(person & self.map_faults.residual())
+            la, va = self._active(self.step_count-1)
+            advanced_lp = self.lp_kind >= int(FaultKind.LP_MAP_DRIFT)
+            advanced_vp = self.vp_kind >= int(FaultKind.VP_COMPOUND)
+            unseen = (la & advanced_lp & ~self.map_faults.state["observed_effect"])
+            unseen |= va & advanced_vp & ~self.vp_observed_effect
         return (
             reschedule
+            | unseen
             | (lp_pending & (self.lp_kind != 0))
             | (vp_pending & (self.vp_kind != 0))
         )
 
     def _active(self, observed):
+        lp_active = (observed >= self.lp_start_frame)
+        lp_active &= (observed < self.lp_start_frame + self.lp_duration_frames)
+        lp_active &= self.lp_kind != 0
+        if self.map_faults is not None:
+            person = (self.lp_kind == int(FaultKind.LP_PERSON)) | (self.lp_kind == int(FaultKind.LP_COMPOUND))
+            lp_active |= person & self.map_faults.residual() & (observed >= self.lp_start_frame)
         return (
-            (observed >= self.lp_start_frame)
-            & (observed < self.lp_start_frame + self.lp_duration_frames)
-            & (self.lp_kind != 0),
+            lp_active,
             (observed >= self.vp_start_frame)
             & (observed < self.vp_start_frame + self.vp_duration_frames)
             & (self.vp_kind != 0),
@@ -351,7 +397,7 @@ class SelectorFaultManager:
         phase = torch.where(
             observed < self.start_frame,
             -1,
-            torch.where(observed < self.start_frame + self.duration_frames, 0, 1),
+            torch.where((observed < self.start_frame + self.duration_frames) | la | va, 0, 1),
         )
         remaining = (
             self.start_frame + self.duration_frames - self.step_count
@@ -390,6 +436,18 @@ class SelectorFaultManager:
                 self.lp_drift_yaw,
             ), -1,
         )
+
+    def audit_map_noise(self):
+        if self.map_faults is None:
+            return torch.zeros(self.num_envs, len(NOISE_AUDIT_ORDER), device=self.device)
+        observed = (self.step_count-1).clamp_min(0)
+        elapsed = (observed-self.vp_start_frame).clamp_min(0)
+        on = elapsed % (self.vp_burst_on_frames+self.vp_burst_off_frames).clamp_min(1) < self.vp_burst_on_frames
+        _, active = self._active(observed)
+        on &= active & (self.vp_kind >= int(FaultKind.VP_COMPOUND))
+        return torch.cat((self.map_faults.audit(observed), torch.stack((
+            self.vp_burst_on_frames.float(), self.vp_burst_off_frames.float(),
+            on.float(), self.vp_observed_effect.float()), -1)), -1)
 
     def _delayed(self, buffer, delays):
         ids = torch.arange(self.num_envs, device=self.device)
@@ -486,6 +544,7 @@ class SelectorFaultManager:
         lp_packet_timestamp=None,
         vp_packet_timestamp=None,
         env_ids=None,
+        world_pose=None,
     ):
         for data, shape in ((lp, self.lp_shape), (vp, self.vp_shape)):
             if data.shape != (self.num_envs, *shape):
@@ -537,6 +596,10 @@ class SelectorFaultManager:
             .clone()
         )
         due = ids[self.step_count[ids] >= self.next_schedule_frame[ids]]
+        if self.map_faults is not None:
+            # Never silently discard a residual map when sampling the next plan.
+            residual = self.map_faults.residual()
+            due = due[~residual[due]]
         self._schedule(due)
         capacity = self.cfg.max_delay_frames + 1
         self.cursor[ids] = (self.cursor[ids] + 1) % capacity
@@ -661,9 +724,57 @@ class SelectorFaultManager:
         collapsed = la & (self.lp_kind == int(FaultKind.LP_COLLAPSE))
         out_lp[collapsed] = self.cfg.lp_invalid_height
         lv[collapsed] = 0.0
+        if self.map_faults is not None:
+            drift = la & (self.lp_kind == int(FaultKind.LP_MAP_DRIFT))
+            person = la & (self.lp_kind == int(FaultKind.LP_PERSON))
+            compound = la & (self.lp_kind == int(FaultKind.LP_COMPOUND))
+            advanced = (drift | person | compound).nonzero().flatten()
+            before_lp = out_lp[advanced].clone()
+            before_valid = lv[advanced].clone()
+            residual_before = self.map_faults.residual()
+            out_lp, lv = self.map_faults.apply(
+                out_lp, lv, advanced, pose=world_pose,
+                elapsed=(self.step_count-self.lp_start_frame).clamp_min(0),
+                duration=self.lp_duration_frames, frame=self.step_count,
+                drift_ids_mask=drift, person_ids_mask=person, compound_ids_mask=compound,
+                drift_velocity=self.lp_drift_xy, yaw_velocity=self.lp_drift_yaw,
+                height_velocity=self.lp_height_velocity, warp=self._transform_lp,
+            )
+            changed = ((out_lp[advanced]-before_lp).abs() > 1e-5).flatten(1).any(-1)
+            changed |= (lv[advanced] != before_valid).flatten(1).any(-1)
+            self.map_faults.state["observed_effect"][advanced] |= changed
+            cleared = selected & residual_before & ~self.map_faults.residual()
+            overdue = cleared & (self.step_count >= self.lp_start_frame+self.lp_duration_frames)
+            self.next_schedule_frame[overdue] = self.step_count[overdue] + self.cfg.min_recovery_frames
+            self._apply_extended_vp(out_vp, vv, vp_time, vp_packet, va)
         lv = lv.clamp(0, 1)
         vv = vv.clamp(0, 1)
         self.step_count[ids] += 1
         return FaultBatch(
             out_lp, out_vp, lp_time, vp_time, la, va, lv, vv, lp_packet, vp_packet
         )
+
+    def _apply_extended_vp(self, data, valid, timestamp, packet, active):
+        compound = active & (self.vp_kind == int(FaultKind.VP_COMPOUND))
+        burst = active & (self.vp_kind == int(FaultKind.VP_BURST))
+        elapsed = (self.step_count-self.vp_start_frame).clamp_min(0)
+        cycle = (self.vp_burst_on_frames+self.vp_burst_off_frames).clamp_min(1)
+        on = (elapsed % cycle) < self.vp_burst_on_frames
+        chosen = (compound | burst).nonzero().flatten()
+        before = data[chosen].clone()
+        if compound.any():
+            delayed = compound & on
+            data[delayed] = self._delayed(self.vp_buffer, self.vp_delay)[delayed]
+            valid[delayed] = self._delayed(self.vp_valid_buffer, self.vp_delay)[delayed]
+            timestamp[delayed] = self._delayed(self.vp_time_buffer, self.vp_delay)[delayed]
+            packet[delayed] = self._delayed(self.vp_packet_buffer, self.vp_delay)[delayed]
+            data[compound] = (data[compound]*self.vp_scale[compound, None, None, None]
+                              + self.vp_bias[compound, None, None, None]).clamp(0,1)
+            data[compound] = self._integer_shift(data, self.vp_shift_x, self.vp_shift_y, 1.)[compound]
+            valid[compound] = self._integer_shift(valid, self.vp_shift_x, self.vp_shift_y, 0.)[compound]
+        mask = self.vp_occlusion_mask[:, None].expand_as(data) & ((compound | burst) & on)[:, None, None, None]
+        data[mask], valid[mask] = 1., 0.
+        # Slight persistent bias in burst gaps makes this a continuing malfunction.
+        gap = burst & ~on
+        data[gap] = (data[gap] + .25*self.vp_bias[gap, None, None, None]).clamp(0,1)
+        self.vp_observed_effect[chosen] |= ((data[chosen]-before).abs() > 1e-5).flatten(1).any(-1)

@@ -4,6 +4,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import math
+import hashlib
+import time
 from typing import Any
 import torch
 from .config import CollectionConfig, SelectorConfig, RuntimeConfig
@@ -11,6 +13,8 @@ from .dataset import SelectorBatch, SelectorDatasetWriter
 from .collection_audit import CollectionAudit, collection_audit_contract
 from .faults import FaultSnapshot, SelectorFaultManager
 from .features import FeatureHistory, SensorHealthTracker, build_selector_frame
+from .lp_map_faults import NOISE_AUDIT_ORDER
+from .supplement import OutcomeQuotaSampler
 from .feature_contract import selector_feature_contract
 from .labels import (
     RolloutOutcome,
@@ -18,9 +22,11 @@ from .labels import (
     capture_safety_step,
     safety_label_contract,
     step_with_safety_capture,
+    TILT_LIMIT_RAD, CLEARANCE_LIMIT_M,
 )
 from .policy_adapter import FrozenRENetAdapter
-from .snapshot import RENetSnapshot, RENetSnapshotManager
+from .snapshot import RENetSnapshot, RENetSnapshotManager, snapshot_restore_contract
+from .collection_physics import collection_physics_settings
 from .runtime import ActionBlender, SelectorStateMachine
 from .randomness import (
     PerEnvironmentRNG,
@@ -367,6 +373,7 @@ class FaultedObservationStream:
         advance_control_step=True,
         lp_valid=None,
         vp_valid=None,
+        world_pose=None,
     ):
         if advance_control_step:
             self.control_step += 1
@@ -396,6 +403,7 @@ class FaultedObservationStream:
                 env_ids=rows.nonzero().flatten(),
                 lp_packet_timestamp=torch.full_like(self.last_lp_timestamp, float(now)),
                 vp_packet_timestamp=vp_timestamp,
+                world_pose=world_pose,
             )
             for name, value in (
                 ("last_lp", faulted.lp),
@@ -439,6 +447,11 @@ class CounterfactualCollector:
         selector_cfg=None,
         collection_cfg=None,
         seed=42,
+        terrain_seed=None,
+        behavior_seed=None,
+        supplement_cfg=None,
+        allowed_groups=None,
+        progress=None,
     ):
         self.env, self.adapter, self.writer = env, adapter, writer
         self.selector_cfg = selector_cfg or SelectorConfig()
@@ -452,16 +465,32 @@ class CounterfactualCollector:
             raise ValueError("safety labels require a ground-truth height scanner")
         self.device = torch.device(env.device)
         self.seed = int(seed)
+        self.terrain_seed = self.seed if terrain_seed is None else int(terrain_seed)
+        self.supplement_cfg = supplement_cfg
+        self.progress = progress
+        self.sampling_progress = {"real_candidate_ticks": 0, "labelled_batches": 0,
+                                  "paced_or_interval_skips": 0, "no_observable_rows": 0}
+        self.allowed_groups = set(allowed_groups or ())
+        self.quota_sampler = None
+        self.candidate_prefix = None
+        if supplement_cfg is not None:
+            supplement_cfg.validate(self.collection_cfg.target_samples)
+            if not self.allowed_groups:
+                raise ValueError("supplement collection requires the original split's terrain allowlist")
+            self.quota_sampler = OutcomeQuotaSampler(supplement_cfg, self.collection_cfg.target_samples, seed+5000)
+            if writer is not None:
+                run_id = writer.metadata["run_info"]["collection_run_id"]
+                self.candidate_prefix = int.from_bytes(hashlib.sha256(run_id.encode()).digest()[:4], "big") % (2**31)
         self.snapshot_manager = RENetSnapshotManager(env)
         self.stream = FaultedObservationStream(adapter, faults)
         self.feature_history = FeatureHistory(
             env.num_envs, self.selector_cfg, self.device
         )
         self.environment_rng = EnvironmentRandomness(
-            env.num_envs, seed + 3000, self.device
+            env.num_envs, (seed if behavior_seed is None else behavior_seed) + 3000, self.device
         )
         bind_environment_randomness(env, self.environment_rng)
-        self.behavior_rng = PerEnvironmentRNG(env.num_envs, seed + 4000, self.device)
+        self.behavior_rng = PerEnvironmentRNG(env.num_envs, (seed if behavior_seed is None else behavior_seed) + 4000, self.device)
         ids = torch.arange(env.num_envs, device=self.device)
         self.behavior_mask = self.behavior_rng.randint(0, 2, ids).float()
         self.last_behavior_switch = torch.full(
@@ -499,6 +528,25 @@ class CounterfactualCollector:
             )
         )
 
+    def _progress(self, stage, **fields):
+        if getattr(self, "progress", None) is not None:
+            self.progress.set_stage(stage, candidate_tick=self.batch_index,
+                                    sim_time_s=self._time(), **fields)
+
+    def _warmup(self):
+        cfg = getattr(self, "supplement_cfg", None)
+        if cfg is None or not cfg.warmup_s:
+            return
+        steps = math.ceil(cfg.warmup_s / (self.collection_cfg.candidate_stride_steps*.02))
+        start = self._time()
+        print(f"[SelectorCollector] real warmup started: {cfg.warmup_s:.1f}s; no labels are collected", flush=True)
+        for step in range(steps):
+            if step % 10 == 0:
+                self._progress("real_warmup", completed_s=self._time()-start,
+                               requested_s=cfg.warmup_s)
+            self._advance_behavior()
+        print(f"[SelectorCollector] real warmup complete: {self._time()-start:.2f}s", flush=True)
+
     def _sensor_timestamps(self):
         now = self._time()
         lp_sensor = getattr(self.env, "lp_sensor", None)
@@ -535,6 +583,19 @@ class CounterfactualCollector:
             vp_valid=values.get("vp_valid_support"),
         )
 
+    def _world_pose(self):
+        if getattr(self.stream.faults, "map_faults", None) is None:
+            return None
+        data = self.env.robot.data
+        ids = getattr(self.env, "torso_link_ids", None)
+        if ids is None or len(ids) != 1:
+            raise ValueError("world map faults require exactly one torso_link body")
+        position = data.body_pos_w[:, ids[0]]
+        quat = data.body_quat_w[:, ids[0]]  # Isaac uses w,x,y,z.
+        yaw = torch.atan2(2*(quat[:, 0]*quat[:, 3]+quat[:, 1]*quat[:, 2]),
+                          1-2*(quat[:, 2].square()+quat[:, 3].square()))
+        return torch.cat((position, yaw[:, None]), -1)
+
     def initialize(self):
         raw, _ = self.env.get_observations()
         lp, vp = self._sensor_timestamps()
@@ -545,6 +606,7 @@ class CounterfactualCollector:
             now=self._time(),
             force_update=True,
             advance_control_step=False,
+            world_pose=self._world_pose(),
             **self._quality(),
         )
         self.observations = self._set_mask(self.observations, self.behavior_mask)
@@ -673,7 +735,8 @@ class CounterfactualCollector:
             self.episode_serial[reset_ids] += 1
         lp, vp = self._sensor_timestamps()
         self.observations, tick = self.stream.process(
-            raw, lp_timestamp=lp, vp_timestamp=vp, now=self._time(), **self._quality()
+            raw, lp_timestamp=lp, vp_timestamp=vp, now=self._time(),
+            world_pose=self._world_pose(), **self._quality()
         )
         self.observations = self._set_mask(self.observations, target)
         if tick:
@@ -726,9 +789,12 @@ class CounterfactualCollector:
     def _repeated_branch_rollout(
         self, snapshot, mask_value, *, preserve_second_as_behavior=False
     ):
+        name = "LP" if mask_value else "VP"
         self._restore(snapshot)
+        self._progress(f"{name}_replay_1_of_2")
         first, _ = self._rollout(mask_value, record_trajectory=False)
         self._restore(snapshot)
+        self._progress(f"{name}_replay_2_of_2")
         second, _ = self._rollout(mask_value, record_trajectory=False)
         second.first_failure_cause_stable = (
             first.first_failure_flags == second.first_failure_flags
@@ -856,6 +922,9 @@ class CounterfactualCollector:
         audit = getattr(self, "_collection_audit", None)
         if audit is not None:
             self.writer.metadata["collection_audit"] = audit.summary()
+        if getattr(self, "quota_sampler", None) is not None and self.writer is not None:
+            self.writer.metadata["supplement_coverage"] = self.quota_sampler.summary()
+            self.writer.metadata["sampling_progress"] = dict(self.sampling_progress)
 
     @torch.no_grad()
     def validate_replay(
@@ -988,6 +1057,8 @@ class CounterfactualCollector:
             "replay_filter_contract": replay_filter_contract(),
             "branch": "LP" if branch else "VP",
             "comparison": "restored_vs_restored",
+            "snapshot_restore_contract": snapshot_restore_contract(),
+            "physics_settings": collection_physics_settings(self.env),
             "first_initial_restore_max_abs_error": first_initial_error,
             "second_initial_restore_max_abs_error": second_initial_error,
             "first_control_step_errors": first_step_errors,
@@ -1076,19 +1147,42 @@ class CounterfactualCollector:
 
     @torch.no_grad()
     def collect(self):
+        if not hasattr(self, "sampling_progress"):
+            self.sampling_progress = {"real_candidate_ticks": 0, "labelled_batches": 0,
+                                      "paced_or_interval_skips": 0, "no_observable_rows": 0}
+        self._progress("initialize_observations")
         if self.observations is None:
             self.initialize()
+        # Keep the global startup probe at the original initial state. Faulted
+        # warmup visits failure boundaries and auto-resets, which can change a
+        # few discrete labels and must not redefine this startup check. Each
+        # actual candidate below still repeats BOTH branches and rejects any
+        # inconsistent or invalid label after warmup.
+        self._progress("validate_replay")
         replay = self.validate_replay()
         metadata = self.writer.metadata
         metadata["collection_complete"] = False
         metadata["replay_filter_contract"] = replay_filter_contract()
         metadata["snapshot_replay_validation"] = replay
+        metadata["snapshot_replay_validation_scope"] = {
+            "phase": "before_real_warmup", "simulation_time_s": self._time(),
+        }
         if not replay["passed"]:
-            raise RuntimeError(f"paired rollout replay check failed: {replay}")
+            raise RuntimeError("paired rollout replay check failed: "
+                f"checks={replay.get('failed_checks')}, "
+                f"label_mismatches={replay.get('label_mismatch_count')}, "
+                f"label_agreement={replay.get('label_agreement')}; "
+                "full diagnostics are saved in manifest metadata.snapshot_replay_validation")
         metadata["safety_label_contract"] = safety_label_contract()
         metadata["selector_feature_contract"] = selector_feature_contract()
+        self._warmup()
         metadata["collection_config"] = asdict(self.collection_cfg)
         metadata["collection_audit_contract"] = collection_audit_contract()
+        if getattr(self.stream.faults.cfg, "extended_faults", False):
+            metadata["noise_audit_contract"] = {"version": 1, "order": list(NOISE_AUDIT_ORDER),
+                "scope": "audit only, excluded from selector features",
+                "person_phase_order": ["approach", "near", "depart", "residual"],
+                "fault_event": "parent event includes bursts, gaps, corrections and residual cells"}
         self._collection_audit = CollectionAudit(self.env.num_envs, self.device)
         self._collection_audit.observe_behavior_plans(self.episode_serial, self.stream.faults)
         filters = {
@@ -1096,6 +1190,8 @@ class CounterfactualCollector:
             "invalid_lp_outcome": 0,
             "invalid_vp_outcome": 0,
             "unobservable_future_fault": 0,
+            "outside_source_partition": 0,
+            "initially_unsafe_or_invalid": 0,
         }
         metadata["safety_label_filter"] = filters
         replay_filter = {"checked": 0, "rejected": 0, "agreement": 1.0}
@@ -1108,7 +1204,7 @@ class CounterfactualCollector:
         rejected = [0] * 4
         metadata["coverage"] = {
             "scenario_order": ["normal", "vp_only", "lp_only", "dual"],
-            "quotas": quotas if self.collection_cfg.balanced_scenarios else None,
+            "quotas": quotas if self.collection_cfg.balanced_scenarios and getattr(self, "quota_sampler", None) is None else None,
             "seen": seen,
             "accepted": accepted,
             "replay_rejected": rejected,
@@ -1119,14 +1215,42 @@ class CounterfactualCollector:
             "phase_counts": {"before": 0, "active": 0, "recovered": 0},
         }
         collected = 0
+        labelled_batches = 0
+        last_progress_batch = 0
+        last_log_time = time.monotonic()
+        sampler = getattr(self, "quota_sampler", None)
+        if sampler is not None:
+            sampler.start(self._time())
+        self._progress("collect_candidates", accepted=0, target=self.collection_cfg.target_samples)
         while collected < self.collection_cfg.target_samples:
             if self.batch_index >= self.collection_cfg.max_candidate_batches:
+                metadata["collection_stop_reason"] = "candidate_budget_exhausted"
                 self.finalize_audit()
                 self.writer.close()
                 raise RuntimeError(
                     f"candidate limit reached ({collected} accepted); inspect manifest coverage and use a new output directory"
                 )
+            supplement = getattr(self, "supplement_cfg", None)
+            if supplement is not None and labelled_batches-last_progress_batch >= supplement.max_no_progress_batches:
+                metadata["collection_stop_reason"] = "supplement_quota_no_progress"
+                self.finalize_audit()
+                self.writer.close()
+                raise RuntimeError(f"supplement made no progress for {supplement.max_no_progress_batches} labelled batches; "
+                    "inspect supplement_coverage missing quotas and eligible outcomes before recollecting")
             now = self._time()
+            if sampler is not None:
+                sampler.observe_time(now)
+                # Features and fault processes still advance at 10 Hz. Only
+                # label forks are spaced out, so burn-in/pacing adds real time
+                # without paying for four 1 s forks at every skipped tick.
+                if not sampler.should_label_tick(self.batch_index) or sampler.sample_budget(now) == 0:
+                    self.sampling_progress["paced_or_interval_skips"] += 1
+                    self.batch_index += 1
+                    self.sampling_progress["real_candidate_ticks"] = self.batch_index
+                    self._progress("advance_real_behavior", accepted=collected,
+                                   real_span_s=sampler.last_time-sampler.collection_start)
+                    self._advance_behavior()
+                    continue
             if not torch.allclose(
                 self.last_feature_time,
                 torch.full_like(self.last_feature_time, now),
@@ -1140,6 +1264,8 @@ class CounterfactualCollector:
             level, terrain = self._terrain_metadata()
             faults = self.stream.faults.audit_metadata()
             parameters = self.stream.faults.audit_parameters()
+            noise_metadata = (self.stream.faults.audit_map_noise()
+                              if getattr(self.stream.faults.cfg, "extended_faults", False) else None)
             event_identity = torch.stack((
                 torch.arange(self.env.num_envs, device=self.device),
                 self.episode_serial, self.stream.faults.schedule_count,
@@ -1170,6 +1296,35 @@ class CounterfactualCollector:
             )
             filters["insufficient_episode_horizon"] += int((valid & ~enough).sum())
             valid &= enough
+            group_seed = getattr(self, "terrain_seed", self.seed)
+            all_groups = [f"terrain_seed{group_seed}:type{int(t)}:level{int(l)}"
+                          for t,l in zip(terrain.tolist(), level.tolist())]
+            supplement = getattr(self, "supplement_cfg", None)
+            if supplement is not None:
+                allowed = torch.tensor([g in self.allowed_groups for g in all_groups], device=self.device)
+                filters["outside_source_partition"] += int((valid & ~allowed).sum())
+                valid &= allowed
+                if supplement.require_initial_safe:
+                    safe = initial.valid & (initial.tilt <= TILT_LIMIT_RAD) & (initial.clearance >= CLEARANCE_LIMIT_M) & ~initial.torso_contact
+                    filters["initially_unsafe_or_invalid"] += int((valid & ~safe).sum())
+                    valid &= safe
+            labelled_batches += 1
+            self.sampling_progress["labelled_batches"] = labelled_batches
+            if sampler is not None and not valid.any():
+                # No observable, safe start state: avoid running four forks
+                # whose outcomes cannot be written, but retain funnel counts.
+                sampler.record_unlabelled(faults, parameters, noise_metadata)
+                self.sampling_progress["no_observable_rows"] += 1
+                zeros = torch.zeros_like(valid)
+                self._collection_audit.record_candidates(faults,
+                    torch.zeros((self.env.num_envs, 4), device=self.device, dtype=torch.bool),
+                    (history_ready, observable, valid, zeros, zeros), zeros)
+                self.batch_index += 1
+                self.sampling_progress["real_candidate_ticks"] = self.batch_index
+                self._progress("no_observable_candidates", accepted=collected,
+                               labelled_batches=labelled_batches)
+                self._advance_behavior()
+                continue
             snapshot = self._capture()
             lp, ls = self._repeated_branch_rollout(snapshot, 1.0)
             vp, vs = self._repeated_branch_rollout(snapshot, 0.0)
@@ -1193,6 +1348,8 @@ class CounterfactualCollector:
                 mask = scenario == category
                 seen[category] += int((valid & mask).sum())
                 rejected[category] += int((valid & mask & ~stable).sum())
+                if getattr(self, "quota_sampler", None) is not None:
+                    continue
                 ids = (good & mask).nonzero().flatten()
                 room = (
                     quotas[category] - accepted[category]
@@ -1204,12 +1361,15 @@ class CounterfactualCollector:
                 ids = ids[: max(0, room)]
                 selected.append(ids)
                 accepted[category] += len(ids)
-            ids = torch.cat(selected)
+            if getattr(self, "quota_sampler", None) is not None:
+                ids = self.quota_sampler.select(good, labels, event_identity, now,
+                    faults=faults, parameters=parameters, noise=noise_metadata)
+                for category in range(4):
+                    accepted[category] += int((scenario[ids] == category).sum())
+            else:
+                ids = torch.cat(selected)
             if len(ids):
-                groups = [
-                    f"terrain_seed{self.seed}:type{int(terrain[i])}:level{int(level[i])}"
-                    for i in ids.tolist()
-                ]
+                groups = [all_groups[i] for i in ids.tolist()]
                 dwell = (now - self.last_behavior_switch).float()
                 execution = torch.stack(
                     (self.behavior_mask, dwell, self.blender.remaining.float()), -1
@@ -1220,7 +1380,8 @@ class CounterfactualCollector:
                     groups,
                     level[ids],
                     terrain[ids],
-                    self.seed * 100_000_000
+                    (self.candidate_prefix * 1_000_000_000 if getattr(self, "candidate_prefix", None) is not None
+                     else self.seed * 100_000_000)
                     + self.batch_index * self.env.num_envs
                     + ids,
                     torch.stack((lp.metrics(), vp.metrics()), 1)[ids],
@@ -1239,9 +1400,12 @@ class CounterfactualCollector:
                         (lp.first_failure_cause_stable, vp.first_failure_cause_stable), -1
                     )[ids],
                     candidate_safety=candidate_safety[ids],
+                    noise_metadata=noise_metadata[ids] if noise_metadata is not None else None,
                 )
+                self._progress("write_samples", rows=len(ids), accepted=collected)
                 self.writer.append(batch)
                 collected += len(ids)
+                last_progress_batch = labelled_batches
                 coverage = metadata["coverage"]
                 for j, count in enumerate(labels[ids].sum(0).tolist()):
                     coverage["label_positive"][j] += int(count)
@@ -1269,13 +1433,32 @@ class CounterfactualCollector:
                 written,
             )
             self.batch_index += 1
-            if self.batch_index % 10 == 0:
+            self.sampling_progress["real_candidate_ticks"] = self.batch_index
+            self._progress("collect_candidates", accepted=collected,
+                           labelled_batches=labelled_batches, target=self.collection_cfg.target_samples)
+            if labelled_batches == 1 or labelled_batches % 10 == 0 or time.monotonic()-last_log_time >= 30 or collected == self.collection_cfg.target_samples:
+                last_log_time = time.monotonic()
                 self.finalize_audit()
                 print(
-                    f"[SelectorCollector] candidates={self.batch_index} accepted={collected}/{self.collection_cfg.target_samples} scenarios={accepted}",
+                    f"[SelectorCollector] ticks={self.batch_index} labelled_batches={labelled_batches} accepted={collected}/{self.collection_cfg.target_samples} scenarios={accepted}",
                     flush=True,
                 )
+                if getattr(self, "quota_sampler", None) is not None:
+                    summary = self.quota_sampler.summary()
+                    print(f"[SelectorSupplement] long={summary['accepted_long']} missing={summary['missing_long']} "
+                          f"short_vp_only={summary['reserved_short_vp_only']} late={summary['late_failure']} "
+                          f"events={summary['independent_events']}", flush=True)
+                    temporal = summary["temporal_coverage"]
+                    stages = dict(zip(temporal["lifecycle_order"], temporal["written"]))
+                    print(f"[SelectorTemporal] real_span_s={temporal['collection_elapsed_s']:.2f} "
+                          f"drift_mature={stages['drift_mature']} person_near={stages['person_near']} "
+                          f"person_depart={stages['person_depart']} residual={stages['person_residual']} "
+                          f"recovered={stages['recovered']}", flush=True)
             if collected < self.collection_cfg.target_samples:
                 self._advance_behavior()
-        metadata["collection_complete"] = True
         self.finalize_audit()
+        if getattr(self, "quota_sampler", None) is not None and not self.quota_sampler.summary()["complete"]:
+            raise RuntimeError("supplement target reached without secondary coverage; inspect supplement_coverage")
+        metadata["collection_complete"] = True
+        self._progress("collection_finished", accepted=collected,
+                       labelled_batches=labelled_batches)

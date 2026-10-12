@@ -33,6 +33,7 @@ from legged_lab.selector.metrics import json_safe_metrics, selector_metrics  # n
 from legged_lab.selector.frozen_policy import dataset_policy_identity  # noqa: E402
 from legged_lab.selector.labels import dataset_safety_label_contract  # noqa: E402
 from legged_lab.selector.feature_contract import dataset_feature_contract  # noqa: E402
+from legged_lab.selector.supplement_dataset import SelectorTrainingDataset, audit_training_sources  # noqa: E402
 from legged_lab.selector.model import (  # noqa: E402
     CalibratedSelector,
     FeatureNormalizer,
@@ -45,6 +46,10 @@ from legged_lab.selector.model import (  # noqa: E402
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the G1 RENet LP/VP selector.")
     parser.add_argument("--dataset", required=True, type=Path)
+    parser.add_argument("--supplement-datasets", nargs="+", type=Path, default=[],
+                        help="Training-only supplements; original validation/test stay fixed.")
+    parser.add_argument("--stress-datasets", nargs="+", type=Path, default=[],
+                        help="Independent supplement validation/test roots, reported separately.")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--num-workers", type=int, default=4)
@@ -153,6 +158,8 @@ def train_seed(
     train_cfg: TrainingConfig,
     device: torch.device,
     output: Path,
+    source_audit=None,
+    stress_loaders=(),
 ) -> tuple[Path, dict[str, float]]:
     seed_everything(seed)
     model = SelectorNetwork(selector_cfg).to(device)
@@ -216,7 +223,7 @@ def train_seed(
     ).cpu()
     calibrated = CalibratedSelector(model, normalizer, temperatures.to(device)).to(device).eval()
     split_metrics: dict[str, float] = {}
-    for split_name, loader in (("validation", validation_loader), ("test", test_loader)):
+    for split_name, loader in (("validation", validation_loader), ("test", test_loader), *stress_loaders):
         split_probabilities = []
         split_labels = []
         with torch.no_grad():
@@ -247,6 +254,7 @@ def train_seed(
         "positive_weights": positive_weights.cpu(),
         "metrics": metrics,
         "history": history,
+        "data_sources": source_audit,
     }
     path = output / f"selector_seed_{seed}.pt"
     torch.save(artifact, path)
@@ -259,8 +267,10 @@ def train_seed(
 def main() -> None:
     args = parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    group_counts = verify_dataset_no_group_leak(args.dataset)
-    print(f"[selector] split isolation passed; terrain groups={group_counts}")
+    source_audit = audit_training_sources(args.dataset, args.supplement_datasets, args.stress_datasets)
+    print(f"[selector] source isolation passed; training_samples={source_audit['training_samples']}")
+    (args.output / "training_sources.json").write_text(
+        json.dumps(source_audit, ensure_ascii=False, indent=2), encoding="utf-8")
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     selector_cfg = SelectorConfig()
     train_cfg = TrainingConfig(
@@ -268,9 +278,9 @@ def main() -> None:
         max_epochs=args.max_epochs,
         patience=args.patience,
     )
-    train_dataset = SelectorShardDataset(args.dataset, "train")
-    validation_dataset = SelectorShardDataset(args.dataset, "validation")
-    test_dataset = SelectorShardDataset(args.dataset, "test")
+    train_dataset = SelectorTrainingDataset([args.dataset, *args.supplement_datasets])
+    validation_dataset = SelectorTrainingDataset([args.dataset], "validation")
+    test_dataset = SelectorTrainingDataset([args.dataset], "test")
     frozen_metadata = dataset_policy_identity(train_dataset.manifest)
     dataset_safety_label_contract(train_dataset.manifest)
     dataset_feature_contract(train_dataset.manifest)
@@ -293,6 +303,17 @@ def main() -> None:
     test_loader = make_loader(
         test_dataset, args.batch_size, args.num_workers, shuffle=False, device=device
     )
+    stress_loaders = []
+    for number, root in enumerate(args.stress_datasets):
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        split = manifest["metadata"]["supplement_source"]["split"]
+        if split == "train":
+            raise ValueError("stress-datasets may contain only validation or test supplements")
+        dataset = SelectorTrainingDataset([root], split)
+        if not len(dataset):
+            raise ValueError(f"empty stress dataset: {root}")
+        stress_loaders.append((f"stress_{number}_{split}", make_loader(
+            dataset, args.batch_size, args.num_workers, shuffle=False, device=device)))
     results = []
     for seed in train_cfg.seeds:
         results.append(
@@ -307,6 +328,8 @@ def main() -> None:
                 train_cfg,
                 device,
                 args.output,
+                source_audit,
+                stress_loaders,
             )
         )
     results.sort(
