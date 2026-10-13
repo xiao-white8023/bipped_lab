@@ -1,4 +1,4 @@
-"""Stream V3 shards into a JSON audit report without starting Isaac Sim."""
+"""Stream V4 one-second shards into a JSON audit report without starting Isaac Sim."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from .labels import CLEARANCE_LIMIT_M, FIRST_FAILURE_BITS, FUTURE_METRIC_ORDER, 
 from .lp_map_faults import NOISE_AUDIT_ORDER
 
 
-LABEL_ORDER = ("lp_0.4s", "lp_1.0s", "vp_0.4s", "vp_1.0s")
+LABEL_ORDER = ("lp_1.0s", "vp_1.0s")
 AUDIT_FIELDS = ("event_identity", "fault_parameters", "first_failure_flags",
                 "first_failure_cause_stable", "candidate_safety")
 FAULT_NAMES = (
@@ -45,18 +45,13 @@ PARAMETERS_BY_KIND = {
 class Counts:
     def __init__(self):
         self.rows = 0
-        self.positive = torch.zeros(4, dtype=torch.long)
-        self.pairs = torch.zeros(2, 4, dtype=torch.long)
-        self.joint = torch.zeros(9, dtype=torch.long)
-        self.late = 0
+        self.positive = torch.zeros(2, dtype=torch.long)
+        self.pairs = torch.zeros(1, 4, dtype=torch.long)
 
     def add(self, labels):
         self.rows += len(labels)
         self.positive += labels.long().sum(0)
-        y = labels.long()
-        self.joint += torch.bincount((y[:, 0]+y[:, 1])*3+y[:, 2]+y[:, 3], minlength=9)
-        self.late += int(((y[:, 1] > y[:, 0]) | (y[:, 3] > y[:, 2])).sum())
-        for h, (lp, vp) in enumerate(((0, 2), (1, 3))):
+        for h, (lp, vp) in enumerate(((0, 1),)):
             self.pairs[h] += torch.bincount(
                 labels[:, lp].long() + labels[:, vp].long() * 2, minlength=4
             )
@@ -68,7 +63,6 @@ class Counts:
             "positive_rate": [int(v) / self.rows if self.rows else None for v in self.positive],
             "pair_counts": self.pairs.tolist(),
             "pair_rates": [[int(v) / self.rows if self.rows else None for v in row] for row in self.pairs],
-            "joint_counts": self.joint.tolist(), "late_failure_rows": self.late,
         }
 
 
@@ -90,13 +84,13 @@ def _parameter_update(summary, key, values):
 
 
 def analyze_selector_dataset(root: str | Path) -> dict:
-    """Analyze complete or interrupted V3 datasets; missing new fields stay missing."""
+    """Analyze complete or interrupted V4 datasets; missing new fields stay missing."""
     root = Path(root)
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("version") != 3 or manifest.get("label_order") != list(LABEL_ORDER):
-        raise ValueError("analysis requires the V3 four-head dataset contract")
+    if manifest.get("version") != 4 or manifest.get("label_order") != list(LABEL_ORDER):
+        raise ValueError("analysis requires V4 one-second / two-head data")
     if manifest.get("future_metric_order_per_branch") != list(FUTURE_METRIC_ORDER):
-        raise ValueError("unsupported V3 future metric order")
+        raise ValueError("unsupported V4 future metric order")
     overall, splits = Counts(), {s: Counts() for s in SPLIT_NAMES}
     groups = defaultdict(lambda: defaultdict(Counts))
     fields = defaultdict(int)
@@ -113,7 +107,7 @@ def analyze_selector_dataset(root: str | Path) -> dict:
     audit_contract = manifest.get("metadata", {}).get("collection_audit_contract")
     has_new_contract = audit_contract is not None
     if has_new_contract and (
-        audit_contract.get("version") != 1
+        audit_contract.get("version") != 2
         or audit_contract.get("fault_parameter_order") != list(FAULT_PARAMETER_ORDER)
         or audit_contract.get("candidate_safety_order") != list(CANDIDATE_SAFETY_ORDER)
         or audit_contract.get("first_failure_bits") != FIRST_FAILURE_BITS
@@ -127,14 +121,12 @@ def analyze_selector_dataset(root: str | Path) -> dict:
             # mmap keeps the multi-GB feature tensors off the analysis heap.
             data = torch.load(path, map_location="cpu", weights_only=False, mmap=True)
             raw_labels = data["labels"]
-            if raw_labels.ndim != 2 or raw_labels.shape[1] != 4 or not ((raw_labels == 0) | (raw_labels == 1)).all():
+            if raw_labels.ndim != 2 or raw_labels.shape[1] != 2 or not ((raw_labels == 0) | (raw_labels == 1)).all():
                 raise ValueError(f"invalid binary labels in {path}")
             labels = raw_labels.bool()
             n = len(labels)
             if data["features"].shape != (n, 5, 283):
                 raise ValueError(f"invalid feature shape in {path}")
-            if (labels[:, 0] & ~labels[:, 1]).any() or (labels[:, 2] & ~labels[:, 3]).any():
-                raise ValueError(f"short failure without long failure in {path}")
             overall.add(labels)
             splits[split].add(labels)
             for field in ("future_metrics", "fault_metadata", "execution_metadata", *AUDIT_FIELDS):
@@ -172,7 +164,7 @@ def analyze_selector_dataset(root: str | Path) -> dict:
                     raise ValueError(f"invalid first failure times in {path}")
                 if not ((first == -1) | ((first >= 1) & (first <= 50))).all():
                     raise ValueError(f"out-of-horizon first failure in {path}")
-                if not torch.equal(first >= 1, labels[:, [1, 3]]) or not torch.equal((first >= 1) & (first <= 20), labels[:, [0, 2]]):
+                if not torch.equal(first >= 1, labels):
                     raise ValueError(f"first failure times disagree with labels in {path}")
                 for branch in range(2):
                     times[branch] += torch.bincount(first[:, branch].clamp_min(0).long(), minlength=51)
@@ -182,11 +174,11 @@ def analyze_selector_dataset(root: str | Path) -> dict:
                 stable = data["first_failure_cause_stable"].bool()
                 if flags.shape != (n, 2) or stable.shape != (n, 2) or not ((flags >= 0) & (flags <= 15)).all():
                     raise ValueError(f"invalid first failure flags in {path}")
-                if not torch.equal(flags != 0, labels[:, [1, 3]]):
+                if not torch.equal(flags != 0, labels):
                     raise ValueError(f"first failure flags disagree with labels in {path}")
                 for branch in range(2):
                     causes[branch] += torch.bincount(flags[stable[:, branch], branch], minlength=16)
-                    ambiguous[branch] += (~stable[:, branch] & labels[:, [1, 3]][:, branch]).sum()
+                    ambiguous[branch] += (~stable[:, branch] & labels[:, branch]).sum()
                 cause_rows += n
             if "candidate_safety" in data:
                 safety = data["candidate_safety"]
@@ -202,7 +194,7 @@ def analyze_selector_dataset(root: str | Path) -> dict:
                 execution = data["execution_metadata"]
                 _group_update(groups, "behavior_mode", execution[:, 0].long(), labels)
                 _group_update(groups, "transition_active", (execution[:, 2] > 0).long(), labels)
-                dwell = torch.bucketize(execution[:, 1].float().contiguous(), torch.tensor([.4, 1., 2.]), right=True)
+                dwell = torch.bucketize(execution[:, 1].float().contiguous(), torch.tensor([1., 2.]), right=True)
                 _group_update(groups, "dwell_bin", dwell, labels)
             if "fault_metadata" in data:
                 faults = data["fault_metadata"].long()
@@ -237,7 +229,7 @@ def analyze_selector_dataset(root: str | Path) -> dict:
                 if identity.shape != (n, 3) or identity.dtype != torch.int64 or (identity < 0).any():
                     raise ValueError(f"invalid event identity in {path}")
                 event_rows += n
-                packed = sum(labels[:, j].long() << j for j in range(4)).tolist()
+                packed = sum(labels[:, j].long() << j for j in range(2)).tolist()
                 fault_rows = data.get("fault_metadata")
                 for index, (env_id, episode, schedule) in enumerate(identity.tolist()):
                     ep, plan = (env_id, episode), (env_id, episode, schedule)
@@ -262,7 +254,7 @@ def analyze_selector_dataset(root: str | Path) -> dict:
         values = [v for v in registry.values() if split_bit is None or v[0] & split_bit]
         positives = [v[1] if split_bit is None else v[-1][split_bit.bit_length() - 1] for v in values]
         return {"unique": len(values),
-                "with_counterfactual_failure_per_head": [sum(bool(v & (1 << j)) for v in positives) for j in range(4)],
+                "with_counterfactual_failure_per_head": [sum(bool(v & (1 << j)) for v in positives) for j in range(2)],
                 "cross_split": sum(v[0].bit_count() > 1 for v in values)}
 
     accepted_plans = torch.zeros(4, 3, dtype=torch.long)
@@ -274,11 +266,10 @@ def analyze_selector_dataset(root: str | Path) -> dict:
     for value in noise_summary.values():
         value["mean"] = value.pop("sum") / value["rows"]
     return {
-        "report_version": 2,
+        "report_version": 3,
         "collection_complete": manifest.get("metadata", {}).get("collection_complete", False),
         "label_order": list(LABEL_ORDER), "branch_order": ["lp", "vp"],
-        "horizon_order": ["0.4s", "1.0s"], "pair_order": list(PAIR_NAMES),
-        "joint_order": "LP safe/late/early x VP safe/late/early, row-major",
+        "horizon_order": ["1.0s"], "pair_order": list(PAIR_NAMES),
         "overall": overall.result(), "by_split": {s: c.result() for s, c in splits.items()},
         "group_key_legend": {
             "active_scenario": list(SCENARIO_NAMES), "severity": list(SEVERITY_NAMES),
@@ -286,7 +277,7 @@ def analyze_selector_dataset(root: str | Path) -> dict:
             "fault_kind": list(FAULT_NAMES), "fault_kind_severity": "kind_id * 3 + severity_index",
             "phase": {"-1": "before", "0": "scheduled_interval", "1": "recovered"},
             "behavior_mode": {"0": "vp", "1": "lp"},
-            "dwell_bin": ["[0,.4)", "[.4,1)", "[1,2)", "[2,inf)"],
+            "dwell_bin": ["[0,1)", "[1,2)", "[2,inf)"],
             "transition_active": {"0": "no_blend", "1": "blending"},
             "initial_safety": {"0": "within_thresholds", "1": "already_violated"},
             "person_phase": ["approach", "near", "depart", "residual"],
@@ -339,7 +330,7 @@ def analyze_selector_dataset(root: str | Path) -> dict:
         "notes": [
             "10/30/60 controls scheduled-plan draws; accepted frame fractions also depend on durations and filtering.",
             "balanced_scenarios balances active fault categories, not safe/failure outcomes.",
-            "Legacy V3 data cannot recover event identities or first-step causes from aggregate metrics.",
+            "Only V4 data uses the one-second labels and ordinary-transition contract.",
             "Replay diagnostics compare acceptance rules on the same candidate rollouts; retained counts precede quotas, written counts apply quotas.",
         ],
     }

@@ -71,24 +71,15 @@ class SelectorDecision:
     vp_available: torch.Tensor
     both_unreliable: torch.Tensor
     switched: torch.Tensor
-    emergency_switch: torch.Tensor
     reason_code: torch.Tensor
 
     @property
-    def lp_risk_short(self) -> torch.Tensor:
+    def lp_risk_1s(self) -> torch.Tensor:
         return self.risks[..., 0]
 
     @property
-    def lp_risk_long(self) -> torch.Tensor:
+    def vp_risk_1s(self) -> torch.Tensor:
         return self.risks[..., 1]
-
-    @property
-    def vp_risk_short(self) -> torch.Tensor:
-        return self.risks[..., 2]
-
-    @property
-    def vp_risk_long(self) -> torch.Tensor:
-        return self.risks[..., 3]
 
 
 @dataclass
@@ -96,10 +87,8 @@ class SelectorOutput:
     """Public runtime output matching the deployment contract."""
 
     selected_mask: torch.Tensor
-    lp_risk_short: torch.Tensor
-    lp_risk_long: torch.Tensor
-    vp_risk_short: torch.Tensor
-    vp_risk_long: torch.Tensor
+    lp_risk_1s: torch.Tensor
+    vp_risk_1s: torch.Tensor
     lp_available: torch.Tensor
     vp_available: torch.Tensor
     both_unreliable: torch.Tensor

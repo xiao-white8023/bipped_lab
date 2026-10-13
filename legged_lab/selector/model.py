@@ -1,32 +1,3 @@
-# 中文导读
-# 文件用途：定义 selector 风险网络、输入归一化、损失函数和概率校准工具。
-# 使用位置：train_selector.py 训练；eval_selector.py 评估；export_selector.py 导出；deployment 在线推理。
-# 说明：网络读取 [batch, 5, 283] 历史，输出 LP/VP 各自 0.4 秒、1 秒的安全失败风险。
-# 说明：默认训练脚本在三个种子中选一个模型导出；SelectorEnsemble 是额外提供的集成接口。
-#
-# 类、函数及方法说明（包含私有方法、内部函数和属性访问器）：
-# - FeatureNormalizer：保存仅由训练集拟合的逐特征均值和标准差，并执行归一化。
-# - FeatureNormalizer.__init__：建立均值、标准差和已拟合标记等可随模型保存的缓冲。
-# - FeatureNormalizer.fit：忽略非有限值，直接从一份特征张量拟合归一化统计。
-# - FeatureNormalizer.set_statistics：接收外部流式统计得到的均值和标准差，并检查形状。
-# - FeatureNormalizer.forward：替换非有限输入，并按已保存的均值和标准差归一化。
-# - SelectorNetwork：使用逐帧 MLP 和 GRU 编码历史，再生成短长时间窗风险。
-# - SelectorNetwork.__init__：校验网络配置并建立帧编码器、时序 GRU 和四输出头。
-# - SelectorNetwork.raw_outputs：检查输入形状，编码五帧历史并返回尚未转换为概率的四个输出。
-# - SelectorNetwork.probabilities_from_raw：由短风险和条件增量构造四个概率，保证长风险不低于短风险。
-# - SelectorNetwork.forward：执行原始输出计算和单调风险概率转换。
-# - CalibratedSelector：将归一化器、风险网络和四个温度参数组合为可导出的推理模型。
-# - CalibratedSelector.__init__：保存模型和归一化器，检查并注册四个正温度参数。
-# - CalibratedSelector.forward：执行归一化、风险预测和温度校准，再恢复短长风险的单调关系。
-# - SelectorEnsemble：组合多个已校准模型，提供平均风险及模型间分歧。
-# - SelectorEnsemble.__init__：检查模型列表非空，并注册全部子模型。
-# - SelectorEnsemble.forward：堆叠各模型预测，返回风险均值和总体标准差。
-# - weighted_binary_cross_entropy：对四个失败标签计算正类加权损失，使用 FP32 避免混合精度溢出。
-# - positive_class_weights：按每个输出的负/正样本数比值计算并截断正类权重。
-# - fit_temperatures：在验证集预测上用 LBFGS 拟合四个独立正温度参数。
-# - fit_temperatures.closure：内部优化回调，计算温度缩放后的二元交叉熵并反向传播温度梯度。
-# 中文导读结束
-
 """Small calibrated recurrent risk model used by the LP/VP selector."""
 
 from __future__ import annotations
@@ -81,7 +52,7 @@ class FeatureNormalizer(nn.Module):
 
 # 建立均值、标准差和已拟合标记等可随模型保存的缓冲。
 class SelectorNetwork(nn.Module):
-    """Frame MLP + GRU with monotone short/long failure probabilities."""
+    """Frame MLP + GRU predicting [LP_1s, VP_1s] failure probabilities."""
 
     def __init__(self, cfg: SelectorConfig | None = None):
         super().__init__()
@@ -108,7 +79,7 @@ class SelectorNetwork(nn.Module):
             nn.Linear(self.cfg.head_hidden_dim, self.cfg.output_dim),
         )
 
-    def raw_outputs(self, history: torch.Tensor) -> torch.Tensor:
+    def encode_history(self, history: torch.Tensor) -> torch.Tensor:
         if history.ndim != 3:
             raise ValueError("selector history must have shape [batch, time, frame_dim]")
         if history.shape[1] != self.cfg.history_frames or history.shape[2] != self.cfg.frame_dim:
@@ -117,56 +88,89 @@ class SelectorNetwork(nn.Module):
             )
         encoded = self.frame_encoder(history)
         _, hidden = self.temporal(encoded)
-        return self.head(hidden[-1])
+        return hidden[-1]
+
+    def raw_outputs(self, history: torch.Tensor) -> torch.Tensor:
+        return self.head(self.encode_history(history))
 
     @staticmethod
     def probabilities_from_raw(raw: torch.Tensor) -> torch.Tensor:
-        """Convert two short risks and two conditional increments to four risks."""
+        """Convert the independent LP/VP logits to one-second risks."""
 
-        # Probability arithmetic must retain the FP32 clamp margin under AMP.
-        raw = raw.float()
-        lp_short = torch.sigmoid(raw[:, 0])
-        lp_increment = torch.sigmoid(raw[:, 1])
-        vp_short = torch.sigmoid(raw[:, 2])
-        vp_increment = torch.sigmoid(raw[:, 3])
-        lp_long = lp_short + (1.0 - lp_short) * lp_increment
-        vp_long = vp_short + (1.0 - vp_short) * vp_increment
-        return torch.stack((lp_short, lp_long, vp_short, vp_long), dim=-1)
+        # Keep probability arithmetic in FP32 under mixed precision.
+        return torch.sigmoid(raw.float())
 
     def forward(self, history: torch.Tensor) -> torch.Tensor:
         return self.probabilities_from_raw(self.raw_outputs(history))
 
 
 class CalibratedSelector(nn.Module):
-    """Exportable normalizer, selector, and per-output temperature scaling."""
+    """Exportable normalizer and two affine logit calibrators.
+
+    Missing biases mean zero, preserving old temperature-only checkpoints.
+    """
 
     def __init__(
         self,
         model: SelectorNetwork,
         normalizer: FeatureNormalizer | None = None,
         temperatures: torch.Tensor | None = None,
+        calibration_biases: torch.Tensor | None = None,
     ):
         super().__init__()
         self.model = model
         self.normalizer = normalizer or FeatureNormalizer(model.cfg.frame_dim)
         if temperatures is None:
-            temperatures = torch.ones(4)
-        if temperatures.shape != (4,):
-            raise ValueError("temperatures must have shape [4]")
+            temperatures = torch.ones(2)
+        if temperatures.shape != (2,):
+            raise ValueError("temperatures must have shape [2]")
+        if not torch.isfinite(temperatures).all() or (temperatures <= 0).any():
+            raise ValueError("temperatures must be finite and positive")
+        if calibration_biases is None:
+            calibration_biases = torch.zeros_like(temperatures)
+        if calibration_biases.shape != (2,) or not torch.isfinite(calibration_biases).all():
+            raise ValueError("calibration_biases must have shape [2] and be finite")
         self.register_buffer("temperatures", temperatures.float().clamp_min(1.0e-3))
+        self.register_buffer("calibration_biases", calibration_biases.float())
 
     def forward(self, history: torch.Tensor) -> torch.Tensor:
         probabilities = self.model(self.normalizer(history))
-        logits = torch.logit(probabilities.clamp(1.0e-6, 1.0 - 1.0e-6))
-        calibrated = torch.sigmoid(logits / self.temperatures)
-        # Independent temperature values are useful for calibration but can
-        # otherwise invert a short/long pair.  Restore the model contract after
-        # calibration without changing either short-horizon output.
-        lp_long = torch.maximum(calibrated[:, 0], calibrated[:, 1])
-        vp_long = torch.maximum(calibrated[:, 2], calibrated[:, 3])
-        return torch.stack(
-            (calibrated[:, 0], lp_long, calibrated[:, 2], vp_long), dim=-1
-        )
+        return calibrate_probabilities(probabilities, self.temperatures, self.calibration_biases)
+
+
+def calibrate_probabilities(
+    probabilities: torch.Tensor, temperatures: torch.Tensor, biases: torch.Tensor,
+) -> torch.Tensor:
+    logits = torch.logit(probabilities.float().clamp(1.0e-6, 1.0 - 1.0e-6))
+    return torch.sigmoid(logits / temperatures + biases)
+
+
+def selector_from_artifact(artifact: dict) -> CalibratedSelector:
+    """Load both legacy two-head checkpoints and affine-calibrated ones."""
+    from .feature_contract import validate_feature_contract
+    from .labels import validate_safety_label_contract
+
+    validate_feature_contract(artifact.get("selector_feature_contract"))
+    validate_safety_label_contract(artifact.get("safety_label_contract"))
+    if artifact.get("version") == 5:
+        from .outcomes import outcome_selector_from_artifact
+        return outcome_selector_from_artifact(artifact)
+    if artifact.get("version") not in (3, 4):
+        raise ValueError("selector requires a two-output checkpoint, version 3 or 4")
+    if artifact.get("version") == 4:
+        if "calibration_biases" not in artifact or "selection_rule" not in artifact:
+            raise ValueError("version 4 selector needs calibration_biases and selection_rule")
+        from .selection import SelectionRule
+        if SelectionRule.from_dict(artifact["selection_rule"]).mode == "learned_outcomes":
+            raise ValueError("learned outcomes require checkpoint version 5")
+    cfg = SelectorConfig(**artifact["selector_config"])
+    model = SelectorNetwork(cfg)
+    model.load_state_dict(artifact["model_state_dict"], strict=True)
+    normalizer = FeatureNormalizer(cfg.frame_dim)
+    normalizer.load_state_dict(artifact["normalizer_state_dict"], strict=True)
+    return CalibratedSelector(model, normalizer, artifact["temperatures"],
+                              artifact.get("calibration_biases")).eval()
+
 
 
 class SelectorEnsemble(nn.Module):
@@ -188,10 +192,10 @@ def weighted_binary_cross_entropy(
     targets: torch.Tensor,
     positive_weights: torch.Tensor,
 ) -> torch.Tensor:
-    if probabilities.shape != targets.shape or probabilities.shape[-1] != 4:
-        raise ValueError("probabilities and targets must have matching [batch, 4] shapes")
-    if positive_weights.shape != (4,):
-        raise ValueError("positive_weights must have shape [4]")
+    if probabilities.shape != targets.shape or probabilities.shape[-1] != 2:
+        raise ValueError("probabilities and targets must have matching [batch, 2] shapes")
+    if positive_weights.shape != (2,):
+        raise ValueError("positive_weights must have shape [2]")
     probabilities = probabilities.float().clamp(1.0e-6, 1.0 - 1.0e-6)
     targets = targets.to(probabilities.dtype)
     loss = -(
@@ -203,20 +207,20 @@ def weighted_binary_cross_entropy(
 
 @torch.no_grad()
 def positive_class_weights(labels: torch.Tensor, maximum: float = 100.0) -> torch.Tensor:
-    if labels.ndim != 2 or labels.shape[1] != 4:
-        raise ValueError("labels must have shape [samples, 4]")
+    if labels.ndim != 2 or labels.shape[1] != 2:
+        raise ValueError("labels must have shape [samples, 2]")
     positive = labels.float().sum(dim=0)
     negative = labels.shape[0] - positive
     return (negative / positive.clamp_min(1.0)).clamp(1.0, maximum)
 
 
 def fit_temperatures(probabilities: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-    """Fit four positive scalar temperatures on a validation split."""
+    """Fit two positive scalar temperatures on a validation split."""
 
-    if probabilities.shape != labels.shape or probabilities.ndim != 2 or probabilities.shape[1] != 4:
-        raise ValueError("validation probabilities and labels must have shape [samples, 4]")
+    if probabilities.shape != labels.shape or probabilities.ndim != 2 or probabilities.shape[1] != 2:
+        raise ValueError("validation probabilities and labels must have shape [samples, 2]")
     logits = torch.logit(probabilities.detach().clamp(1.0e-6, 1.0 - 1.0e-6))
-    log_temperature = nn.Parameter(torch.zeros(4, device=probabilities.device))
+    log_temperature = nn.Parameter(torch.zeros(2, device=probabilities.device))
     optimizer = torch.optim.LBFGS([log_temperature], lr=0.1, max_iter=100, line_search_fn="strong_wolfe")
 
     def closure() -> torch.Tensor:
@@ -228,3 +232,89 @@ def fit_temperatures(probabilities: torch.Tensor, labels: torch.Tensor) -> torch
 
     optimizer.step(closure)
     return log_temperature.detach().exp().clamp(1.0e-3, 100.0)
+
+
+def fit_affine_calibration(
+    probabilities: torch.Tensor,
+    labels: torch.Tensor,
+    *,
+    positive_weights: torch.Tensor | None = None,
+    initial_temperatures: torch.Tensor | None = None,
+    initial_biases: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, dict]:
+    """Fit positive temperatures AND offsets using unweighted validation BCE.
+
+    For the weighted BCE optimum, logit(true risk) = logit(score) - log(w).
+    That correction is an initialization, not an assumption about the trained
+    network. Baseline and fitted candidates compete by each head's validation
+    log loss; network and normalizer parameters never participate.
+    """
+    if (probabilities.ndim != 2 or probabilities.shape != labels.shape
+            or probabilities.shape[1] != 2 or len(probabilities) == 0):
+        raise ValueError("validation probabilities and labels must have shape [samples, 2]")
+    if (not torch.isfinite(probabilities).all()
+            or not ((probabilities >= 0) & (probabilities <= 1)).all()
+            or not ((labels == 0) | (labels == 1)).all()):
+        raise ValueError("validation probabilities must be finite; labels must be binary")
+    target = labels.detach().to(device=probabilities.device, dtype=torch.float64)
+    if ((target.sum(0) == 0) | (target.sum(0) == len(target))).any():
+        raise ValueError("each validation head needs both safe and failed samples")
+    logits = torch.logit(probabilities.detach().float().clamp(1e-6, 1-1e-6)).double()
+    baseline_t = (torch.ones(2, device=logits.device) if initial_temperatures is None
+                  else initial_temperatures.detach().to(logits.device)).double()
+    baseline_b = (torch.zeros(2, device=logits.device) if initial_biases is None
+                  else initial_biases.detach().to(logits.device)).double()
+    if (baseline_t.shape != (2,) or baseline_b.shape != (2,)
+            or not torch.isfinite(baseline_t).all() or not torch.isfinite(baseline_b).all()
+            or (baseline_t <= 0).any()):
+        raise ValueError("initial calibration must contain finite positive temperatures and finite biases")
+    prior_b = torch.zeros_like(baseline_b)
+    if positive_weights is not None:
+        weights = positive_weights.detach().to(device=logits.device, dtype=torch.float64)
+        if weights.shape != (2,) or not torch.isfinite(weights).all() or (weights <= 0).any():
+            raise ValueError("positive_weights must contain two finite positive values")
+        prior_b = -weights.log()
+
+    def head_losses(t, b):
+        return F.binary_cross_entropy_with_logits(logits/t + b, target, reduction="none").mean(0)
+
+    with torch.no_grad():
+        baseline_loss = head_losses(baseline_t, baseline_b)
+        prior_t = torch.ones_like(baseline_t)
+        use_prior = head_losses(prior_t, prior_b) < baseline_loss
+        start_t = torch.where(use_prior, prior_t, baseline_t)
+        start_b = torch.where(use_prior, prior_b, baseline_b)
+    log_t = nn.Parameter(start_t.log().clamp(-7., 7.))
+    bias = nn.Parameter(start_b.clone())
+    optimizer = torch.optim.LBFGS([log_t, bias], lr=0.5, max_iter=150,
+                                 tolerance_grad=1e-9, tolerance_change=1e-12,
+                                 line_search_fn="strong_wolfe")
+
+    def closure():
+        optimizer.zero_grad()
+        loss = head_losses(log_t.exp().clamp(1e-3, 100.), bias.clamp(-30., 30.)).mean()
+        loss.backward()
+        return loss
+
+    optimizer.step(closure)
+    with torch.no_grad():
+        candidate_t = torch.stack((baseline_t, start_t, log_t.exp().clamp(1e-3, 100.)))
+        candidate_b = torch.stack((baseline_b, start_b, bias.clamp(-30., 30.)))
+        losses = torch.stack([head_losses(t, b) for t, b in zip(candidate_t, candidate_b)])
+        losses = torch.where(torch.isfinite(losses), losses, torch.full_like(losses, torch.inf))
+        selected = losses.argmin(0)
+        heads = torch.arange(2, device=logits.device)
+        temperatures = candidate_t[selected, heads].float()
+        biases = candidate_b[selected, heads].float()
+        if not torch.isfinite(temperatures).all() or not torch.isfinite(biases).all():
+            raise RuntimeError("affine calibration failed to produce finite parameters")
+        fitted_loss = head_losses(temperatures.double(), biases.double())
+    return temperatures.detach(), biases.detach(), {
+        "method": "affine_logit", "formula": "sigmoid(logit(raw_risk)/temperature+bias)",
+        "fit_split": "validation", "uses_test_labels": False,
+        "objective": "unweighted_binary_cross_entropy",
+        "samples": len(target), "network_weights_changed": False,
+        "baseline_log_loss_per_head": baseline_loss.cpu().tolist(),
+        "fitted_log_loss_per_head": fitted_loss.cpu().tolist(),
+        "temperatures": temperatures.cpu().tolist(), "biases": biases.cpu().tolist(),
+    }

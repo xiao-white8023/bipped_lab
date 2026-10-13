@@ -18,6 +18,7 @@ from .feature_contract import validate_feature_contract
 from .frozen_policy import assert_same_policy
 from .labels import validate_safety_label_contract
 from .artifacts import validate_dual_branch_contract
+from .selection import SelectionRule
 
 
 @dataclass
@@ -27,6 +28,7 @@ class OnlineSelectorStep:
     lp_action: torch.Tensor
     vp_action: torch.Tensor
     uncertainty: torch.Tensor
+    outcome_probabilities: torch.Tensor | None = None
 
 
 class OnlineSelectorRuntime:
@@ -61,6 +63,9 @@ class OnlineSelectorRuntime:
                 "both TorchScript artifacts must embed their identity contracts"
             ) from error
         validate_dual_branch_contract(dual_metadata)
+        if (selector_metadata.get("version") not in (3, 4, 5)
+                or selector_metadata.get("output_order") != ["lp_1.0s", "vp_1.0s"]):
+            raise ValueError("selector artifact must use the two-output one-second contract; retrain and re-export")
         feature_contract = validate_feature_contract(
             selector_metadata.get("selector_feature_contract")
         )
@@ -70,13 +75,35 @@ class OnlineSelectorRuntime:
             selector_metadata.get("frozen_policy", {}),
         )
         cfg = kwargs.get("runtime_cfg") or RuntimeConfig()
-        if (cfg.normal_blend_steps, cfg.emergency_blend_steps) != (
-            feature_contract["transition"]["normal_steps"],
-            feature_contract["transition"]["emergency_steps"],
-        ):
+        if cfg.normal_blend_steps != feature_contract["transition"]["normal_steps"]:
             raise ValueError(
                 "runtime action transition differs from the collected label contract"
             )
+        embedded_rule = selector_metadata.get("selection_rule")
+        rule = SelectionRule.from_dict(embedded_rule) if embedded_rule is not None else SelectionRule()
+        if rule.mode == "directional_comparison":
+            if selector_metadata.get("validation_decision_guard", {}).get("passed") is not True:
+                raise ValueError("directional artifact did not pass its validation decision guard")
+        if selector_metadata.get("version") == 5:
+            from .outcomes import OUTCOME_ORDER
+            from .outcome_decision import validate_outcome_guard_record
+            if (rule.mode != "learned_outcomes" or selector_metadata.get("outcome_order") != list(OUTCOME_ORDER)
+                    or selector_metadata.get("decision_method") != "decision_outputs"
+                    or not hasattr(selector, "decision_outputs")):
+                raise ValueError("version 5 artifact is missing its learned outcome inference contract")
+            validate_outcome_guard_record(selector_metadata.get("validation_decision_guard"))
+            timing = {"selector_period_s":.1,"min_dwell_s":1.,"switch_confirmations":3,"normal_blend_steps":5}
+            if selector_metadata.get("decision_runtime") != timing:
+                raise ValueError("version 5 artifact needs the ordinary one-second runtime contract")
+            if cfg.min_dwell_s != 1. or cfg.switch_confirmations != 3 or cfg.normal_blend_steps != 5:
+                raise ValueError("runtime confirmation, dwell or blend differs from the exported outcome contract")
+        elif rule.mode == "learned_outcomes":
+            raise ValueError("learned outcomes require a version 5 artifact")
+        if selector_metadata.get("version") in (4, 5) and embedded_rule is None:
+            raise ValueError("selector artifact needs its fitted selection rule")
+        if kwargs.get("selection_rule") is not None and kwargs["selection_rule"] != rule:
+            raise ValueError("runtime selection rule differs from the exported artifact")
+        kwargs["selection_rule"] = rule
         return cls(dual, selector, **kwargs)
 
     def __init__(
@@ -91,6 +118,7 @@ class OnlineSelectorRuntime:
         device: str | torch.device = "cpu",
         selector_cfg: SelectorConfig | None = None,
         runtime_cfg: RuntimeConfig | None = None,
+        selection_rule: SelectionRule | None = None,
         observation_normalizer: nn.Module | None = None,
     ):
         self.device = torch.device(device)
@@ -100,6 +128,11 @@ class OnlineSelectorRuntime:
         self.vp_shape = tuple(vp_shape)
         self.selector_cfg = selector_cfg or SelectorConfig()
         self.runtime_cfg = runtime_cfg or RuntimeConfig()
+        self.selection_rule = selection_rule or SelectionRule()
+        if self.selection_rule.mode == "learned_outcomes" and not hasattr(selector, "decision_outputs"):
+            raise ValueError("learned outcome runtime needs decision_outputs, not only two risks")
+        if hasattr(selector, "decision_outputs") and self.selection_rule.mode != "learned_outcomes":
+            raise ValueError("an outcome model needs its validation-fitted learned outcome selection rule")
         self.selector_cfg.validate()
         self.runtime_cfg.validate()
         if self.proprio_history_dim < self.selector_cfg.proprio_dim:
@@ -117,7 +150,8 @@ class OnlineSelectorRuntime:
         self.vp_health = SensorHealthTracker(self.num_envs, self.vp_shape, self.device)
         self.history = FeatureHistory(self.num_envs, self.selector_cfg, self.device)
         self.machine = SelectorStateMachine(
-            self.num_envs, device=self.device, cfg=self.runtime_cfg
+            self.num_envs, device=self.device, cfg=self.runtime_cfg,
+            selection_rule=self.selection_rule,
         )
         self.blender = ActionBlender(
             self.num_envs,
@@ -131,14 +165,15 @@ class OnlineSelectorRuntime:
             (self.num_envs,), -torch.inf, device=self.device, dtype=torch.float64
         )
         self.last_decision: SelectorDecision | None = None
-        self.last_uncertainty = torch.zeros(self.num_envs, 4, device=self.device)
+        self.last_uncertainty = torch.zeros(self.num_envs, 2, device=self.device)
+        self.last_outcome_probabilities = None
 
     @staticmethod
     def reason_name(code: int) -> str:
         names = {
             SelectorStateMachine.REASON_HOLD: "hold",
-            SelectorStateMachine.REASON_HARD_TO_LP: "hard_to_lp",
-            SelectorStateMachine.REASON_HARD_TO_VP: "hard_to_vp",
+            SelectorStateMachine.REASON_HEALTH_TO_LP: "health_to_lp",
+            SelectorStateMachine.REASON_HEALTH_TO_VP: "health_to_vp",
             SelectorStateMachine.REASON_RISK_TO_LP: "risk_to_lp",
             SelectorStateMachine.REASON_RISK_TO_VP: "risk_to_vp",
             SelectorStateMachine.REASON_TIE_TO_VP: "tie_to_vp",
@@ -160,6 +195,7 @@ class OnlineSelectorRuntime:
         self.last_decision_time.fill_(-torch.inf)
         self.last_decision = None
         self.last_uncertainty.zero_()
+        self.last_outcome_probabilities = None
         self.initialized = True
         self.shadow_mode = None
 
@@ -301,15 +337,20 @@ class OnlineSelectorRuntime:
                 self.selector_cfg,
             )
             history = self.history.append(frame)
-            prediction = self.selector(history)
+            outcomes = None
+            if self.selection_rule.mode == "learned_outcomes":
+                prediction, outcomes = self.selector.decision_outputs(history)
+            else:
+                prediction = self.selector(history)
             if isinstance(prediction, (tuple, list)):
                 risks, uncertainty = prediction
             else:
                 risks = prediction
                 uncertainty = torch.zeros_like(risks)
             self.last_decision = self.machine.step(
-                risks, lp_health, vp_health, timestamp
+                risks, lp_health, vp_health, timestamp, outcome_probabilities=outcomes
             )
+            self.last_outcome_probabilities = outcomes
             self.last_uncertainty = uncertainty
             self.last_decision_time.copy_(timestamp)
         if self.last_decision is None:
@@ -327,24 +368,16 @@ class OnlineSelectorRuntime:
                 if decision_updated
                 else torch.zeros_like(decision.switched)
             )
-            emergency = (
-                decision.emergency_switch
-                if decision_updated
-                else torch.zeros_like(decision.emergency_switch)
-            )
             control_action = self.blender.step(
                 branches.lp_action,
                 branches.vp_action,
                 decision.selected_mask,
                 switched,
-                emergency,
             )
         public = SelectorOutput(
             selected_mask=decision.selected_mask,
-            lp_risk_short=decision.lp_risk_short,
-            lp_risk_long=decision.lp_risk_long,
-            vp_risk_short=decision.vp_risk_short,
-            vp_risk_long=decision.vp_risk_long,
+            lp_risk_1s=decision.lp_risk_1s,
+            vp_risk_1s=decision.vp_risk_1s,
             lp_available=decision.lp_available,
             vp_available=decision.vp_available,
             both_unreliable=decision.both_unreliable,
@@ -356,6 +389,7 @@ class OnlineSelectorRuntime:
             lp_action=branches.lp_action,
             vp_action=branches.vp_action,
             uncertainty=self.last_uncertainty,
+            outcome_probabilities=self.last_outcome_probabilities,
         )
 
 
@@ -383,16 +417,16 @@ class ShadowLogWriter:
             "timestamp": self._values(value.timestamp),
             "actual_mask": self._values(value.current_mask),
             "suggested_mask": self._values(output.selected_mask),
-            "lp_risk_short": self._values(output.lp_risk_short),
-            "lp_risk_long": self._values(output.lp_risk_long),
-            "vp_risk_short": self._values(output.vp_risk_short),
-            "vp_risk_long": self._values(output.vp_risk_long),
+            "lp_risk_1s": self._values(output.lp_risk_1s),
+            "vp_risk_1s": self._values(output.vp_risk_1s),
             "lp_available": self._values(output.lp_available),
             "vp_available": self._values(output.vp_available),
             "both_unreliable": self._values(output.both_unreliable),
             "switch_reason": self._values(output.switch_reason),
             "robot_state": robot_state or {},
         }
+        if step.outcome_probabilities is not None:
+            record["outcome_probabilities"] = step.outcome_probabilities.detach().cpu().tolist()
         self._stream.write(json.dumps(record, ensure_ascii=False) + "\n")
         self._stream.flush()
 
@@ -405,4 +439,3 @@ class ShadowLogWriter:
 
     def __exit__(self, *exc_info: Any) -> None:
         self.close()
-

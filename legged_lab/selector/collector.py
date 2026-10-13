@@ -35,9 +35,9 @@ from .randomness import (
 )
 
 
-REPLAY_STABILITY_FIELDS = ("fail_short", "fail_long", "label_valid")
+REPLAY_STABILITY_FIELDS = ("fail_1s", "label_valid")
 LEGACY_REPLAY_STABILITY_FIELDS = (
-    "fail_short", "fail_long", "first_failure_step", "first_reset_step",
+    "fail_1s", "first_failure_step", "first_reset_step",
     "terminated", "torso_contact", "label_valid", "first_timeout_step",
     "first_invalid_step", "observed_steps",
 )
@@ -47,13 +47,13 @@ REPLAY_TIMING_FIELDS = ("first_failure_step", "first_reset_step", "observed_step
 
 def replay_filter_contract() -> dict:
     return {
-        "version": 2,
+        "version": 3,
         "repetitions_per_branch": 2,
-        "hard_conditions": ["fail_short_equal", "fail_long_equal", "both_replays_label_valid"],
+        "hard_conditions": ["fail_1s_equal", "both_replays_label_valid"],
         "pair_acceptance": "both LP and VP satisfy all hard conditions",
         "audit_fields": list(REPLAY_AUDIT_FIELDS),
         "audit_value_source": "second replay; time and cause differences do not reject valid agreeing labels",
-        "legacy_comparison": "old persistence gate: ten legacy discrete fields equal and both outcomes valid",
+        "legacy_comparison": "strict timing gate: legacy discrete fields equal and both outcomes valid",
         "both_replays_valid_scope": "all four LP/VP rollouts, before scenario quotas",
         "startup_hard_checks": ["initial_restore", "label_agreement", "label_validity_agreement"],
         "startup_label_agreement_min": 0.999,
@@ -69,7 +69,7 @@ def replay_mismatch_masks(first: RolloutOutcome, second: RolloutOutcome) -> dict
 
 def replay_rejection_masks(first, second) -> dict:
     return {
-        "label_flip": (first.fail_short != second.fail_short) | (first.fail_long != second.fail_long),
+        "label_flip": first.fail_1s != second.fail_1s,
         "first_replay_invalid": ~first.label_valid,
         "second_replay_invalid": ~second.label_valid,
     }
@@ -85,7 +85,7 @@ def legacy_outcome_replay_stability(first, second) -> torch.Tensor:
 def outcome_replay_stability(
     first: RolloutOutcome, second: RolloutOutcome
 ) -> torch.Tensor:
-    """Keep only valid agreeing 20/50-step labels; timing and causes are audit."""
+    """Keep only valid agreeing 50-step labels; timing and causes are audit."""
     return ~torch.stack(list(replay_rejection_masks(first, second).values())).any(dim=0)
 
 
@@ -93,7 +93,7 @@ def replay_disagreement_summary(first, second, eligible=None) -> dict:
     """Count label flips separately from agreeing labels with timing jitter."""
     mismatch = replay_mismatch_masks(first, second)
     if eligible is None:
-        eligible = torch.ones_like(first.fail_long, dtype=torch.bool)
+        eligible = torch.ones_like(first.fail_1s, dtype=torch.bool)
     reasons = replay_rejection_masks(first, second)
     rejected = ~outcome_replay_stability(first, second)
     legacy_rejected = ~legacy_outcome_replay_stability(first, second)
@@ -693,18 +693,14 @@ class CounterfactualCollector:
 
     def _accept_target(self, target):
         changed = target != self.behavior_mask
-        lp, vp = self._availability()
-        current_available = torch.where(self.behavior_mask > 0.5, lp, vp)
-        target_available = torch.where(target > 0.5, lp, vp)
-        emergency = changed & ~current_available & target_available
         self.last_behavior_switch[changed] = self._time()
         self.behavior_mask.copy_(target)
-        return changed, emergency
+        return changed
 
-    def _control_step(self, target, switched, emergency, diagnostics=None):
+    def _control_step(self, target, switched, diagnostics=None):
         branches = self.adapter.evaluate(self.observations)
         actions = self.blender.step(
-            branches.lp_action, branches.vp_action, target, switched, emergency
+            branches.lp_action, branches.vp_action, target, switched
         )
         self.observations = self._set_mask(self.observations, target)
         command = self.env.command_generator.command.clone()
@@ -755,19 +751,17 @@ class CounterfactualCollector:
             .clone()
         )
         self.stream.query_health(self._time())
-        switched, emergency = self._accept_target(target)
+        switched = self._accept_target(target)
         outcome = SafetyOutcomeAccumulator(
             self.env.num_envs,
             device=self.device,
-            short_horizon_steps=self.collection_cfg.short_horizon_steps,
-            long_horizon_steps=self.collection_cfg.long_horizon_steps,
+            horizon_steps=self.collection_cfg.horizon_steps,
         )
         trajectory = []
-        for step in range(self.collection_cfg.long_horizon_steps):
+        for step in range(self.collection_cfg.horizon_steps):
             metrics, dones, extras = self._control_step(
                 target,
                 switched if step == 0 else torch.zeros_like(switched),
-                emergency if step == 0 else torch.zeros_like(emergency),
                 diagnostics=start_diagnostics if step == 0 else None,
             )
             outcome.update(metrics, dones, extras["time_outs"])
@@ -808,7 +802,7 @@ class CounterfactualCollector:
     def _record_replay_rejections(self, eligible, written=None):
         """Account for the joint LP/VP filter without blaming the wrong branch."""
         audit = self.writer.metadata.setdefault("per_candidate_replay_diagnostics", {
-            "version": 2,
+            "version": 3,
             "filter_contract": replay_filter_contract(),
             "eligible_scope": "same rows as per_candidate_replay_filter.checked, before outcome-validity filtering",
             "retained_scope": "eligible rows passing the new replay gate, before scenario quotas; written counters apply quotas",
@@ -863,7 +857,7 @@ class CounterfactualCollector:
             "written_retained_despite_legacy_difference": count(written & ~rejected & legacy_rejected),
             "written_retained_with_audit_difference": count(written & ~rejected & audit_difference),
         })
-        any_failure = comparisons["LP"][1].fail_long | comparisons["VP"][1].fail_long
+        any_failure = comparisons["LP"][1].fail_1s | comparisons["VP"][1].fail_1s
         for name, group in (("both_safe", ~any_failure), ("any_failure", any_failure)):
             _add_replay_counts(audit["by_second_replay_1s"][name], {
                 "checked": count(group), "rejected": count(group & rejected),
@@ -898,21 +892,11 @@ class CounterfactualCollector:
         target[expired] = 1.0 - target[expired]
         ids = expired.nonzero().flatten()
         self.behavior_deadline[ids] = now + self._sample_dwell(ids)
-        lp, vp = self._availability()
-        target = torch.where(
-            (self.behavior_mask > 0.5) & ~lp & vp, torch.zeros_like(target), target
-        )
-        target = torch.where(
-            (self.behavior_mask <= 0.5) & ~vp & lp, torch.ones_like(target), target
-        )
-        changed, emergency = self._accept_target(target)
-        early = (changed & ~expired).nonzero().flatten()
-        self.behavior_deadline[early] = now + self._sample_dwell(early)
+        changed = self._accept_target(target)
         for step in range(self.collection_cfg.candidate_stride_steps):
             self._control_step(
                 target,
                 changed if step == 0 else torch.zeros_like(changed),
-                emergency if step == 0 else torch.zeros_like(emergency),
             )
             audit = getattr(self, "_collection_audit", None)
             if audit is not None:
@@ -991,9 +975,7 @@ class CounterfactualCollector:
             if compared_error.numel()
             else 0.0
         )
-        labels_equal_per_env = (
-            first_outcome.fail_short == second_outcome.fail_short
-        ) & (first_outcome.fail_long == second_outcome.fail_long)
+        labels_equal_per_env = first_outcome.fail_1s == second_outcome.fail_1s
         failure_step_equal_per_env = (
             first_outcome.first_failure_step == second_outcome.first_failure_step
         )
@@ -1113,12 +1095,8 @@ class CounterfactualCollector:
             "second_replay_valid_label_count": int(
                 second_outcome.label_valid.sum().item()
             ),
-            "first_replay_fail_short_count": int(first_outcome.fail_short.sum().item()),
-            "second_replay_fail_short_count": int(
-                second_outcome.fail_short.sum().item()
-            ),
-            "first_replay_fail_long_count": int(first_outcome.fail_long.sum().item()),
-            "second_replay_fail_long_count": int(second_outcome.fail_long.sum().item()),
+            "first_replay_fail_1s_count": int(first_outcome.fail_1s.sum().item()),
+            "second_replay_fail_1s_count": int(second_outcome.fail_1s.sum().item()),
             "atol": float(atol),
         }
         return result
@@ -1208,10 +1186,10 @@ class CounterfactualCollector:
             "seen": seen,
             "accepted": accepted,
             "replay_rejected": rejected,
-            "label_positive": [0] * 4,
+            "label_positive": [0] * 2,
             "behavior_mode": [0, 0],
-            "dwell_bins_s": ["[0,.4)", "[.4,1)", "[1,2)", "[2,inf)"],
-            "dwell_counts": [0] * 4,
+            "dwell_bins_s": ["[0,1)", "[1,2)", "[2,inf)"],
+            "dwell_counts": [0] * 3,
             "phase_counts": {"before": 0, "active": 0, "recovered": 0},
         }
         collected = 0
@@ -1292,7 +1270,7 @@ class CounterfactualCollector:
             valid = observable.clone()
             enough = (
                 self.env.max_episode_length - self.env.episode_length_buf
-                >= self.collection_cfg.long_horizon_steps
+                >= self.collection_cfg.horizon_steps
             )
             filters["insufficient_episode_horizon"] += int((valid & ~enough).sum())
             valid &= enough
@@ -1317,7 +1295,7 @@ class CounterfactualCollector:
                 self.sampling_progress["no_observable_rows"] += 1
                 zeros = torch.zeros_like(valid)
                 self._collection_audit.record_candidates(faults,
-                    torch.zeros((self.env.num_envs, 4), device=self.device, dtype=torch.bool),
+                    torch.zeros((self.env.num_envs, 2), device=self.device, dtype=torch.bool),
                     (history_ready, observable, valid, zeros, zeros), zeros)
                 self.batch_index += 1
                 self.sampling_progress["real_candidate_ticks"] = self.batch_index
@@ -1341,7 +1319,7 @@ class CounterfactualCollector:
             filters["invalid_vp_outcome"] += int((valid & ~vp_valid).sum())
             good = valid & stable & lp_valid & vp_valid
             labels = torch.stack(
-                (lp.fail_short, lp.fail_long, vp.fail_short, vp.fail_long), -1
+                (lp.fail_1s, vp.fail_1s), -1
             )
             selected = []
             for category in range(4):
@@ -1415,10 +1393,10 @@ class CounterfactualCollector:
                     )
                 bins = torch.bucketize(
                     dwell[ids],
-                    torch.tensor([0.4, 1.0, 2.0], device=self.device),
+                    torch.tensor([1.0, 2.0], device=self.device),
                     right=True,
                 )
-                for j in range(4):
+                for j in range(3):
                     coverage["dwell_counts"][j] += int((bins == j).sum())
                 for value, name in ((-1, "before"), (0, "active"), (1, "recovered")):
                     coverage["phase_counts"][name] += int(
@@ -1445,8 +1423,7 @@ class CounterfactualCollector:
                 )
                 if getattr(self, "quota_sampler", None) is not None:
                     summary = self.quota_sampler.summary()
-                    print(f"[SelectorSupplement] long={summary['accepted_long']} missing={summary['missing_long']} "
-                          f"short_vp_only={summary['reserved_short_vp_only']} late={summary['late_failure']} "
+                    print(f"[SelectorSupplement] 1s={summary['accepted_1s']} missing={summary['missing_1s']} "
                           f"events={summary['independent_events']}", flush=True)
                     temporal = summary["temporal_coverage"]
                     stages = dict(zip(temporal["lifecycle_order"], temporal["written"]))
@@ -1458,7 +1435,7 @@ class CounterfactualCollector:
                 self._advance_behavior()
         self.finalize_audit()
         if getattr(self, "quota_sampler", None) is not None and not self.quota_sampler.summary()["complete"]:
-            raise RuntimeError("supplement target reached without secondary coverage; inspect supplement_coverage")
+            raise RuntimeError("supplement target reached before temporal coverage completed; inspect supplement_coverage")
         metadata["collection_complete"] = True
         self._progress("collection_finished", accepted=collected,
                        labelled_batches=labelled_batches)

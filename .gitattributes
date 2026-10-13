@@ -1,3 +1,4 @@
 logs/g1_squat/**/*.pt filter=lfs diff=lfs merge=lfs -text
 logs/g1_squat/**/*.onnx filter=lfs diff=lfs merge=lfs -text
 logs/g1_squat/**/events.out.tfevents.* filter=lfs diff=lfs merge=lfs -text
+/outputs/**/*.pt filter=lfs diff=lfs merge=lfs -text

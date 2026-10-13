@@ -83,10 +83,6 @@ def fault_profile(name: str, base: FaultConfig | None = None) -> FaultConfig:
 class SupplementConfig:
     split: str = "train"
     pair_quotas: tuple[int, int, int, int] | None = None
-    min_short_vp_only: int = 0
-    min_short_lp_only: int = 0
-    min_short_both_fail: int = 0
-    min_late_failure: int = 0
     max_samples_per_event: int = 8
     min_event_spacing_s: float = .2
     require_initial_safe: bool = True
@@ -102,7 +98,7 @@ class SupplementConfig:
     def validate(self, target_samples):
         if self.split not in ("train", "validation", "test"):
             raise ValueError("invalid supplement split")
-        if self.split != "train" and (self.pair_quotas is not None or any(self.short_minimums()) or self.min_late_failure):
+        if self.split != "train" and self.pair_quotas is not None:
             raise ValueError("stress evaluation must use predefined faults without outcome quotas")
         if self.pair_quotas is not None and (
             len(self.pair_quotas) != 4 or any(type(q) is not int or q < 0 for q in self.pair_quotas)
@@ -121,20 +117,6 @@ class SupplementConfig:
             raise ValueError("randomize_label_phase must be boolean")
         if type(self.max_samples_per_labelled_batch) is not int or self.max_samples_per_labelled_batch < 0:
             raise ValueError("max_samples_per_labelled_batch must be a nonnegative integer")
-        if any(type(x) is not int or not 0 <= x <= target_samples for x in (*self.short_minimums(), self.min_late_failure)):
-            raise ValueError("secondary minimums must lie within the collection size")
-        if self.pair_quotas is None and (any(self.short_minimums()) or self.min_late_failure):
-            raise ValueError("secondary minimums require outcome quotas")
-        if self.pair_quotas is not None:
-            if any(need > quota for need,quota in zip(self.short_minimums(), self.pair_quotas)):
-                raise ValueError("reserve each short failure type within its corresponding long quota")
-            if self.min_late_failure > sum(self.pair_quotas[1:]):
-                raise ValueError("late-failure minimum exceeds all long-failure quotas")
-            if self.min_late_failure + sum(self.short_minimums()) > sum(self.pair_quotas[1:]):
-                raise ValueError("late and early-failure reservations are infeasible")
-
-    def short_minimums(self):
-        return (0, self.min_short_lp_only, self.min_short_vp_only, self.min_short_both_fail)
 
 
 def scaled_pair_quotas(total):
@@ -144,19 +126,12 @@ def scaled_pair_quotas(total):
 
 
 def label_classes(labels):
-    if labels.ndim != 2 or labels.shape[1] != 4:
-        raise ValueError("outcome labels must be [n,4]")
+    """Pair index: both safe, LP fails, VP fails, both fail within one second."""
+    if labels.ndim != 2 or labels.shape[1] != 2:
+        raise ValueError("outcome labels must be [n,2] [LP_1s, VP_1s]")
     if not ((labels == 0) | (labels == 1)).all():
         raise ValueError("outcome labels must be binary")
-    y = labels.long()
-    if (y[:, 0] > y[:, 1]).any() or (y[:, 2] > y[:, 3]).any():
-        raise ValueError("short failure cannot precede a safe long outcome")
-    short = y[:, 0] + 2*y[:, 2]
-    long = y[:, 1] + 2*y[:, 3]
-    # Branch state 0=safe, 1=late failure, 2=early failure. Nine legal cells.
-    joint = (y[:, 0]+y[:, 1])*3 + (y[:, 2]+y[:, 3])
-    late = ((y[:, 1]-y[:, 0]) | (y[:, 3]-y[:, 2])).bool()
-    return short, long, joint, late
+    return labels[:, 0].long() + 2 * labels[:, 1].long()
 
 
 class OutcomeQuotaSampler:
@@ -169,22 +144,16 @@ class OutcomeQuotaSampler:
         self.timing_generator = torch.Generator().manual_seed(seed+991)
         self._label_bucket, self._label_tick = None, None
         self.counts = [0]*4
-        self.short_counts = [0]*4
-        self.joint_counts = [0]*9
-        self.late_count = 0
-        self.reserved_short_count = 0
-        self.reserved_early = [0]*4
         self.events = {}
-        self.rejections = {name: 0 for name in ("event_cap", "event_spacing", "long_quota", "secondary_reservation")}
+        self.rejections = {name: 0 for name in ("event_cap", "event_spacing", "outcome_quota")}
         self.eligible_counts = [0]*4
-        self.eligible_joint = [0]*9
         self.collection_start = None
         self.last_time = None
         self.seen_lifecycle = [0]*len(LIFECYCLE_NAMES)
         self.eligible_lifecycle = [0]*len(LIFECYCLE_NAMES)
         self.written_lifecycle = [0]*len(LIFECYCLE_NAMES)
-        self.eligible_long_by_lifecycle = [[0]*4 for _ in LIFECYCLE_NAMES]
-        self.written_long_by_lifecycle = [[0]*4 for _ in LIFECYCLE_NAMES]
+        self.eligible_1s_by_lifecycle = [[0]*4 for _ in LIFECYCLE_NAMES]
+        self.written_1s_by_lifecycle = [[0]*4 for _ in LIFECYCLE_NAMES]
         self.written_time_bins = {}
         self.rejections["temporal_budget"] = 0
 
@@ -231,7 +200,7 @@ class OutcomeQuotaSampler:
 
     def select(self, good, labels, event_identity, now, *, faults=None, parameters=None, noise=None):
         budget = self.sample_budget(now)
-        short, long, joint, late = (value.cpu() for value in label_classes(labels))
+        pairs = label_classes(labels).cpu()
         candidates = good.nonzero().flatten().cpu()
         events = event_identity.cpu().tolist()
         stages = (lifecycle_classes(faults, parameters, noise).cpu()
@@ -241,14 +210,10 @@ class OutcomeQuotaSampler:
         else:
             self.seen_lifecycle[1] += len(labels)
         for i in candidates.tolist():
-            self.eligible_counts[int(long[i])] += 1
-            self.eligible_joint[int(joint[i])] += 1
+            self.eligible_counts[int(pairs[i])] += 1
             self.eligible_lifecycle[int(stages[i])] += 1
-            self.eligible_long_by_lifecycle[int(stages[i])][int(long[i])] += 1
+            self.eligible_1s_by_lifecycle[int(stages[i])][int(pairs[i])] += 1
         order = candidates[torch.randperm(len(candidates), generator=self.generator)].tolist()
-        # Give scarce secondary targets priority before ordinary rows in a batch.
-        order.sort(key=lambda i: -int((short[i] == long[i] and self.reserved_early[int(long[i])] < self.cfg.short_minimums()[int(long[i])])
-                                     or (late[i] and self.late_count < self.cfg.min_late_failure)))
         selected = []
         for position, i in enumerate(order):
             if sum(self.counts) >= self.target:
@@ -264,33 +229,16 @@ class OutcomeQuotaSampler:
             if now-last < self.cfg.min_event_spacing_s-1e-7:
                 self.rejections["event_spacing"] += 1
                 continue
-            category = int(long[i])
+            category = int(pairs[i])
             if self.cfg.pair_quotas is not None:
                 room = self.cfg.pair_quotas[category]-self.counts[category]
                 if room <= 0:
-                    self.rejections["long_quota"] += 1
-                    continue
-                early_need = [max(0,need-count) for need,count in zip(self.cfg.short_minimums(),self.reserved_early)]
-                short_need = early_need[category]
-                late_need = max(0, self.cfg.min_late_failure-self.late_count)
-                matches_short = int(short[i]) == category
-                failure_room = sum(self.cfg.pair_quotas[1:])-sum(self.counts[1:])
-                # Reserved early rows have short==long; none are late rows.
-                reserved = ((room <= short_need and not matches_short)
-                            or (category != 0 and failure_room <= late_need+sum(early_need)
-                                and not ((late[i] and late_need) or (matches_short and short_need))))
-                if reserved:
-                    self.rejections["secondary_reservation"] += 1
+                    self.rejections["outcome_quota"] += 1
                     continue
             self.counts[category] += 1
-            self.short_counts[int(short[i])] += 1
-            self.joint_counts[int(joint[i])] += 1
-            self.late_count += int(late[i])
-            self.reserved_short_count += int(int(short[i]) == 2 and category == 2)
-            self.reserved_early[category] += int(int(short[i]) == category)
             self.events[key] = (count+1, now)
             self.written_lifecycle[int(stages[i])] += 1
-            self.written_long_by_lifecycle[int(stages[i])][category] += 1
+            self.written_1s_by_lifecycle[int(stages[i])][category] += 1
             selected.append(i)
         time_bin = int((self.last_time-self.collection_start)//5)
         if selected:
@@ -300,24 +248,13 @@ class OutcomeQuotaSampler:
     def summary(self):
         elapsed = (self.last_time-self.collection_start) if self.collection_start is not None else 0.
         complete = (sum(self.counts) == self.target
-            and all(count >= need for count,need in zip(self.reserved_early,self.cfg.short_minimums()))
-            and self.late_count >= self.cfg.min_late_failure
             and elapsed+1e-6 >= self.cfg.min_collection_span_s)
         return {
             "config": asdict(self.cfg), "pair_order": list(PAIR_NAMES),
-            "accepted_short": self.short_counts, "accepted_long": self.counts,
-            "joint_order": "LP safe/late/early x VP safe/late/early, row-major",
-            "accepted_joint": self.joint_counts, "eligible_long": self.eligible_counts,
-            "eligible_joint": self.eligible_joint, "late_failure": self.late_count,
-            "reserved_short_vp_only": self.reserved_short_count,
-            "reserved_early_by_pair": self.reserved_early,
-            "minimum_early_by_pair": list(self.cfg.short_minimums()),
+            "accepted_1s": self.counts, "eligible_1s": self.eligible_counts,
             "independent_events": len(self.events), "rejections": self.rejections,
-            "missing_long": ([max(0,q-n) for q,n in zip(self.cfg.pair_quotas, self.counts)]
+            "missing_1s": ([max(0,q-n) for q,n in zip(self.cfg.pair_quotas, self.counts)]
                              if self.cfg.pair_quotas is not None else None),
-            "missing_short_vp_only": max(0,self.cfg.min_short_vp_only-self.reserved_short_count),
-            "missing_early_by_pair": [max(0,need-count) for need,count in zip(self.cfg.short_minimums(),self.reserved_early)],
-            "missing_late_failure": max(0,self.cfg.min_late_failure-self.late_count),
             "temporal_coverage": {
                 "version": 1, "warmup_s": self.cfg.warmup_s,
                 "collection_elapsed_s": elapsed,
@@ -330,8 +267,8 @@ class OutcomeQuotaSampler:
                 "mature_drift_age_s": 2.,
                 "seen": self.seen_lifecycle, "eligible": self.eligible_lifecycle,
                 "written": self.written_lifecycle,
-                "eligible_long_by_lifecycle": self.eligible_long_by_lifecycle,
-                "written_long_by_lifecycle": self.written_long_by_lifecycle,
+                "eligible_1s_by_lifecycle": self.eligible_1s_by_lifecycle,
+                "written_1s_by_lifecycle": self.written_1s_by_lifecycle,
                 "missing_observed_stages": [name for name,n in zip(LIFECYCLE_NAMES,self.seen_lifecycle) if n == 0],
                 "note": "Pacing is an upper admission bound. Stage counters are diagnostic, not outcome quotas or proof of stage coverage.",
             },

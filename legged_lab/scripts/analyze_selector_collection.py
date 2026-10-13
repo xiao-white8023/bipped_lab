@@ -48,7 +48,7 @@ def print_report_summary(report):
 
     coverage = report.get("supplement_coverage") or {}
     if coverage:
-        print("[selector analysis filter] eligible_long="+str(coverage["eligible_long"]), flush=True)
+        print("[selector analysis filter] eligible_1s="+str(coverage["eligible_1s"]), flush=True)
         print("[selector analysis filter] admission_rejections="+json.dumps(coverage["rejections"]), flush=True)
         print("[selector analysis filter] pair_quotas="+str(coverage["config"]["pair_quotas"]), flush=True)
     temporal = coverage.get("temporal_coverage")
@@ -59,8 +59,8 @@ def print_report_summary(report):
             seen, eligible, written = (temporal[k][i] for k in ("seen", "eligible", "written"))
             if seen or eligible or written:
                 print(f"[selector analysis] {name}: seen={seen} eligible={eligible} "
-                      f"written={written} eligible_long={temporal['eligible_long_by_lifecycle'][i]} "
-                      f"written_long={temporal['written_long_by_lifecycle'][i]}", flush=True)
+                      f"written={written} eligible_1s={temporal['eligible_1s_by_lifecycle'][i]} "
+                      f"written_1s={temporal['written_1s_by_lifecycle'][i]}", flush=True)
         print("[selector analysis] missing_observed_stages="+str(temporal["missing_observed_stages"]), flush=True)
 
     legends = report["group_key_legend"]
@@ -76,8 +76,7 @@ def print_report_summary(report):
             else:
                 value = key
             print(f"[selector analysis group] {dimension}={value} rows={counts['rows']} "
-                  f"short={counts['pair_counts'][0]} long={counts['pair_counts'][1]}", flush=True)
-
+                  f"1s={counts['pair_counts'][0]}", flush=True)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -93,7 +92,6 @@ def main():
     import torch
     torch.set_num_threads(args.threads)
     from legged_lab.selector.analysis import write_collection_analysis
-
     if args.check_dependencies:
         print("[selector analysis] CPU analysis dependencies ready", flush=True)
         return
@@ -104,7 +102,5 @@ def main():
     print_report_summary(report)
     if args.require_complete and not report["collection_complete"]:
         raise SystemExit("collection is incomplete; inspect missing quotas and filters")
-
-
 if __name__ == "__main__":
     main()

@@ -27,7 +27,7 @@ FUNNEL_STAGES = (
 
 def collection_audit_contract() -> dict:
     return {
-        "version": 1,
+        "version": 2,
         "event_identity_order": ["env_id", "episode_serial", "schedule_count"],
         "event_identity_scope": "collection_run_id",
         "event_identity_meaning": "scheduled_plan_including_normal_intervals",
@@ -60,7 +60,7 @@ class CollectionAudit:
         self.last_plan = torch.full((num_envs, 2), -1, dtype=torch.long, device=device)
         self.observed_plans = torch.zeros(4, 3, dtype=torch.long)
         self.funnel = torch.zeros(len(FUNNEL_STAGES), 4, 3, dtype=torch.long)
-        self.pairs = torch.zeros(3, 2, 4, 3, 4, dtype=torch.long)
+        self.pairs = torch.zeros(3, 1, 4, 3, 4, dtype=torch.long)
         self.candidate_batches = 0
 
     def observe_behavior_plans(self, episode_serial, faults) -> None:
@@ -80,7 +80,7 @@ class CollectionAudit:
         for index, mask in enumerate(masks):
             self.funnel[index] += torch.bincount(keys[mask], minlength=12).reshape(4, 3).cpu()
         for stage, mask in enumerate((stage_masks[-2], stage_masks[-1], written)):
-            for horizon, (lp, vp) in enumerate(((0, 2), (1, 3))):
+            for horizon, (lp, vp) in enumerate(((0, 1),)):
                 pairs = labels[:, lp].long() + labels[:, vp].long() * 2
                 counts = torch.bincount((keys * 4 + pairs)[mask], minlength=48)
                 self.pairs[stage, horizon] += counts.reshape(4, 3, 4).cpu()
@@ -96,7 +96,7 @@ class CollectionAudit:
             "funnel_order": list(FUNNEL_STAGES),
             "funnel_by_active_scenario_severity": self.funnel.tolist(),
             "pair_stage_order": ["before_replay_filter", "after_replay_filter", "written"],
-            "pair_horizon_order": ["0.4s", "1.0s"],
+            "pair_horizon_order": ["1.0s"],
             "pair_order": list(PAIR_NAMES),
             "pairs_by_stage_horizon_active_scenario_severity": self.pairs.tolist(),
             "pre_replay_pair_note": "diagnostic second-replay labels, not reliable ground truth for rejected pairs",

@@ -59,10 +59,6 @@ quota_args.add_argument("--pair-quotas", nargs=4, type=int, default=None,
                         metavar=("BOTH_SAFE", "LP_FAIL", "VP_FAIL", "BOTH_FAIL"))
 quota_args.add_argument("--no-outcome-quotas", action="store_true",
                         help="Pilot source banks/stress sets: sample faults without result balancing.")
-parser.add_argument("--min-short-vp-only", type=int, default=None)
-parser.add_argument("--min-short-lp-only", type=int, default=None)
-parser.add_argument("--min-short-both-fail", type=int, default=None)
-parser.add_argument("--min-late-failure", type=int, default=None)
 parser.add_argument("--max-samples-per-event", type=int, default=8)
 parser.add_argument("--min-event-spacing-s", type=float, default=.2)
 parser.add_argument("--max-no-progress-batches", type=int, default=1000)
@@ -116,7 +112,7 @@ parser.add_argument(
     help="Diagnostic only: disable accepted-sample scenario quotas",
 )
 AppLauncher.add_app_launcher_args(parser)
-args_cli, _ = parser.parse_known_args()
+args_cli = parser.parse_args()
 if not args_cli.replay_check_only and not args_cli.terrain_prepass_only:
     analysis_files = (
         CURRENT_DIR / "analyze_selector_collection.py",
@@ -329,11 +325,8 @@ def main() -> None:
     args_cli.fault_profile = args_cli.fault_profile or ("mixed" if supplement_mode else "baseline")
     if (args_cli.base_dataset is not None) != supplement_mode:
         raise ValueError("use --base-dataset and --supplement-split together")
-    if not supplement_mode and (args_cli.pair_quotas is not None or args_cli.no_outcome_quotas
-                               or args_cli.min_short_vp_only is not None or args_cli.min_late_failure is not None):
+    if not supplement_mode and (args_cli.pair_quotas is not None or args_cli.no_outcome_quotas):
         raise ValueError("outcome quota options require supplement mode")
-    if not supplement_mode and (args_cli.min_short_lp_only is not None or args_cli.min_short_both_fail is not None):
-        raise ValueError("short outcome minimums require supplement mode")
     if not supplement_mode and (args_cli.warmup_seconds is not None or args_cli.min_collection_span_seconds is not None
                                or args_cli.label_interval_frames is not None or args_cli.randomize_label_phase is not None
                                or args_cli.max_samples_per_labelled_batch):
@@ -364,7 +357,7 @@ def main() -> None:
         raise ValueError("prepass-burn-in must be smaller than prepass-steps")
     default_output = (
         REPO_ROOT
-        / "outputs/g1_renet_selector"
+        / "outputs/g1_renet_selector_v4_1s_normal"
         / ("dataset" if args_cli.terrain_mode == "main" else "dataset_ood_7_9")
     )
     output = (args_cli.output or default_output).expanduser().resolve()
@@ -396,22 +389,12 @@ def main() -> None:
     supplement_cfg = None
     if supplement_mode:
         is_train = args_cli.supplement_split == "train"
-        if not is_train and (args_cli.pair_quotas is not None or args_cli.min_short_vp_only is not None
-                             or args_cli.min_short_lp_only is not None or args_cli.min_short_both_fail is not None
-                             or args_cli.min_late_failure is not None):
+        if not is_train and args_cli.pair_quotas is not None:
             raise ValueError("stress validation/test may not be balanced by outcomes")
         quotas = (tuple(args_cli.pair_quotas) if args_cli.pair_quotas is not None
                   else scaled_pair_quotas(target_samples) if is_train and not args_cli.no_outcome_quotas else None)
         production_temporal = not args_cli.smoke_test and not args_cli.replay_check_only
         supplement_cfg = SupplementConfig(split=args_cli.supplement_split, pair_quotas=quotas,
-            min_short_vp_only=(args_cli.min_short_vp_only if args_cli.min_short_vp_only is not None
-                              else target_samples//32 if quotas is not None else 0),
-            min_short_lp_only=(args_cli.min_short_lp_only if args_cli.min_short_lp_only is not None
-                              else target_samples//32 if quotas is not None else 0),
-            min_short_both_fail=(args_cli.min_short_both_fail if args_cli.min_short_both_fail is not None
-                                else target_samples//64 if quotas is not None else 0),
-            min_late_failure=(args_cli.min_late_failure if args_cli.min_late_failure is not None
-                              else target_samples//8 if quotas is not None else 0),
             max_samples_per_event=args_cli.max_samples_per_event,
             min_event_spacing_s=args_cli.min_event_spacing_s,
             max_no_progress_batches=args_cli.max_no_progress_batches,

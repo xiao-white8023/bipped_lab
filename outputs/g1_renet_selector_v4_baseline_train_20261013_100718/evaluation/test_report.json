@@ -1,0 +1,1212 @@
+{
+  "breakdown": {
+    "dual_fault": {
+      "auroc/lp_1s": 0.9749972886016298,
+      "auroc/min": 0.9749972886016298,
+      "auroc/vp_1s": 0.975397267212358,
+      "coverage/contrasting_samples": 4978,
+      "coverage/lp_1s_negative": 28835,
+      "coverage/lp_1s_positive": 5372,
+      "coverage/lp_only_failure": 3897,
+      "coverage/samples": 34207,
+      "coverage/vp_1s_negative": 31651,
+      "coverage/vp_1s_positive": 2556,
+      "coverage/vp_only_failure": 1081,
+      "ece/lp_1s": 0.12871845066547394,
+      "ece/max": 0.15196754038333893,
+      "ece/vp_1s": 0.15196754038333893,
+      "failure/always_lp": 0.15704387426376343,
+      "failure/always_vp": 0.07472154498100281,
+      "failure/improvement_over_best_fixed": 0.3517214054982393,
+      "failure/oracle": 0.04311982914805412,
+      "failure/selector": 0.04844037815928459,
+      "selection/dangerous_branch_rate": 0.03656086781840096,
+      "selection/lp_fraction": 0.2318238914012909
+    },
+    "fault_recovery": {
+      "auroc/lp_1s": 0.9958379352111806,
+      "auroc/min": 0.9922763523179438,
+      "auroc/vp_1s": 0.9922763523179438,
+      "coverage/contrasting_samples": 36,
+      "coverage/lp_1s_negative": 10314,
+      "coverage/lp_1s_positive": 69,
+      "coverage/lp_only_failure": 24,
+      "coverage/samples": 10383,
+      "coverage/vp_1s_negative": 10326,
+      "coverage/vp_1s_positive": 57,
+      "coverage/vp_only_failure": 12,
+      "ece/lp_1s": 0.04258888214826584,
+      "ece/max": 0.04939672350883484,
+      "ece/vp_1s": 0.04939672350883484,
+      "failure/always_lp": 0.006645478308200836,
+      "failure/always_vp": 0.00548974284902215,
+      "failure/improvement_over_best_fixed": -0.1403508637997383,
+      "failure/oracle": 0.004334007389843464,
+      "failure/selector": 0.006260232999920845,
+      "selection/dangerous_branch_rate": 0.5555555555555556,
+      "selection/lp_fraction": 0.0681883841753006
+    },
+    "lp_fault": {
+      "auroc/lp_1s": 0.9773341071348617,
+      "auroc/min": 0.9773341071348617,
+      "auroc/vp_1s": 0.9829125812562319,
+      "coverage/contrasting_samples": 4413,
+      "coverage/lp_1s_negative": 39502,
+      "coverage/lp_1s_positive": 4842,
+      "coverage/lp_only_failure": 4348,
+      "coverage/samples": 44344,
+      "coverage/vp_1s_negative": 43785,
+      "coverage/vp_1s_positive": 559,
+      "coverage/vp_only_failure": 65,
+      "ece/lp_1s": 0.12455765157938004,
+      "ece/max": 0.12455765157938004,
+      "ece/vp_1s": 0.06545417755842209,
+      "failure/always_lp": 0.10919177532196045,
+      "failure/always_vp": 0.01260598935186863,
+      "failure/improvement_over_best_fixed": -0.03220039809160717,
+      "failure/oracle": 0.01114017702639103,
+      "failure/selector": 0.01301190722733736,
+      "selection/dangerous_branch_rate": 0.01880806707455246,
+      "selection/lp_fraction": 0.042283058166503906
+    },
+    "normal": {
+      "auroc/lp_1s": 0.9557875287847502,
+      "auroc/min": 0.9522187801607306,
+      "auroc/vp_1s": 0.9522187801607306,
+      "coverage/contrasting_samples": 95,
+      "coverage/lp_1s_negative": 51276,
+      "coverage/lp_1s_positive": 181,
+      "coverage/lp_only_failure": 60,
+      "coverage/samples": 51457,
+      "coverage/vp_1s_negative": 51301,
+      "coverage/vp_1s_positive": 156,
+      "coverage/vp_only_failure": 35,
+      "ece/lp_1s": 0.030473152175545692,
+      "ece/max": 0.034936320036649704,
+      "ece/vp_1s": 0.034936320036649704,
+      "failure/always_lp": 0.003517500124871731,
+      "failure/always_vp": 0.0030316575430333614,
+      "failure/improvement_over_best_fixed": -0.07051279983595567,
+      "failure/oracle": 0.002351477975025773,
+      "failure/selector": 0.003245428204536438,
+      "selection/dangerous_branch_rate": 0.4842105263157895,
+      "selection/lp_fraction": 0.05113007128238678
+    },
+    "terrain_level_0": {
+      "auroc/lp_1s": 0.9938109944894296,
+      "auroc/min": 0.9938109944894296,
+      "auroc/vp_1s": 0.9967934782608696,
+      "coverage/contrasting_samples": 362,
+      "coverage/lp_1s_negative": 6610,
+      "coverage/lp_1s_positive": 386,
+      "coverage/lp_only_failure": 326,
+      "coverage/samples": 6996,
+      "coverage/vp_1s_negative": 6900,
+      "coverage/vp_1s_positive": 96,
+      "coverage/vp_only_failure": 36,
+      "ece/lp_1s": 0.06302501261234283,
+      "ece/max": 0.06912582367658615,
+      "ece/vp_1s": 0.06912582367658615,
+      "failure/always_lp": 0.05517438426613808,
+      "failure/always_vp": 0.013722127303481102,
+      "failure/improvement_over_best_fixed": 0.3020833686823598,
+      "failure/oracle": 0.008576328866183758,
+      "failure/selector": 0.009576900862157345,
+      "selection/dangerous_branch_rate": 0.019337016574585635,
+      "selection/lp_fraction": 0.1143510565161705
+    },
+    "terrain_level_1": {
+      "auroc/lp_1s": 0.9851462180576105,
+      "auroc/min": 0.984286831106612,
+      "auroc/vp_1s": 0.984286831106612,
+      "coverage/contrasting_samples": 413,
+      "coverage/lp_1s_negative": 5688,
+      "coverage/lp_1s_positive": 385,
+      "coverage/lp_only_failure": 297,
+      "coverage/samples": 6073,
+      "coverage/vp_1s_negative": 5869,
+      "coverage/vp_1s_positive": 204,
+      "coverage/vp_only_failure": 116,
+      "ece/lp_1s": 0.09367229044437408,
+      "ece/max": 0.11224371194839478,
+      "ece/vp_1s": 0.11224371194839478,
+      "failure/always_lp": 0.06339535862207413,
+      "failure/always_vp": 0.03359130397439003,
+      "failure/improvement_over_best_fixed": 0.5196078072577017,
+      "failure/oracle": 0.014490366913378239,
+      "failure/selector": 0.016137000173330307,
+      "selection/dangerous_branch_rate": 0.024213075060532687,
+      "selection/lp_fraction": 0.18853943049907684
+    },
+    "terrain_level_2": {
+      "auroc/lp_1s": 0.9922310451211699,
+      "auroc/min": 0.9922310451211699,
+      "auroc/vp_1s": 0.9938492349629313,
+      "coverage/contrasting_samples": 912,
+      "coverage/lp_1s_negative": 17477,
+      "coverage/lp_1s_positive": 901,
+      "coverage/lp_only_failure": 736,
+      "coverage/samples": 18378,
+      "coverage/vp_1s_negative": 18037,
+      "coverage/vp_1s_positive": 341,
+      "coverage/vp_only_failure": 176,
+      "ece/lp_1s": 0.059148065745830536,
+      "ece/max": 0.059148065745830536,
+      "ece/vp_1s": 0.058723825961351395,
+      "failure/always_lp": 0.049026008695364,
+      "failure/always_vp": 0.018554793670773506,
+      "failure/improvement_over_best_fixed": 0.4721407727669116,
+      "failure/oracle": 0.008978125639259815,
+      "failure/selector": 0.009794319048523903,
+      "selection/dangerous_branch_rate": 0.01644736842105263,
+      "selection/lp_fraction": 0.11421264708042145
+    },
+    "terrain_level_3": {
+      "auroc/lp_1s": 0.9917912728646981,
+      "auroc/min": 0.9890037753513422,
+      "auroc/vp_1s": 0.9890037753513422,
+      "coverage/contrasting_samples": 1179,
+      "coverage/lp_1s_negative": 20112,
+      "coverage/lp_1s_positive": 1102,
+      "coverage/lp_only_failure": 862,
+      "coverage/samples": 21214,
+      "coverage/vp_1s_negative": 20657,
+      "coverage/vp_1s_positive": 557,
+      "coverage/vp_only_failure": 317,
+      "ece/lp_1s": 0.06861795485019684,
+      "ece/max": 0.07202580571174622,
+      "ece/vp_1s": 0.07202580571174622,
+      "failure/always_lp": 0.05194682627916336,
+      "failure/always_vp": 0.026256246492266655,
+      "failure/improvement_over_best_fixed": 0.5260323427246251,
+      "failure/oracle": 0.011313283815979958,
+      "failure/selector": 0.012444611638784409,
+      "selection/dangerous_branch_rate": 0.020356234096692113,
+      "selection/lp_fraction": 0.1318940371274948
+    },
+    "terrain_level_4": {
+      "auroc/lp_1s": 0.9869341055732931,
+      "auroc/min": 0.9834988920518399,
+      "auroc/vp_1s": 0.9834988920518399,
+      "coverage/contrasting_samples": 2370,
+      "coverage/lp_1s_negative": 34629,
+      "coverage/lp_1s_positive": 2382,
+      "coverage/lp_only_failure": 1783,
+      "coverage/samples": 37011,
+      "coverage/vp_1s_negative": 35825,
+      "coverage/vp_1s_positive": 1186,
+      "coverage/vp_only_failure": 587,
+      "ece/lp_1s": 0.07791070640087128,
+      "ece/max": 0.08832915872335434,
+      "ece/vp_1s": 0.08832915872335434,
+      "failure/always_lp": 0.06435924768447876,
+      "failure/always_vp": 0.03204452618956566,
+      "failure/improvement_over_best_fixed": 0.40387859082547817,
+      "failure/oracle": 0.016184378415346146,
+      "failure/selector": 0.01910242810845375,
+      "selection/dangerous_branch_rate": 0.04556962025316456,
+      "selection/lp_fraction": 0.15003646910190582
+    },
+    "terrain_level_5": {
+      "auroc/lp_1s": 0.983839660715605,
+      "auroc/min": 0.9771864605420124,
+      "auroc/vp_1s": 0.9771864605420124,
+      "coverage/contrasting_samples": 2804,
+      "coverage/lp_1s_negative": 41618,
+      "coverage/lp_1s_positive": 2959,
+      "coverage/lp_only_failure": 2101,
+      "coverage/samples": 44577,
+      "coverage/vp_1s_negative": 43016,
+      "coverage/vp_1s_positive": 1561,
+      "coverage/vp_only_failure": 703,
+      "ece/lp_1s": 0.08109341561794281,
+      "ece/max": 0.08428028225898743,
+      "ece/vp_1s": 0.08428028225898743,
+      "failure/always_lp": 0.06637952476739883,
+      "failure/always_vp": 0.035018060356378555,
+      "failure/improvement_over_best_fixed": 0.38116596555628357,
+      "failure/oracle": 0.019247593358159065,
+      "failure/selector": 0.021670367568731308,
+      "selection/dangerous_branch_rate": 0.03851640513552068,
+      "selection/lp_fraction": 0.14565807580947876
+    },
+    "terrain_level_6": {
+      "auroc/lp_1s": 0.9849779745864994,
+      "auroc/min": 0.9801362878779663,
+      "auroc/vp_1s": 0.9801362878779663,
+      "coverage/contrasting_samples": 3058,
+      "coverage/lp_1s_negative": 36388,
+      "coverage/lp_1s_positive": 3108,
+      "coverage/lp_only_failure": 2280,
+      "coverage/samples": 39496,
+      "coverage/vp_1s_negative": 37890,
+      "coverage/vp_1s_positive": 1606,
+      "coverage/vp_only_failure": 778,
+      "ece/lp_1s": 0.09328654408454895,
+      "ece/max": 0.10758267343044281,
+      "ece/vp_1s": 0.10758267343044281,
+      "failure/always_lp": 0.0786915123462677,
+      "failure/always_vp": 0.04066234454512596,
+      "failure/improvement_over_best_fixed": 0.39165627978926665,
+      "failure/oracle": 0.02096414752304554,
+      "failure/selector": 0.024736681953072548,
+      "selection/dangerous_branch_rate": 0.0487246566383257,
+      "selection/lp_fraction": 0.1743720918893814
+    },
+    "vp_fault": {
+      "auroc/lp_1s": 0.9921447061937503,
+      "auroc/min": 0.9760958934833768,
+      "auroc/vp_1s": 0.9760958934833768,
+      "coverage/contrasting_samples": 1612,
+      "coverage/lp_1s_negative": 42909,
+      "coverage/lp_1s_positive": 828,
+      "coverage/lp_only_failure": 80,
+      "coverage/samples": 43737,
+      "coverage/vp_1s_negative": 41457,
+      "coverage/vp_1s_positive": 2280,
+      "coverage/vp_only_failure": 1532,
+      "ece/lp_1s": 0.05123501643538475,
+      "ece/max": 0.11772798746824265,
+      "ece/vp_1s": 0.11772798746824265,
+      "failure/always_lp": 0.01893134042620659,
+      "failure/always_vp": 0.052129775285720825,
+      "failure/improvement_over_best_fixed": -0.036231835576187615,
+      "failure/oracle": 0.017102224752306938,
+      "failure/selector": 0.01961725763976574,
+      "selection/dangerous_branch_rate": 0.06823821339950373,
+      "selection/lp_fraction": 0.30498206615448
+    }
+  },
+  "checks": {
+    "all_auroc_at_least_0.85": true,
+    "all_ece_at_most_0.05": false,
+    "all_heads_have_class_coverage": true,
+    "both_branch_contrasts_have_coverage": true,
+    "dangerous_branch_rate_at_most_0.03": false
+  },
+  "coverage_thresholds": {
+    "min_class_samples": 20,
+    "min_contrast_samples": 50
+  },
+  "frozen_policy": {
+    "action_dim": 23,
+    "actor_observation_dim": 2120,
+    "checkpoint_lp_height_source": "pgtt_full",
+    "critic_observation_contract": {
+      "history_frames": 10,
+      "mode_source": "matching_actor_estimator_mask",
+      "single_frame_dim": 85,
+      "terrain_dim": 187,
+      "version": 1,
+      "vp_history_frames": 10
+    },
+    "critic_observation_dim": 1037,
+    "inference_precision": "float32_no_tf32",
+    "lp_encoder_contract": {
+      "attention_heads": 16,
+      "coordinate_features": "x_y_encoded_height",
+      "encoder_type": "ame_point_cross_attention",
+      "grid_x_range": [
+        -0.8,
+        0.8
+      ],
+      "grid_y_range": [
+        -0.5,
+        0.5
+      ],
+      "height_history_frames": 1,
+      "map_shape": [
+        11,
+        17
+      ],
+      "map_token_dim": 64,
+      "proprio_history_frames": 5,
+      "reconstruction_region": "full_187",
+      "sample_order": "y_ascending/x_ascending",
+      "uses_lp_gru": false,
+      "version": 1
+    },
+    "lp_observation_contract": {
+      "frame": "capture_torso_yaw",
+      "height_clip": [
+        -1.0,
+        1.0
+      ],
+      "height_offset": 0.5,
+      "height_scale": 1.0,
+      "history_frames": 1,
+      "invalid_height": -1.1,
+      "layout": "rectangular_full",
+      "lp_target": "critic_11x17_full_187_fixed_clip",
+      "order": "single/y_ascending/x_ascending",
+      "sample_xy": [
+        [
+          [
+            -0.800000011920929,
+            -0.5
+          ],
+          [
+            -0.699999988079071,
+            -0.5
+          ],
+          [
+            -0.6000000238418579,
+            -0.5
+          ],
+          [
+            -0.5,
+            -0.5
+          ],
+          [
+            -0.4000000059604645,
+            -0.5
+          ],
+          [
+            -0.30000001192092896,
+            -0.5
+          ],
+          [
+            -0.20000000298023224,
+            -0.5
+          ],
+          [
+            -0.10000000149011612,
+            -0.5
+          ],
+          [
+            0.0,
+            -0.5
+          ],
+          [
+            0.10000000149011612,
+            -0.5
+          ],
+          [
+            0.20000000298023224,
+            -0.5
+          ],
+          [
+            0.30000001192092896,
+            -0.5
+          ],
+          [
+            0.4000000059604645,
+            -0.5
+          ],
+          [
+            0.5,
+            -0.5
+          ],
+          [
+            0.6000000238418579,
+            -0.5
+          ],
+          [
+            0.699999988079071,
+            -0.5
+          ],
+          [
+            0.800000011920929,
+            -0.5
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            -0.4000000059604645
+          ],
+          [
+            -0.699999988079071,
+            -0.4000000059604645
+          ],
+          [
+            -0.6000000238418579,
+            -0.4000000059604645
+          ],
+          [
+            -0.5,
+            -0.4000000059604645
+          ],
+          [
+            -0.4000000059604645,
+            -0.4000000059604645
+          ],
+          [
+            -0.30000001192092896,
+            -0.4000000059604645
+          ],
+          [
+            -0.20000000298023224,
+            -0.4000000059604645
+          ],
+          [
+            -0.10000000149011612,
+            -0.4000000059604645
+          ],
+          [
+            0.0,
+            -0.4000000059604645
+          ],
+          [
+            0.10000000149011612,
+            -0.4000000059604645
+          ],
+          [
+            0.20000000298023224,
+            -0.4000000059604645
+          ],
+          [
+            0.30000001192092896,
+            -0.4000000059604645
+          ],
+          [
+            0.4000000059604645,
+            -0.4000000059604645
+          ],
+          [
+            0.5,
+            -0.4000000059604645
+          ],
+          [
+            0.6000000238418579,
+            -0.4000000059604645
+          ],
+          [
+            0.699999988079071,
+            -0.4000000059604645
+          ],
+          [
+            0.800000011920929,
+            -0.4000000059604645
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            -0.30000001192092896
+          ],
+          [
+            -0.699999988079071,
+            -0.30000001192092896
+          ],
+          [
+            -0.6000000238418579,
+            -0.30000001192092896
+          ],
+          [
+            -0.5,
+            -0.30000001192092896
+          ],
+          [
+            -0.4000000059604645,
+            -0.30000001192092896
+          ],
+          [
+            -0.30000001192092896,
+            -0.30000001192092896
+          ],
+          [
+            -0.20000000298023224,
+            -0.30000001192092896
+          ],
+          [
+            -0.10000000149011612,
+            -0.30000001192092896
+          ],
+          [
+            0.0,
+            -0.30000001192092896
+          ],
+          [
+            0.10000000149011612,
+            -0.30000001192092896
+          ],
+          [
+            0.20000000298023224,
+            -0.30000001192092896
+          ],
+          [
+            0.30000001192092896,
+            -0.30000001192092896
+          ],
+          [
+            0.4000000059604645,
+            -0.30000001192092896
+          ],
+          [
+            0.5,
+            -0.30000001192092896
+          ],
+          [
+            0.6000000238418579,
+            -0.30000001192092896
+          ],
+          [
+            0.699999988079071,
+            -0.30000001192092896
+          ],
+          [
+            0.800000011920929,
+            -0.30000001192092896
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            -0.19999998807907104
+          ],
+          [
+            -0.699999988079071,
+            -0.19999998807907104
+          ],
+          [
+            -0.6000000238418579,
+            -0.19999998807907104
+          ],
+          [
+            -0.5,
+            -0.19999998807907104
+          ],
+          [
+            -0.4000000059604645,
+            -0.19999998807907104
+          ],
+          [
+            -0.30000001192092896,
+            -0.19999998807907104
+          ],
+          [
+            -0.20000000298023224,
+            -0.19999998807907104
+          ],
+          [
+            -0.10000000149011612,
+            -0.19999998807907104
+          ],
+          [
+            0.0,
+            -0.19999998807907104
+          ],
+          [
+            0.10000000149011612,
+            -0.19999998807907104
+          ],
+          [
+            0.20000000298023224,
+            -0.19999998807907104
+          ],
+          [
+            0.30000001192092896,
+            -0.19999998807907104
+          ],
+          [
+            0.4000000059604645,
+            -0.19999998807907104
+          ],
+          [
+            0.5,
+            -0.19999998807907104
+          ],
+          [
+            0.6000000238418579,
+            -0.19999998807907104
+          ],
+          [
+            0.699999988079071,
+            -0.19999998807907104
+          ],
+          [
+            0.800000011920929,
+            -0.19999998807907104
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            -0.09999999403953552
+          ],
+          [
+            -0.699999988079071,
+            -0.09999999403953552
+          ],
+          [
+            -0.6000000238418579,
+            -0.09999999403953552
+          ],
+          [
+            -0.5,
+            -0.09999999403953552
+          ],
+          [
+            -0.4000000059604645,
+            -0.09999999403953552
+          ],
+          [
+            -0.30000001192092896,
+            -0.09999999403953552
+          ],
+          [
+            -0.20000000298023224,
+            -0.09999999403953552
+          ],
+          [
+            -0.10000000149011612,
+            -0.09999999403953552
+          ],
+          [
+            0.0,
+            -0.09999999403953552
+          ],
+          [
+            0.10000000149011612,
+            -0.09999999403953552
+          ],
+          [
+            0.20000000298023224,
+            -0.09999999403953552
+          ],
+          [
+            0.30000001192092896,
+            -0.09999999403953552
+          ],
+          [
+            0.4000000059604645,
+            -0.09999999403953552
+          ],
+          [
+            0.5,
+            -0.09999999403953552
+          ],
+          [
+            0.6000000238418579,
+            -0.09999999403953552
+          ],
+          [
+            0.699999988079071,
+            -0.09999999403953552
+          ],
+          [
+            0.800000011920929,
+            -0.09999999403953552
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.699999988079071,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.6000000238418579,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.5,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.4000000059604645,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.30000001192092896,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.20000000298023224,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.10000000149011612,
+            -7.450580596923828e-09
+          ],
+          [
+            0.0,
+            -7.450580596923828e-09
+          ],
+          [
+            0.10000000149011612,
+            -7.450580596923828e-09
+          ],
+          [
+            0.20000000298023224,
+            -7.450580596923828e-09
+          ],
+          [
+            0.30000001192092896,
+            -7.450580596923828e-09
+          ],
+          [
+            0.4000000059604645,
+            -7.450580596923828e-09
+          ],
+          [
+            0.5,
+            -7.450580596923828e-09
+          ],
+          [
+            0.6000000238418579,
+            -7.450580596923828e-09
+          ],
+          [
+            0.699999988079071,
+            -7.450580596923828e-09
+          ],
+          [
+            0.800000011920929,
+            -7.450580596923828e-09
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            0.09999999403953552
+          ],
+          [
+            -0.699999988079071,
+            0.09999999403953552
+          ],
+          [
+            -0.6000000238418579,
+            0.09999999403953552
+          ],
+          [
+            -0.5,
+            0.09999999403953552
+          ],
+          [
+            -0.4000000059604645,
+            0.09999999403953552
+          ],
+          [
+            -0.30000001192092896,
+            0.09999999403953552
+          ],
+          [
+            -0.20000000298023224,
+            0.09999999403953552
+          ],
+          [
+            -0.10000000149011612,
+            0.09999999403953552
+          ],
+          [
+            0.0,
+            0.09999999403953552
+          ],
+          [
+            0.10000000149011612,
+            0.09999999403953552
+          ],
+          [
+            0.20000000298023224,
+            0.09999999403953552
+          ],
+          [
+            0.30000001192092896,
+            0.09999999403953552
+          ],
+          [
+            0.4000000059604645,
+            0.09999999403953552
+          ],
+          [
+            0.5,
+            0.09999999403953552
+          ],
+          [
+            0.6000000238418579,
+            0.09999999403953552
+          ],
+          [
+            0.699999988079071,
+            0.09999999403953552
+          ],
+          [
+            0.800000011920929,
+            0.09999999403953552
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            0.19999998807907104
+          ],
+          [
+            -0.699999988079071,
+            0.19999998807907104
+          ],
+          [
+            -0.6000000238418579,
+            0.19999998807907104
+          ],
+          [
+            -0.5,
+            0.19999998807907104
+          ],
+          [
+            -0.4000000059604645,
+            0.19999998807907104
+          ],
+          [
+            -0.30000001192092896,
+            0.19999998807907104
+          ],
+          [
+            -0.20000000298023224,
+            0.19999998807907104
+          ],
+          [
+            -0.10000000149011612,
+            0.19999998807907104
+          ],
+          [
+            0.0,
+            0.19999998807907104
+          ],
+          [
+            0.10000000149011612,
+            0.19999998807907104
+          ],
+          [
+            0.20000000298023224,
+            0.19999998807907104
+          ],
+          [
+            0.30000001192092896,
+            0.19999998807907104
+          ],
+          [
+            0.4000000059604645,
+            0.19999998807907104
+          ],
+          [
+            0.5,
+            0.19999998807907104
+          ],
+          [
+            0.6000000238418579,
+            0.19999998807907104
+          ],
+          [
+            0.699999988079071,
+            0.19999998807907104
+          ],
+          [
+            0.800000011920929,
+            0.19999998807907104
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            0.30000001192092896
+          ],
+          [
+            -0.699999988079071,
+            0.30000001192092896
+          ],
+          [
+            -0.6000000238418579,
+            0.30000001192092896
+          ],
+          [
+            -0.5,
+            0.30000001192092896
+          ],
+          [
+            -0.4000000059604645,
+            0.30000001192092896
+          ],
+          [
+            -0.30000001192092896,
+            0.30000001192092896
+          ],
+          [
+            -0.20000000298023224,
+            0.30000001192092896
+          ],
+          [
+            -0.10000000149011612,
+            0.30000001192092896
+          ],
+          [
+            0.0,
+            0.30000001192092896
+          ],
+          [
+            0.10000000149011612,
+            0.30000001192092896
+          ],
+          [
+            0.20000000298023224,
+            0.30000001192092896
+          ],
+          [
+            0.30000001192092896,
+            0.30000001192092896
+          ],
+          [
+            0.4000000059604645,
+            0.30000001192092896
+          ],
+          [
+            0.5,
+            0.30000001192092896
+          ],
+          [
+            0.6000000238418579,
+            0.30000001192092896
+          ],
+          [
+            0.699999988079071,
+            0.30000001192092896
+          ],
+          [
+            0.800000011920929,
+            0.30000001192092896
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            0.4000000059604645
+          ],
+          [
+            -0.699999988079071,
+            0.4000000059604645
+          ],
+          [
+            -0.6000000238418579,
+            0.4000000059604645
+          ],
+          [
+            -0.5,
+            0.4000000059604645
+          ],
+          [
+            -0.4000000059604645,
+            0.4000000059604645
+          ],
+          [
+            -0.30000001192092896,
+            0.4000000059604645
+          ],
+          [
+            -0.20000000298023224,
+            0.4000000059604645
+          ],
+          [
+            -0.10000000149011612,
+            0.4000000059604645
+          ],
+          [
+            0.0,
+            0.4000000059604645
+          ],
+          [
+            0.10000000149011612,
+            0.4000000059604645
+          ],
+          [
+            0.20000000298023224,
+            0.4000000059604645
+          ],
+          [
+            0.30000001192092896,
+            0.4000000059604645
+          ],
+          [
+            0.4000000059604645,
+            0.4000000059604645
+          ],
+          [
+            0.5,
+            0.4000000059604645
+          ],
+          [
+            0.6000000238418579,
+            0.4000000059604645
+          ],
+          [
+            0.699999988079071,
+            0.4000000059604645
+          ],
+          [
+            0.800000011920929,
+            0.4000000059604645
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            0.5
+          ],
+          [
+            -0.699999988079071,
+            0.5
+          ],
+          [
+            -0.6000000238418579,
+            0.5
+          ],
+          [
+            -0.5,
+            0.5
+          ],
+          [
+            -0.4000000059604645,
+            0.5
+          ],
+          [
+            -0.30000001192092896,
+            0.5
+          ],
+          [
+            -0.20000000298023224,
+            0.5
+          ],
+          [
+            -0.10000000149011612,
+            0.5
+          ],
+          [
+            0.0,
+            0.5
+          ],
+          [
+            0.10000000149011612,
+            0.5
+          ],
+          [
+            0.20000000298023224,
+            0.5
+          ],
+          [
+            0.30000001192092896,
+            0.5
+          ],
+          [
+            0.4000000059604645,
+            0.5
+          ],
+          [
+            0.5,
+            0.5
+          ],
+          [
+            0.6000000238418579,
+            0.5
+          ],
+          [
+            0.699999988079071,
+            0.5
+          ],
+          [
+            0.800000011920929,
+            0.5
+          ]
+        ]
+      ],
+      "shape": [
+        11,
+        17
+      ],
+      "source": "pgtt_full",
+      "update_period": 0.1,
+      "version": 3
+    },
+    "lp_query_history_frames": 5,
+    "normalization": "identity",
+    "reference_policy": "/home/user/TienKung-Lab/Exported_policy/policy.pt",
+    "reference_policy_sha256": "7a34a61b4b6f391f628b46b4da106d99b72f9034dab5f62386bac7db87a351b1",
+    "source_checkpoint": "/data/Tienkung_lab/logs/g1_renet/2026-09-10_19-25-08/model_60000.pt",
+    "source_checkpoint_sha256": "d588c113dfa797afb486eef69e15889e4787e60257e66c36d6e64f00976f1566",
+    "source_iteration": 60000,
+    "validation": {
+      "lp_max_abs_error": 1.9073486328125e-06,
+      "vp_max_abs_error": 3.814697265625e-06
+    },
+    "version": 1,
+    "vp_encoder_contract": {
+      "depth_history_frames": 2,
+      "fusion_type": "attention",
+      "proprio_history_frames": 10,
+      "recurrent_state": "reset_each_observation_window",
+      "sequence_order": "oldest_to_current",
+      "single_proprio_dim": 78,
+      "version": 1
+    },
+    "vp_proprio_history_frames": 10
+  },
+  "metrics": {
+    "auroc/lp_1s": 0.9870814912548107,
+    "auroc/min": 0.9830872951788456,
+    "auroc/vp_1s": 0.9830872951788456,
+    "coverage/contrasting_samples": 11098,
+    "coverage/lp_1s_negative": 162522,
+    "coverage/lp_1s_positive": 11223,
+    "coverage/lp_only_failure": 8385,
+    "coverage/samples": 173745,
+    "coverage/vp_1s_negative": 168194,
+    "coverage/vp_1s_positive": 5551,
+    "coverage/vp_only_failure": 2713,
+    "ece/lp_1s": 0.0790548026561737,
+    "ece/max": 0.08660762012004852,
+    "ece/vp_1s": 0.08660762012004852,
+    "failure/always_lp": 0.06459466367959976,
+    "failure/always_vp": 0.03194912150502205,
+    "failure/improvement_over_best_fixed": 0.41289856892448784,
+    "failure/oracle": 0.016334282234311104,
+    "failure/selector": 0.018757374957203865,
+    "selection/dangerous_branch_rate": 0.037934763020364026,
+    "selection/lp_fraction": 0.1483495980501175
+  },
+  "safety_label_contract": {
+    "capture": "before_control_step_reset",
+    "clearance_limit_m": 0.45,
+    "control_dt_s": 0.02,
+    "failure": "non_timeout_termination_or_torso_contact_or_tilt_or_low_clearance",
+    "ground_max_radius_m": 0.15,
+    "ground_reference": "nearest_valid_height_scan_hit_to_root_xy",
+    "horizon_steps": [
+      50
+    ],
+    "label_order": [
+      "lp_1.0s",
+      "vp_1.0s"
+    ],
+    "missing_measurement": "reject_pair_if_unknown_before_first_failure",
+    "tilt_limit_rad": 0.8,
+    "timeout": "reject_incomplete_horizon;final_step_timeout_is_complete",
+    "torso_contact": "termination_body_force_history_norm_gt_1N",
+    "tracking_error": "audit_only",
+    "version": 3
+  },
+  "samples": 173745,
+  "selector_feature_contract": {
+    "candidate_boundary": "last_feature_snapshot_and_label_start_same_control_boundary",
+    "counterfactual": "hold_requested_branch_for_1s_with_snapshotted_action_blender",
+    "fault_geometry": "physical_xy_metres;bilinear_validity_weighted_height_and_support_v1",
+    "fault_ranges": "exact_configured_bounds_including_zero_v1",
+    "feature_shape": [
+      5,
+      283
+    ],
+    "health": "raw_valid_support;packet_cached_temporal;float64_source_and_packet_time",
+    "mode": "accepted_execution_target;switch_time_before_first_transition_action",
+    "randomness": "row_local_named_streams_v1",
+    "risk_horizon_s": 1.0,
+    "sample_period_s": 0.1,
+    "transition": {
+      "control_dt_s": 0.02,
+      "normal_steps": 5,
+      "switch_kind": "normal_only"
+    },
+    "version": 4
+  },
+  "split": "test"
+}

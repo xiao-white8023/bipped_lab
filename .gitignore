@@ -18,3 +18,7 @@ w?o GRU/
 paper_figures/
 
 # Vendored Unitree SDK source is tracked with this repository.
+
+# Publish the explicitly requested root outputs directory.
+!/outputs/
+!/outputs/**

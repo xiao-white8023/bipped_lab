@@ -1,4 +1,4 @@
-"""Deterministic hard gates, hysteresis, and action transition logic."""
+"""One-second branch risks and ordinary confirmed action transitions."""
 
 from __future__ import annotations
 
@@ -6,14 +6,15 @@ import torch
 
 from .config import RuntimeConfig
 from .contracts import SelectorDecision, SensorHealth
+from .selection import SelectionRule, propose_selection
 
 
 class SelectorStateMachine:
     """Batched online LP/VP choice; mask 1 is LP and mask 0 is VP."""
 
     REASON_HOLD = 0
-    REASON_HARD_TO_LP = 1
-    REASON_HARD_TO_VP = 2
+    REASON_HEALTH_TO_LP = 1
+    REASON_HEALTH_TO_VP = 2
     REASON_RISK_TO_LP = 3
     REASON_RISK_TO_VP = 4
     REASON_TIE_TO_VP = 5
@@ -26,9 +27,12 @@ class SelectorStateMachine:
         device: str | torch.device = "cpu",
         initial_mask: float = 0.0,
         cfg: RuntimeConfig | None = None,
+        selection_rule: SelectionRule | None = None,
     ):
         self.cfg = cfg or RuntimeConfig()
         self.cfg.validate()
+        self.selection_rule = selection_rule or SelectionRule()
+        self.selection_rule.validate()
         self.num_envs = int(num_envs)
         self.device = torch.device(device)
         self.current_mask = torch.full(
@@ -96,11 +100,13 @@ class SelectorStateMachine:
         lp_health: SensorHealth,
         vp_health: SensorHealth,
         now: float | torch.Tensor,
+        *,
+        outcome_probabilities: torch.Tensor | None = None,
     ) -> SelectorDecision:
-        if risks.shape != (self.num_envs, 4):
-            raise ValueError(f"risks must have shape {(self.num_envs, 4)}")
-        if not torch.isfinite(risks).all():
-            raise ValueError("selector risks must be finite")
+        if risks.shape != (self.num_envs, 2):
+            raise ValueError(f"risks must have shape {(self.num_envs, 2)} [LP_1s, VP_1s]")
+        if not torch.isfinite(risks).all() or ((risks < 0) | (risks > 1)).any():
+            raise ValueError("selector risks must be finite probabilities in [0, 1]")
         now_tensor = torch.as_tensor(now, device=self.device, dtype=torch.float64)
         if now_tensor.ndim == 0:
             now_tensor = now_tensor.expand(self.num_envs)
@@ -113,73 +119,30 @@ class SelectorStateMachine:
         vp_available, self.vp_invalid_count = self._availability(
             vp_health, self.vp_invalid_count
         )
-        lp_risk = (
-            self.cfg.short_risk_weight * risks[:, 0]
-            + self.cfg.long_risk_weight * risks[:, 1]
+        desired, both_unreliable = propose_selection(
+            risks, self.current_mask, self.selection_rule,
+            lp_available=lp_available, vp_available=vp_available,
+            outcome_probabilities=outcome_probabilities,
         )
-        vp_risk = (
-            self.cfg.short_risk_weight * risks[:, 2]
-            + self.cfg.long_risk_weight * risks[:, 3]
-        )
-        both_high = (lp_risk >= self.cfg.both_unreliable_risk) & (
-            vp_risk >= self.cfg.both_unreliable_risk
-        )
-        both_unavailable = ~lp_available & ~vp_available
-        both_unreliable = both_high | both_unavailable
 
         old_mask = self.current_mask.clone()
         switched = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-        emergency = torch.zeros_like(switched)
         reason = torch.full(
             (self.num_envs,), self.REASON_HOLD, dtype=torch.long, device=self.device
         )
 
-        using_lp = self.current_mask > 0.5
-        hard_to_vp = using_lp & ~lp_available & vp_available
-        hard_to_lp = ~using_lp & ~vp_available & lp_available
-        if hard_to_vp.any():
-            self.current_mask[hard_to_vp] = 0.0
-            switched[hard_to_vp] = True
-            emergency[hard_to_vp] = True
-            reason[hard_to_vp] = self.REASON_HARD_TO_VP
-        if hard_to_lp.any():
-            self.current_mask[hard_to_lp] = 1.0
-            switched[hard_to_lp] = True
-            emergency[hard_to_lp] = True
-            reason[hard_to_lp] = self.REASON_HARD_TO_LP
-
-        hard_switched = hard_to_vp | hard_to_lp
-        if hard_switched.any():
-            self.last_switch_time[hard_switched] = now_tensor[hard_switched]
-            self.pending_count[hard_switched] = 0
-            self.pending_mask[hard_switched] = self.current_mask[hard_switched]
-
-        eligible = ~hard_switched & ~both_unreliable & lp_available & vp_available
+        # The shared rule owns risk comparison and holds; all proposed targets
+        # still use these ordinary confirmation/dwell gates. Legacy runtime
+        # risk margins remain readable but do not override the fitted rule.
         dwell_ok = (now_tensor - self.last_switch_time) >= self.cfg.min_dwell_s
-        desired = self.current_mask.clone()
         desired_reason = torch.full_like(reason, self.REASON_HOLD)
-        risk_difference = lp_risk - vp_risk
-        tie = risk_difference.abs() <= self.cfg.vp_tie_margin
-        tie_to_vp = eligible & tie & (self.current_mask > 0.5)
-        desired[tie_to_vp] = 0.0
-        desired_reason[tie_to_vp] = self.REASON_TIE_TO_VP
-
-        risk_to_vp = (
-            eligible
-            & (self.current_mask > 0.5)
-            & (vp_risk + self.cfg.switch_margin < lp_risk)
-        )
-        risk_to_lp = (
-            eligible
-            & (self.current_mask <= 0.5)
-            & (lp_risk + self.cfg.switch_margin < vp_risk)
-        )
-        desired[risk_to_vp] = 0.0
-        desired_reason[risk_to_vp] = self.REASON_RISK_TO_VP
-        desired[risk_to_lp] = 1.0
-        desired_reason[risk_to_lp] = self.REASON_RISK_TO_LP
-
-        wants_change = eligible & dwell_ok & (desired != self.current_mask)
+        to_lp = (desired == 1) & (self.current_mask == 0)
+        to_vp = (desired == 0) & (self.current_mask == 1)
+        desired_reason[to_lp] = self.REASON_RISK_TO_LP
+        desired_reason[to_vp] = self.REASON_RISK_TO_VP
+        desired_reason[to_lp & ~vp_available] = self.REASON_HEALTH_TO_LP
+        desired_reason[to_vp & ~lp_available] = self.REASON_HEALTH_TO_VP
+        wants_change = dwell_ok & (desired != self.current_mask)
         same_pending = desired == self.pending_mask
         self.pending_count = torch.where(
             wants_change,
@@ -212,7 +175,6 @@ class SelectorStateMachine:
             vp_available=vp_available[:, None],
             both_unreliable=both_unreliable[:, None],
             switched=switched[:, None],
-            emergency_switch=emergency[:, None],
             reason_code=reason[:, None],
         )
 
@@ -284,7 +246,6 @@ class ActionBlender:
         vp_action: torch.Tensor,
         selected_mask: torch.Tensor,
         switched: torch.Tensor,
-        emergency_switch: torch.Tensor,
     ) -> torch.Tensor:
         expected = (self.num_envs, self.action_dim)
         if lp_action.shape != expected or vp_action.shape != expected:
@@ -298,18 +259,9 @@ class ActionBlender:
         self.initialized[first] = True
 
         switch = switched.reshape(self.num_envs).bool()
-        emergency = emergency_switch.reshape(self.num_envs).bool()
         if switch.any():
             self.start_action[switch] = self.last_output[switch]
-            normal_steps = torch.full_like(
-                self.total[switch], self.cfg.normal_blend_steps
-            )
-            emergency_steps = torch.full_like(
-                self.total[switch], self.cfg.emergency_blend_steps
-            )
-            self.total[switch] = torch.where(
-                emergency[switch], emergency_steps, normal_steps
-            ).clamp_min(1)
+            self.total[switch] = self.cfg.normal_blend_steps
             self.remaining[switch] = self.total[switch]
 
         blending = self.remaining > 0

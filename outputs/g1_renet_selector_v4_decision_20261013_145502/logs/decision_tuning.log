@@ -1,0 +1,99 @@
+[selector decision] reading validation; network and calibration are frozen
+[selector decision] searching directional comparisons on validation only
+[selector decision] searching comparison=probability
+[selector decision] searching comparison=log_odds
+[selector decision] searching comparison=reference_score
+[selector decision] validation accepted=False; frozen rule={'version': 2, 'mode': 'directional_comparison', 'comparison': 'log_odds', 'both_safe_hold_risk': 0.0001, 'both_unreliable_risk': 0.99, 'lp_to_vp_min_current_risk': 0.0, 'vp_to_lp_min_current_risk': 0.0, 'lp_to_vp_max_alternative_risk': 1.0, 'vp_to_lp_max_alternative_risk': 0.9, 'lp_to_vp_margin': 0.25, 'vp_to_lp_margin': 0.25, 'reference_scale': [0.6671445369720459, 0.8602551221847534], 'reference_bias': [2.0690267086029053, 2.907433271408081]}
+[selector decision] reading test for reporting only
+{
+  "accepted_on_validation": false,
+  "checkpoint": "/home/user/TienKung-Lab/outputs/g1_renet_selector_v4_decision_20261013_145502/models/candidate_selector_checkpoint.pt",
+  "guard": {
+    "checks": {
+      "both_failure_switches_not_worse": true,
+      "both_high_hold_enabled": true,
+      "dangerous_count_not_worse": true,
+      "dangerous_rate_at_most_0.03": true,
+      "harmful_switches_not_worse": true,
+      "low_risk_hold_enabled": true,
+      "lp_only_errors_not_worse": false,
+      "missed_rescues_not_worse": false,
+      "vp_only_errors_not_worse": true
+    },
+    "fit_split": "validation",
+    "passed": false,
+    "test_used_for_acceptance": false
+  },
+  "report": "/home/user/TienKung-Lab/outputs/g1_renet_selector_v4_decision_20261013_145502/models/decision_tuning_report.json",
+  "test_candidate": {
+    "auroc/lp_1s": 0.9870814909806855,
+    "auroc/min": 0.9830872957143811,
+    "auroc/vp_1s": 0.9830872957143811,
+    "brier/lp_1s": 0.02108025550842285,
+    "brier/vp_1s": 0.013591730035841465,
+    "calibration/lp_1s_mean_risk": 0.06551039218902588,
+    "calibration/lp_1s_observed_failure_rate": 0.06459466459466459,
+    "calibration/lp_1s_signed_mean_error": 0.0009157275943612875,
+    "calibration/vp_1s_mean_risk": 0.032128531485795975,
+    "calibration/vp_1s_observed_failure_rate": 0.03194912083800973,
+    "calibration/vp_1s_signed_mean_error": 0.00017941064778624616,
+    "coverage/both_failure": 2838,
+    "coverage/both_safe": 159809,
+    "coverage/contrasting_samples": 11098,
+    "coverage/lp_1s_negative": 162522,
+    "coverage/lp_1s_positive": 11223,
+    "coverage/lp_only_failure": 8385,
+    "coverage/samples": 173745,
+    "coverage/vp_1s_negative": 168194,
+    "coverage/vp_1s_positive": 5551,
+    "coverage/vp_only_failure": 2713,
+    "ece/lp_1s": 0.003386019729077816,
+    "ece/max": 0.003386019729077816,
+    "ece/vp_1s": 0.002164700999855995,
+    "failure/always_lp": 0.06459466367959976,
+    "failure/always_vp": 0.03194912150502205,
+    "failure/improvement_over_best_fixed": 0.4235273067789205,
+    "failure/oracle": 0.016334282234311104,
+    "failure/selector": 0.01841779612004757,
+    "selection/both_failure_flag_recall": 0.0,
+    "selection/both_unreliable_flag_count": 0,
+    "selection/both_unreliable_flag_precision": null,
+    "selection/dangerous_branch_count": 362,
+    "selection/dangerous_branch_rate": 0.03261848981798522,
+    "selection/lp_fraction": 0.5897205471992493,
+    "selection/lp_only_failure_correct_count": 8144,
+    "selection/lp_only_failure_wrong_count": 241,
+    "selection/lp_only_failure_wrong_rate": 0.02874180083482409,
+    "selection/vp_only_failure_correct_count": 2592,
+    "selection/vp_only_failure_wrong_count": 121,
+    "selection/vp_only_failure_wrong_rate": 0.044600073719130114,
+    "switch/both_failure_switch_count": 1537,
+    "switch/both_failure_switch_rate": 0.5415785764622973,
+    "switch/both_failure_switch_samples": 2838,
+    "switch/both_safe_switch_count": 36433,
+    "switch/both_safe_switch_rate": 0.2279783992140618,
+    "switch/both_safe_switch_samples": 159809,
+    "switch/correct_rescue_count": 5378,
+    "switch/correct_rescue_rate": 0.966918374685365,
+    "switch/correct_rescue_samples": 5562,
+    "switch/harmful_switch_count": 178,
+    "switch/harmful_switch_rate": 0.032153179190751446,
+    "switch/harmful_switch_samples": 5536,
+    "switch/missed_rescue_count": 184,
+    "switch/missed_rescue_rate": 0.03308162531463502,
+    "switch/missed_rescue_samples": 5562,
+    "switch/request_count": 43526,
+    "switch/request_fraction": 0.2505165636539459,
+    "switch/unnecessary_switch_count": 36611,
+    "switch/unnecessary_switch_rate": 0.2214218754724969,
+    "switch/unnecessary_switch_samples": 165345
+  },
+  "test_checks": {
+    "all_auroc_at_least_0.85": true,
+    "all_ece_at_most_0.05": true,
+    "all_heads_have_class_coverage": true,
+    "both_branch_contrasts_have_coverage": true,
+    "dangerous_branch_rate_at_most_0.03": false
+  }
+}
+[selector decision] no candidate passed: source retained; diagnostic checkpoint only

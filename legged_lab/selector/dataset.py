@@ -96,20 +96,16 @@ class SelectorBatch:
             selector_cfg.frame_dim,
         ):
             raise ValueError("features do not match the [batch, 5, 283] contract")
-        if self.labels.shape != (batch, 4):
-            raise ValueError("labels must have shape [batch, 4]")
+        if self.labels.shape != (batch, 2):
+            raise ValueError("labels must have shape [batch, 2] [LP_1s, VP_1s]")
         if len(self.group_ids) != batch:
             raise ValueError("group_ids length must equal batch size")
         for name in ("terrain_level", "terrain_type", "scenario_seed"):
             if getattr(self, name).reshape(-1).shape[0] != batch:
                 raise ValueError(f"{name} length must equal batch size")
+        if not ((self.labels == 0) | (self.labels == 1)).all():
+            raise ValueError("selector labels must be binary")
         labels = self.labels.bool()
-        if torch.any(labels[:, 0] & ~labels[:, 1]) or torch.any(
-            labels[:, 2] & ~labels[:, 3]
-        ):
-            raise ValueError(
-                "short-horizon failures must also be long-horizon failures"
-            )
         if self.future_metrics is not None and self.future_metrics.shape != (
             batch,
             2,
@@ -173,8 +169,8 @@ class SelectorBatch:
             if (self.first_failure_cause_stable.shape != (batch, 2)
                 or self.first_failure_cause_stable.dtype != torch.bool):
                 raise ValueError("first_failure_cause_stable must be bool [batch, 2]")
-            if not torch.equal(self.first_failure_flags != 0, labels[:, [1, 3]]):
-                raise ValueError("first failure flags must agree with long-horizon labels")
+            if not torch.equal(self.first_failure_flags != 0, labels):
+                raise ValueError("first failure flags must agree with one-second labels")
 
 
 class SelectorDatasetWriter:
@@ -329,13 +325,13 @@ class SelectorDatasetWriter:
         if overlap:
             raise RuntimeError(f"dataset group leakage detected: {sorted(overlap)[:5]}")
         manifest = {
-            "version": 3,
+            "version": 4,
             "execution_metadata_order": ["mode", "dwell_s", "remaining_blend_steps"],
             "feature_shape": [
                 self.selector_cfg.history_frames,
                 self.selector_cfg.frame_dim,
             ],
-            "label_order": ["lp_0.4s", "lp_1.0s", "vp_0.4s", "vp_1.0s"],
+            "label_order": ["lp_1.0s", "vp_1.0s"],
             "future_metric_order_per_branch": list(FUTURE_METRIC_ORDER),
             "counts": self._counts,
             "shards": self._shard_index,
@@ -370,6 +366,10 @@ class SelectorShardDataset(Dataset):
                 f"selector manifest does not exist: {manifest_path}"
             )
         self.manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (self.manifest.get("version") != 4
+                or self.manifest.get("label_order") != ["lp_1.0s", "vp_1.0s"]
+                or self.manifest.get("feature_shape") != [5, 283]):
+            raise ValueError("selector requires V4 one-second / normal-transition data; recollect the dataset")
         self.shards = sorted((self.root / split).glob("shard_*.pt"))
         expected_shards = int(self.manifest["shards"][split])
         if len(self.shards) != expected_shards:

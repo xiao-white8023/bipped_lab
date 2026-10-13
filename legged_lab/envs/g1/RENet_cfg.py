@@ -61,7 +61,7 @@ import legged_lab
 LEGGED_LAB_ROOT = os.path.dirname(legged_lab.__file__)
 # AMP 格式开关：50 = 原始 PKL 四段的 no_ankle 格式；58 = 原 v3（全部 23 个关节）。
 # 只修改这一行，环境特征、数据路径、加载器和判别器维度会同步切换。
-G1_RENET_AMP_DIM = 50
+G1_RENET_AMP_DIM = 58
 if type(G1_RENET_AMP_DIM) is not int or G1_RENET_AMP_DIM not in (50, 58):
     raise ValueError("G1_RENET_AMP_DIM must be 50 or 58.")
 G1_RENET_AMP_DATASET_NAME = (
@@ -187,7 +187,7 @@ class Reward:
     )
     feet_air_time = RewTerm(
         func=mdp.feet_air_time_positive_biped,
-        weight=0.15,
+        weight=0.2,
         params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names=".*ankle_roll.*"), "threshold": 0.4},
     )
     # 两种模式共用：脚接触后，按足底采样点的支撑不足比例处罚。
@@ -219,7 +219,7 @@ class Reward:
     )
     joint_deviation_ankle = RewTerm(
         func=mdp.joint_deviation_l1_always,
-        weight=-0.4,
+        weight=-0.2,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=[".*_ankle.*"])},
     )
     joint_deviation_arms = RewTerm(
@@ -744,8 +744,10 @@ class G1RENETAGENTCFG:
     # AMP files use the selected 50/58-D training layout, not the 58-D preview layout.
     # 50-D: keep each original clip's MotionWeight=0.5; normalized sampling is 25% each.
     amp_motion_files = [
-        f"{G1_RENET_AMP_MOTION_DIR}/{name}.txt"
-        for name in G1_RENET_AMP_CLIP_NAMES
+    "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/make_g1_23dof/training/amp_full/walk_backward_20s.txt",
+    "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/make_g1_23dof/training/amp_full/walk_left_20s.txt",
+    "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/make_g1_23dof/training/amp_full/walk_right_20s.txt",
+    "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/make_g1_23dof/training/amp_full/walk_turns_40s.txt"
     ]
     amp_num_preload_transitions = 200000 
     # Discriminator 实际执行加权相加：

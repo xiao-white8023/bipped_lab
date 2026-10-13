@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Usage: bash legged_lab/scripts/run_selector_temporal_pilot.sh [lp_map vp_hard dual recovery]
+# Usage: bash legged_lab/selector/run_selector_temporal_pilot.sh [lp_map vp_hard dual recovery]
 set -euo pipefail
 
 selector_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd -- "$selector_script_dir/../.."
 
 export PYTHONUNBUFFERED=1
-export SELECTOR_BASE="${SELECTOR_BASE:-$PWD/outputs/g1_renet_selector_v3_label_replay_full1048576/dataset}"
-export SELECTOR_TERRAIN="${SELECTOR_TERRAIN:-$PWD/outputs/g1_renet_selector_v3_severity_103060/terrain_distribution.json}"
+export SELECTOR_BASE="${SELECTOR_BASE:-$PWD/outputs/g1_renet_selector_v4_1s_normal/dataset}"
+export SELECTOR_TERRAIN="${SELECTOR_TERRAIN:-$PWD/outputs/g1_renet_selector_v4_1s_normal/terrain_distribution.json}"
 export SELECTOR_CHECKPOINT="${SELECTOR_CHECKPOINT:-/data/Tienkung_lab/logs/g1_renet/2026-09-10_19-25-08/model_60000.pt}"
 export SELECTOR_REFERENCE="${SELECTOR_REFERENCE:-$PWD/Exported_policy/policy.pt}"
 export SELECTOR_TEMPORAL_RUN="${SELECTOR_TEMPORAL_RUN:-$PWD/outputs/g1_renet_selector_temporal_pilot_$(date +%Y%m%d_%H%M%S)}"
@@ -92,8 +92,7 @@ temporal = report["supplement_coverage"]["temporal_coverage"]
 assert temporal["collection_elapsed_s"] + 1e-6 >= 30, "Temporal span missing"
 assert sum(temporal["written"]) == 8192, "Temporal audit misaligned"
 print("Verified:", root)
-print("0.4s:", report["overall"]["pair_counts"][0])
-print("1.0s:", report["overall"]["pair_counts"][1])
+print("1.0s:", report["overall"]["pair_counts"][0])
 print("Real sample span:", temporal["collection_elapsed_s"])
 print("Written stages:", dict(zip(temporal["lifecycle_order"], temporal["written"])))
 print("Missing observed stages:", temporal["missing_observed_stages"])

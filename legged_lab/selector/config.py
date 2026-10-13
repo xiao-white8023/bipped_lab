@@ -29,13 +29,13 @@ class FaultConfig:
     min_recovery_frames: int = 5
     max_recovery_frames: int = 30
     max_dual_stagger_frames: int = 10
-    vp_occlusion_fraction: tuple[float, float] = (0.1, 0.70)
-    vp_scale_range: tuple[float, float] = (0.85, 1.15)
+    vp_occlusion_fraction: tuple[float, float] = (0.1, 1.0)
+    vp_scale_range: tuple[float, float] = (0.75, 1.25)
     vp_bias_m_range: tuple[float, float] = (-0.20, 0.20)
     vp_max_shift_pixels: int = 3
     vp_depth_max_m: float = 2.5
-    lp_dropout_fraction: tuple[float, float] = (0.10, 0.70)
-    lp_block_fraction: tuple[float, float] = (0.10, 0.50)
+    lp_dropout_fraction: tuple[float, float] = (0.10, 1.0)
+    lp_block_fraction: tuple[float, float] = (0.10, 1.0)
     lp_height_bias_m_range: tuple[float, float] = (-0.15, 0.15)
     lp_translation_range_m: tuple[float, float] = (-0.20, 0.20)
     lp_resolution_m: float = 0.1
@@ -157,7 +157,7 @@ class SelectorConfig:
     frame_hidden_dims: tuple[int, int] = (256, 128)
     gru_hidden_dim: int = 128
     head_hidden_dim: int = 64
-    output_dim: int = 4
+    output_dim: int = 2
 
     def expected_frame_dim(self) -> int:
         return (
@@ -176,18 +176,16 @@ class SelectorConfig:
             raise ValueError(
                 f"selector frame_dim={self.frame_dim}, expected {expected}"
             )
-        if self.output_dim != 4:
-            raise ValueError("selector output must be LP/VP x short/long = 4")
+        if self.output_dim != 2:
+            raise ValueError("selector output must be [LP_1s, VP_1s] = 2")
         if self.history_frames != 5:
             raise ValueError("selector history must contain five 10 Hz frames")
 
 
 @dataclass(frozen=True)
 class RuntimeConfig:
-    """Deterministic hysteresis and hard-health policy."""
+    """One-second risks with confirmation, dwell and ordinary transitions."""
 
-    short_risk_weight: float = 0.65
-    long_risk_weight: float = 0.35
     sensor_timeout_s: float = 0.30
     min_valid_ratio: float = 0.05
     invalid_confirmations: int = 2
@@ -197,11 +195,8 @@ class RuntimeConfig:
     vp_tie_margin: float = 0.05
     both_unreliable_risk: float = 0.70
     normal_blend_steps: int = 5
-    emergency_blend_steps: int = 2
 
     def validate(self) -> None:
-        if abs(self.short_risk_weight + self.long_risk_weight - 1.0) > 1.0e-6:
-            raise ValueError("risk weights must sum to one")
         if self.sensor_timeout_s <= 0 or self.min_dwell_s < 0:
             raise ValueError("runtime times must be nonnegative")
         for value in (
@@ -217,7 +212,6 @@ class RuntimeConfig:
                 self.invalid_confirmations,
                 self.switch_confirmations,
                 self.normal_blend_steps,
-                self.emergency_blend_steps,
             )
             < 1
         ):
@@ -241,8 +235,7 @@ class CollectionConfig:
     num_envs: int = 4096
     target_samples: int = 1_048_576
     shard_size: int = 8192
-    short_horizon_steps: int = 20
-    long_horizon_steps: int = 50
+    horizon_steps: int = 50
     max_train_terrain_level: int = 6
     ood_terrain_levels: tuple[int, int, int] = (7, 8, 9)
     split_probabilities: tuple[float, float, float] = (0.70, 0.15, 0.15)
@@ -259,8 +252,8 @@ class CollectionConfig:
             raise ValueError(
                 "the approved selector collector uses exactly 4096 environments"
             )
-        if self.short_horizon_steps != 20 or self.long_horizon_steps != 50:
-            raise ValueError("horizons must be 0.4 s and 1.0 s at 50 Hz")
+        if self.horizon_steps != 50:
+            raise ValueError("selector horizon must be 1.0 s (50 control steps)")
         if self.target_samples <= 0 or self.shard_size <= 0:
             raise ValueError("collection sizes must be positive")
         if self.candidate_stride_steps != 5:

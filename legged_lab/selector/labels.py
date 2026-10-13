@@ -1,28 +1,4 @@
-# 中文导读
-# 文件用途：用 reset 前的仿真真实状态生成 LP/VP 在 0.4 秒和 1 秒内的安全失败标签。
-# 使用位置：collector 采集标签；dataset 使用审计列定义；训练、评估和导出检查标签版本。
-# 说明：版本 2 使用机身投影附近地面，拒绝未知测量和提前超时；跟踪误差只作审计。
-# 说明：真实安全指标只生成监督标签，不进入 selector 输入；reset 钩子只在采集单步期间存在。
-#
-# 类、函数及方法说明（包含私有方法、内部函数和属性访问器）：
-# - safety_label_contract：返回当前标签版本、时间窗、测量方式、失败阈值及无效样本处理约定。
-# - validate_safety_label_contract：要求标签约定与当前版本完全一致，拒绝旧版本或缺失的约定。
-# - dataset_safety_label_contract：从数据清单元数据中读取并校验标签约定。
-# - SafetyStepMetrics：保存完成一个控制步后、尚未 reset 时的倾角、高度、跟踪误差和接触等指标。
-# - local_clearance：在机身投影附近寻找最近有效扫描点，计算相对地面高度及测量有效标记。
-# - capture_safety_step：读取真实机器人状态、地面和躯干接触历史，计算安全指标并检查有限性。
-# - step_with_safety_capture：临时包装环境 reset，在原 step 的 reset 边界采样，并保证退出时恢复原方法。
-# - step_with_safety_capture.capture_and_reset：内部回调，先捕获所有环境的安全指标，再调用原 reset。
-# - RolloutOutcome：保存两个时间窗的标签、首次失败及 reset 时间、有效性和连续审计指标。
-# - RolloutOutcome.metrics：按固定列顺序将 rollout 审计信息堆叠成张量，供数据集保存。
-# - SafetyOutcomeAccumulator：逐步累计一个候选分支的未来安全结果，屏蔽 reset 后的新 episode。
-# - SafetyOutcomeAccumulator.__init__：设置环境数、设备、短长时间窗及失败阈值，并初始化累计状态。
-# - SafetyOutcomeAccumulator.reset：清空标签、计数、首次事件时间和最大/最小审计指标。
-# - SafetyOutcomeAccumulator.update：处理当前安全指标、终止和超时，累计失败并标记未知或截断样本。
-# - SafetyOutcomeAccumulator.outcome：要求完成配置的 rollout 步数，返回短失败必然包含于长失败的结果副本。
-# 中文导读结束
-
-"""Safety outcome aggregation for 0.4 s and 1.0 s counterfactual rollouts."""
+"""Safety outcomes for one-second counterfactual rollouts."""
 
 from __future__ import annotations
 
@@ -54,8 +30,9 @@ def safety_label_contract() -> dict[str, Any]:
     """Version the physical meaning of labels, independently of policy hashes."""
 
     return {
-        "version": 2,
-        "horizon_steps": [20, 50],
+        "version": 3,
+        "horizon_steps": [50],
+        "label_order": ["lp_1.0s", "vp_1.0s"],
         "control_dt_s": 0.02,
         "capture": "before_control_step_reset",
         "ground_reference": "nearest_valid_height_scan_hit_to_root_xy",
@@ -178,8 +155,7 @@ def step_with_safety_capture(env: Any, actions: torch.Tensor, command: torch.Ten
 
 @dataclass
 class RolloutOutcome:
-    fail_short: torch.Tensor
-    fail_long: torch.Tensor
+    fail_1s: torch.Tensor
     first_failure_step: torch.Tensor
     first_reset_step: torch.Tensor
     max_tilt: torch.Tensor
@@ -220,26 +196,23 @@ class SafetyOutcomeAccumulator:
         num_envs: int,
         *,
         device: str | torch.device,
-        short_horizon_steps: int = 20,
-        long_horizon_steps: int = 50,
+        horizon_steps: int = 50,
         tilt_limit_rad: float = TILT_LIMIT_RAD,
         clearance_limit_m: float = CLEARANCE_LIMIT_M,
     ):
         self.num_envs = int(num_envs)
         self.device = torch.device(device)
-        self.short_horizon_steps = int(short_horizon_steps)
-        self.long_horizon_steps = int(long_horizon_steps)
+        self.horizon_steps = int(horizon_steps)
         self.tilt_limit_rad = float(tilt_limit_rad)
         self.clearance_limit_m = float(clearance_limit_m)
-        if not 0 < self.short_horizon_steps <= self.long_horizon_steps:
-            raise ValueError("invalid selector label horizons")
+        if type(horizon_steps) is not int or horizon_steps != 50:
+            raise ValueError("selector labels require a one-second / 50-step horizon")
         self.reset()
 
     def reset(self) -> None:
         n = self.num_envs
         self.step_index = 0
-        self.fail_short = torch.zeros(n, dtype=torch.bool, device=self.device)
-        self.fail_long = torch.zeros(n, dtype=torch.bool, device=self.device)
+        self.fail_1s = torch.zeros(n, dtype=torch.bool, device=self.device)
         self.first_failure_step = torch.full((n,), -1, dtype=torch.long, device=self.device)
         self.first_failure_flags = torch.zeros(n, dtype=torch.uint8, device=self.device)
         self.first_reset_step = torch.full((n,), -1, dtype=torch.long, device=self.device)
@@ -260,7 +233,7 @@ class SafetyOutcomeAccumulator:
         dones: torch.Tensor,
         time_outs: torch.Tensor,
     ) -> None:
-        if self.step_index >= self.long_horizon_steps:
+        if self.step_index >= self.horizon_steps:
             raise RuntimeError("outcome accumulator received more than the configured horizon")
         for name in SafetyStepMetrics.__dataclass_fields__:
             if getattr(metrics, name).shape != (self.num_envs,):
@@ -276,15 +249,15 @@ class SafetyOutcomeAccumulator:
         torso_contact = metrics.torso_contact.bool()
         active = ~self.finished
         self.observed_steps += active.long()
-        # Once failure is observed, both horizon outcomes are determined.
+        # Once failure is observed, the one-second failure label is determined.
         # Before that point, missing measurements cannot establish safety.
-        unknown = active & ~self.fail_long & ~measurement_valid
+        unknown = active & ~self.fail_1s & ~measurement_valid
         newly_invalid = unknown & (self.first_invalid_step < 0)
         self.first_invalid_step[newly_invalid] = self.step_index + 1
         self.label_valid &= ~unknown
         timed_out = active & time_outs
         self.first_timeout_step[timed_out] = self.step_index + 1
-        if self.step_index + 1 < self.long_horizon_steps:
+        if self.step_index + 1 < self.horizon_steps:
             self.label_valid &= ~timed_out
         failure = active & (
             non_timeout_termination
@@ -303,9 +276,7 @@ class SafetyOutcomeAccumulator:
         self.first_failure_flags[newly_failed] = flags[newly_failed]
         newly_reset = active & dones.bool()
         self.first_reset_step[newly_reset] = self.step_index + 1
-        if self.step_index < self.short_horizon_steps:
-            self.fail_short |= failure
-        self.fail_long |= failure
+        self.fail_1s |= failure
         measured = active & measurement_valid
         self.max_tilt = torch.where(measured, torch.maximum(self.max_tilt, tilt), self.max_tilt)
         self.min_clearance = torch.where(
@@ -322,15 +293,12 @@ class SafetyOutcomeAccumulator:
         self.step_index += 1
 
     def outcome(self) -> RolloutOutcome:
-        if self.step_index != self.long_horizon_steps:
+        if self.step_index != self.horizon_steps:
             raise RuntimeError(
-                f"rollout ended after {self.step_index} steps, expected {self.long_horizon_steps}"
+                f"rollout ended after {self.step_index} steps, expected {self.horizon_steps}"
             )
-        # By construction any short failure is also a long failure.
-        self.fail_long |= self.fail_short
         return RolloutOutcome(
-            fail_short=self.fail_short.clone(),
-            fail_long=self.fail_long.clone(),
+            fail_1s=self.fail_1s.clone(),
             first_failure_step=self.first_failure_step.clone(),
             first_reset_step=self.first_reset_step.clone(),
             max_tilt=self.max_tilt.clone(),

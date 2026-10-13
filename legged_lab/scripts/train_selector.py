@@ -30,6 +30,7 @@ if str(REPO_ROOT) not in sys.path:
 from legged_lab.selector.config import SelectorConfig, TrainingConfig  # noqa: E402
 from legged_lab.selector.dataset import ShardBatchSampler, SelectorShardDataset, verify_dataset_no_group_leak  # noqa: E402
 from legged_lab.selector.metrics import json_safe_metrics, selector_metrics  # noqa: E402
+from legged_lab.selector.selection import current_mask_from_features, fit_selection_rule  # noqa: E402
 from legged_lab.selector.frozen_policy import dataset_policy_identity  # noqa: E402
 from legged_lab.selector.labels import dataset_safety_label_contract  # noqa: E402
 from legged_lab.selector.feature_contract import dataset_feature_contract  # noqa: E402
@@ -38,6 +39,8 @@ from legged_lab.selector.model import (  # noqa: E402
     CalibratedSelector,
     FeatureNormalizer,
     SelectorNetwork,
+    calibrate_probabilities,
+    fit_affine_calibration,
     fit_temperatures,
     weighted_binary_cross_entropy,
 )
@@ -92,7 +95,7 @@ def fit_normalizer_and_weights(
     total = torch.zeros(frame_dim, dtype=torch.float64)
     total_square = torch.zeros(frame_dim, dtype=torch.float64)
     count = torch.zeros(frame_dim, dtype=torch.float64)
-    positive = torch.zeros(4, dtype=torch.float64)
+    positive = torch.zeros(2, dtype=torch.float64)
     samples = 0
     for batch in loader:
         features = batch["features"].reshape(-1, frame_dim).double()
@@ -112,7 +115,7 @@ def fit_normalizer_and_weights(
     negative = samples - positive
     invalid_heads = (positive == 0) | (negative == 0)
     if invalid_heads.any():
-        names = ("lp_short", "lp_long", "vp_short", "vp_long")
+        names = ("lp_1s", "vp_1s")
         missing = [names[i] for i in invalid_heads.nonzero().flatten().tolist()]
         raise ValueError(
             f"training labels need both safe and failed samples for {missing}; "
@@ -129,22 +132,25 @@ def evaluate(
     loader: DataLoader,
     positive_weights: torch.Tensor,
     device: torch.device,
-) -> tuple[float, torch.Tensor, torch.Tensor]:
+) -> tuple[float, torch.Tensor, torch.Tensor, torch.Tensor]:
     model.eval()
     total_loss = 0.0
     total_samples = 0
     probabilities = []
     labels = []
+    current_masks = []
     for batch in loader:
         features = batch["features"].to(device, non_blocking=True)
         target = batch["labels"].to(device, non_blocking=True)
+        current_masks.append(current_mask_from_features(batch["features"]).cpu())
         probability = model(normalizer(features))
         loss = weighted_binary_cross_entropy(probability, target, positive_weights)
         total_loss += float(loss) * features.shape[0]
         total_samples += features.shape[0]
         probabilities.append(probability.cpu())
         labels.append(target.cpu())
-    return total_loss / max(total_samples, 1), torch.cat(probabilities), torch.cat(labels)
+    return (total_loss / max(total_samples, 1), torch.cat(probabilities),
+            torch.cat(labels), torch.cat(current_masks))
 
 
 def train_seed(
@@ -191,7 +197,7 @@ def train_seed(
             scaler.update()
             epoch_loss += float(loss.detach()) * features.shape[0]
             epoch_samples += features.shape[0]
-        validation_loss, _, _ = evaluate(
+        validation_loss, _, _, _ = evaluate(
             model, normalizer, validation_loader, positive_weights, device
         )
         record = {
@@ -215,24 +221,38 @@ def train_seed(
     if best_state is None:
         raise RuntimeError("selector training did not produce a checkpoint")
     model.load_state_dict(best_state)
-    validation_loss, validation_probability, validation_labels = evaluate(
+    validation_loss, validation_probability, validation_labels, validation_masks = evaluate(
         model, normalizer, validation_loader, positive_weights, device
     )
-    temperatures = fit_temperatures(
-        validation_probability.to(device), validation_labels.to(device)
-    ).cpu()
-    calibrated = CalibratedSelector(model, normalizer, temperatures.to(device)).to(device).eval()
+    temperatures, biases, calibration = fit_affine_calibration(
+        validation_probability.to(device), validation_labels.to(device),
+        positive_weights=positive_weights,
+    )
+    fitted_validation = calibrate_probabilities(validation_probability.to(device), temperatures, biases)
+    legacy_t = fit_temperatures(validation_probability.to(device), validation_labels.to(device))
+    reference_scale = temperatures / legacy_t
+    reference_bias = -biases * reference_scale
+    rule, rule_fit = fit_selection_rule(
+        fitted_validation, validation_labels.to(device), validation_masks.to(device),
+        baseline_probabilities=calibrate_probabilities(validation_probability.to(device), legacy_t, torch.zeros_like(legacy_t)),
+        reference_scale=tuple(reference_scale.tolist()), reference_bias=tuple(reference_bias.tolist()),
+    )
+    temperatures, biases = temperatures.cpu(), biases.cpu()
+    calibrated = CalibratedSelector(model, normalizer, temperatures, biases).to(device).eval()
     split_metrics: dict[str, float] = {}
     for split_name, loader in (("validation", validation_loader), ("test", test_loader), *stress_loaders):
         split_probabilities = []
         split_labels = []
+        split_masks = []
         with torch.no_grad():
             for batch in loader:
                 features = batch["features"].to(device, non_blocking=True)
                 split_probabilities.append(calibrated(features).cpu())
                 split_labels.append(batch["labels"].float())
+                split_masks.append(current_mask_from_features(batch["features"]))
         measured = selector_metrics(
-            torch.cat(split_probabilities), torch.cat(split_labels)
+            torch.cat(split_probabilities), torch.cat(split_labels),
+            current_mask=torch.cat(split_masks), selection_rule=rule,
         )
         split_metrics.update(
             {f"{split_name}/{name}": value for name, value in measured.items()}
@@ -240,8 +260,9 @@ def train_seed(
     metrics = split_metrics
     metrics["validation/loss"] = validation_loss
     metrics["training/epochs"] = float(len(history))
+    metrics["validation/decision_guard_passed"] = float(rule_fit["guard"]["passed"])
     artifact = {
-        "version": 2,
+        "version": 4,
         "seed": seed,
         "selector_config": asdict(selector_cfg),
         "training_config": asdict(train_cfg),
@@ -251,6 +272,10 @@ def train_seed(
         "model_state_dict": model.cpu().state_dict(),
         "normalizer_state_dict": normalizer.cpu().state_dict(),
         "temperatures": temperatures,
+        "calibration_biases": biases,
+        "calibration": calibration,
+        "selection_rule": rule.to_dict(),
+        "selection_rule_fit": rule_fit,
         "positive_weights": positive_weights.cpu(),
         "metrics": metrics,
         "history": history,
@@ -334,6 +359,7 @@ def main() -> None:
         )
     results.sort(
         key=lambda item: (
+            not bool(item[1]["validation/decision_guard_passed"]),
             (item[1]["validation/selection/dangerous_branch_rate"]
              if math.isfinite(item[1]["validation/selection/dangerous_branch_rate"])
              else float("inf")),
@@ -341,9 +367,11 @@ def main() -> None:
         )
     )
     best_path, best_metrics = results[0]
-    final_path = args.output / "lp_vp_selector_checkpoint.pt"
+    accepted = bool(best_metrics["validation/decision_guard_passed"])
+    final_path = args.output / ("lp_vp_selector_checkpoint.pt" if accepted else "candidate_selector_checkpoint.pt")
     shutil.copy2(best_path, final_path)
     summary = {
+        "decision_guard_passed": accepted,
         "selected": best_path.name,
         "final_artifact": final_path.name,
         "metrics": best_metrics,
