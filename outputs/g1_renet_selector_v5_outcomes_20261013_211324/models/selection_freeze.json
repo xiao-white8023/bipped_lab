@@ -1,0 +1,49 @@
+{
+  "accepted_on_validation": false,
+  "checkpoint": "/home/user/TienKung-Lab/outputs/g1_renet_selector_v5_outcomes_20261013_211324/models/candidate_selector_checkpoint.pt",
+  "checkpoint_sha256_before_test": "f5dc8b227b5fee82d3ee7d8f6bd31eb727fe65bb9943b6a1caf07b89e066dd90",
+  "decision_guard": {
+    "checks": {
+      "all_four_outcomes_have_coverage": true,
+      "both_branch_contrasts_have_coverage": true,
+      "both_failure_hold_effective": true,
+      "both_failure_switch_rate_within_target": false,
+      "both_failure_switches_not_worse": true,
+      "both_failure_warning_precision_within_target": true,
+      "both_failure_warning_recall_within_target": true,
+      "both_safe_switch_rate_within_target": false,
+      "dangerous_branch_rate_within_target": true,
+      "dangerous_count_not_worse": true,
+      "harmful_switches_not_worse": true,
+      "joint_failure_probability_calibrated": true,
+      "low_risk_hold_effective": false,
+      "lp_only_errors_not_worse": true,
+      "missed_rescues_not_worse": false,
+      "risk_auroc_at_least_0.85": true,
+      "risk_ece_at_most_0.05": true,
+      "vp_only_errors_not_worse": true
+    },
+    "fit_split": "validation",
+    "passed": false,
+    "requirements": {
+      "max_both_failure_switch_rate": 0.1,
+      "max_both_safe_switch_rate": 0.05,
+      "max_dangerous_rate": 0.03,
+      "min_both_failure_precision": 0.5,
+      "min_both_failure_recall": 0.8,
+      "min_class_samples": 20,
+      "min_contrast_samples": 50
+    },
+    "test_used_for_acceptance": false
+  },
+  "selected": "outcome_seed_42_snapshot_1.pt",
+  "selection_priority": [
+    "guard_passed",
+    "fewest_failed_validation_guards",
+    "fewest_dangerous_choices",
+    "lowest_worst_direction_error_rate",
+    "fewest_missed_rescues",
+    "fewest_redundant_requests"
+  ],
+  "test_used_for_selection": false
+}

@@ -2,58 +2,15 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
-from enum import IntEnum
 import math
 import torch
 import torch.nn.functional as F
 from .config import FaultConfig
 from .randomness import PerEnvironmentRNG
 from .lp_map_faults import ElevationMapFaults, NOISE_AUDIT_ORDER
-
-
-class FaultKind(IntEnum):
-    NONE = 0
-    FREEZE = 1
-    DELAY = 2
-    VP_OCCLUSION = 3
-    VP_SCALE = 4
-    VP_BIAS = 5
-    VP_SHIFT = 6
-    VP_COLLAPSE = 7
-    LP_RANDOM_DROPOUT = 8
-    LP_BLOCK_DROPOUT = 9
-    LP_HEIGHT_BIAS = 10
-    LP_REGISTRATION = 11
-    LP_DRIFT = 12
-    LP_COLLAPSE = 13
-    LP_MAP_DRIFT = 14
-    LP_PERSON = 15
-    LP_COMPOUND = 16
-    VP_COMPOUND = 17
-    VP_BURST = 18
-
-
-VP_FAULTS = (
-    FaultKind.FREEZE,
-    FaultKind.DELAY,
-    FaultKind.VP_OCCLUSION,
-    FaultKind.VP_SCALE,
-    FaultKind.VP_BIAS,
-    FaultKind.VP_SHIFT,
-    FaultKind.VP_COLLAPSE,
-)
-LP_FAULTS = (
-    FaultKind.FREEZE,
-    FaultKind.DELAY,
-    FaultKind.LP_RANDOM_DROPOUT,
-    FaultKind.LP_BLOCK_DROPOUT,
-    FaultKind.LP_HEIGHT_BIAS,
-    FaultKind.LP_REGISTRATION,
-    FaultKind.LP_DRIFT,
-    FaultKind.LP_COLLAPSE,
-)
-EXTENDED_LP_FAULTS = LP_FAULTS + (FaultKind.LP_MAP_DRIFT, FaultKind.LP_PERSON, FaultKind.LP_COMPOUND)
-EXTENDED_VP_FAULTS = VP_FAULTS + (FaultKind.VP_COMPOUND, FaultKind.VP_BURST)
+from .fault_kinds import (FaultKind, VP_FAULTS, LP_FAULTS, EXTENDED_LP_FAULTS,
+                          EXTENDED_VP_FAULTS, STRUCTURED_VP_FAULTS)
+from .vp_faults import DepthFrameFaults
 
 
 @dataclass
@@ -62,6 +19,7 @@ class FaultSnapshot:
     cursor: torch.Tensor
     generator_state: torch.Tensor
     map_state: dict[str, torch.Tensor] | None = None
+    vp_state: dict[str, torch.Tensor] | None = None
 
 
 @dataclass
@@ -117,6 +75,7 @@ class SelectorFaultManager:
             "vp_shift_y",
             "schedule_count",
             "vp_burst_on_frames", "vp_burst_off_frames",
+            "lp_severity", "vp_severity", "lp_last_effect_frame", "vp_last_effect_frame",
         )
         scalar = (
             "vp_scale",
@@ -127,6 +86,7 @@ class SelectorFaultManager:
             "lp_yaw",
             "lp_drift_yaw",
             "lp_height_velocity",
+            "lp_strength", "vp_strength",
         )
         for name in integer:
             setattr(self, name, torch.zeros(n, dtype=torch.long, device=self.device))
@@ -143,7 +103,9 @@ class SelectorFaultManager:
         self.lp_buffer = torch.full(
             (n, capacity, *lp_shape), self.cfg.lp_invalid_height, device=self.device
         )
-        self.vp_buffer = torch.ones(n, capacity, *vp_shape, device=self.device)
+        # Structured VP owns its capture ring; keep no duplicate legacy images.
+        vp_capacity = 0 if self.cfg.structured_vp_faults else capacity
+        self.vp_buffer = torch.ones(n, vp_capacity, *vp_shape, device=self.device)
         self.lp_valid_buffer = torch.zeros_like(self.lp_buffer)
         self.vp_valid_buffer = torch.zeros_like(self.vp_buffer)
         self.lp_time_buffer = torch.zeros(
@@ -154,7 +116,7 @@ class SelectorFaultManager:
         self.vp_packet_buffer = torch.zeros_like(self.lp_time_buffer)
         self.buffer_initialized = torch.zeros(n, device=self.device, dtype=torch.bool)
         self.lp_frozen = self.lp_buffer[:, 0].clone()
-        self.vp_frozen = self.vp_buffer[:, 0].clone()
+        self.vp_frozen = torch.ones(n, *vp_shape, device=self.device)
         self.lp_frozen_valid = torch.zeros_like(self.lp_frozen)
         self.vp_frozen_valid = torch.zeros_like(self.vp_frozen)
         self.lp_frozen_time = torch.zeros(n, device=self.device, dtype=torch.float64)
@@ -164,8 +126,12 @@ class SelectorFaultManager:
         self.lp_freeze_initialized = torch.zeros_like(self.buffer_initialized)
         self.vp_freeze_initialized = torch.zeros_like(self.buffer_initialized)
         self.vp_observed_effect = torch.zeros_like(self.buffer_initialized)
+        self.vp_source_observed_effect = torch.zeros_like(self.buffer_initialized)
+        self.lp_observed_effect = torch.zeros_like(self.buffer_initialized)
         self.map_faults = (ElevationMapFaults(n, lp_shape, self.device, self.cfg, self.generator)
                            if self.cfg.extended_faults else None)
+        self.vp_faults = (DepthFrameFaults(n, vp_shape, self.device, self.cfg, self.generator)
+                          if self.cfg.structured_vp_faults else None)
         self.cursor = torch.full((n,), -1, device=self.device, dtype=torch.long)
         self._SNAPSHOT_TENSORS = tuple(
             name
@@ -174,14 +140,14 @@ class SelectorFaultManager:
         )
         self.reset()
 
-    def _severity_strength(self, ids, shape=()):
-        level = self.severity[ids]
+    def _severity_strength(self, ids, shape=(), *, branch=None):
+        level = (self.severity if branch is None else getattr(self, branch+"_severity"))[ids]
         lo = level.float().reshape(-1, *([1] * len(shape))) * 0.35
         level = level.reshape(-1, *([1] * len(shape)))
         hi = torch.where(level == 2, 1.0, lo + 0.35)
         return lo + (hi - lo) * self.generator.uniform(ids, shape)
 
-    def _signed_range(self, ids, bounds, *, neutral=0.0, shape=()):
+    def _signed_range(self, ids, bounds, *, neutral=0.0, shape=(), branch=None):
         """Sample within exact bounds; severity measures distance from neutral.
 
         The nearest allowed value is the anchor for one-sided bounds. Equal
@@ -196,7 +162,7 @@ class SelectorFaultManager:
         elif anchor == high:
             choose_low = torch.ones_like(choose_low)
         endpoint = torch.where(choose_low, low, high)
-        return anchor + self._severity_strength(ids, shape) * (endpoint - anchor)
+        return anchor + self._severity_strength(ids, shape, branch=branch) * (endpoint - anchor)
 
     def _schedule(self, ids, initial=False):
         if len(ids) == 0:
@@ -205,12 +171,15 @@ class SelectorFaultManager:
         self.severity[ids] = self.generator.categorical(
             self.cfg.severity_probabilities, ids
         )
+        self.lp_severity[ids] = self.vp_severity[ids] = self.severity[ids]
         self.lp_kind[ids] = 0
         self.vp_kind[ids] = 0
+        vp_kinds = (STRUCTURED_VP_FAULTS if self.cfg.structured_vp_faults
+                    else EXTENDED_VP_FAULTS if self.cfg.extended_faults else VP_FAULTS)
         for flags, kinds, target, weights in (
             ((scenario == 2) | (scenario == 3), EXTENDED_LP_FAULTS if self.cfg.extended_faults else LP_FAULTS,
              self.lp_kind, self.cfg.lp_kind_weights),
-            ((scenario == 1) | (scenario == 3), EXTENDED_VP_FAULTS if self.cfg.extended_faults else VP_FAULTS,
+            ((scenario == 1) | (scenario == 3), vp_kinds,
              self.vp_kind, self.cfg.vp_kind_weights),
         ):
             chosen = ids[flags]
@@ -222,6 +191,15 @@ class SelectorFaultManager:
         lo = level.float() * 0.35
         hi = torch.where(level == 2, 1.0, lo + 0.35)
         strength = lo + (hi - lo) * self.generator.uniform(ids)
+        lp_strength, vp_strength = strength.clone(), strength.clone()
+        dual = ids[scenario == 3]
+        if self.cfg.independent_dual_faults:
+            self.lp_severity[dual] = self.generator.categorical(self.cfg.severity_probabilities, dual)
+            self.vp_severity[dual] = self.generator.categorical(self.cfg.severity_probabilities, dual)
+            self.severity[dual] = torch.maximum(self.lp_severity[dual], self.vp_severity[dual])
+            lp_strength[scenario == 3] = self._severity_strength(dual, branch="lp")
+            vp_strength[scenario == 3] = self._severity_strength(dual, branch="vp")
+        self.lp_strength[ids], self.vp_strength[ids] = lp_strength, vp_strength
         delay = (
             self.generator.randint(0, self.cfg.max_start_delay_frames + 1, ids)
             if initial
@@ -230,20 +208,26 @@ class SelectorFaultManager:
         self.start_frame[ids] = self.step_count[ids] + delay
         span = self.cfg.max_duration_frames - self.cfg.min_duration_frames
         self.duration_frames[ids] = (
-            self.cfg.min_duration_frames + torch.round(strength * span).long()
+            self.cfg.min_duration_frames + torch.round(lp_strength * span).long()
         )
         self.lp_start_frame[ids] = self.start_frame[ids]
         self.vp_start_frame[ids] = self.start_frame[ids]
         self.lp_duration_frames[ids] = self.duration_frames[ids]
         self.vp_duration_frames[ids] = self.duration_frames[ids]
-        dual = ids[scenario == 3]
         stagger = self.generator.randint(0, self.cfg.max_dual_stagger_frames + 1, dual)
         lp_first = self.generator.uniform(dual) < 0.5
+        if self.cfg.independent_dual_faults and self.cfg.max_dual_stagger_frames:
+            order = self.generator.randint(0, 3, dual)
+            stagger = self.generator.randint(1, self.cfg.max_dual_stagger_frames+1, dual)
+            stagger[order == 0] = 0
+            lp_first = order != 2
         self.lp_start_frame[dual] += torch.where(lp_first, 0, stagger)
         self.vp_start_frame[dual] += torch.where(lp_first, stagger, 0)
-        self.vp_duration_frames[dual] = self.generator.randint(
-            self.cfg.min_duration_frames, self.cfg.max_duration_frames + 1, dual
-        )
+        if self.cfg.independent_dual_faults:
+            self.vp_duration_frames[ids] = self.cfg.min_duration_frames + torch.round(vp_strength*span).long()
+        else:
+            self.vp_duration_frames[dual] = self.generator.randint(
+                self.cfg.min_duration_frames, self.cfg.max_duration_frames + 1, dual)
         self.duration_frames[ids] = (
             torch.maximum(
                 self.lp_start_frame[ids] + self.lp_duration_frames[ids],
@@ -258,12 +242,12 @@ class SelectorFaultManager:
             self.start_frame[ids] + self.duration_frames[ids] + recovery
         )
         self.lp_delay[ids] = (
-            1 + torch.round(strength * (self.cfg.max_delay_frames - 1)).long()
+            1 + torch.round(lp_strength * (self.cfg.max_delay_frames - 1)).long()
         )
-        self.vp_delay[ids] = self.lp_delay[ids]
-        self.vp_scale[ids] = self._signed_range(ids, self.cfg.vp_scale_range, neutral=1.0)
-        self.vp_bias[ids] = self._signed_range(ids, self.cfg.vp_bias_m_range) / self.cfg.vp_depth_max_m
-        shifts = (strength * self.cfg.vp_max_shift_pixels).round().long()
+        self.vp_delay[ids] = 1 + torch.round(vp_strength*(self.cfg.max_delay_frames-1)).long()
+        self.vp_scale[ids] = self._signed_range(ids, self.cfg.vp_scale_range, neutral=1.0, branch="vp")
+        self.vp_bias[ids] = self._signed_range(ids, self.cfg.vp_bias_m_range, branch="vp") / self.cfg.vp_depth_max_m
+        shifts = (vp_strength * self.cfg.vp_max_shift_pixels).round().long()
         for name in ("vp_shift_x", "vp_shift_y"):
             getattr(self, name)[ids] = shifts * torch.where(
                 self.generator.uniform(ids) < 0.5, -1, 1
@@ -272,26 +256,29 @@ class SelectorFaultManager:
             [0.0, 1.0, -1.0], device=self.device
         )[self.generator.randint(0, 3, ids)]
         low, high = self.cfg.lp_dropout_fraction
-        self.lp_dropout[ids] = low + strength * (high - low)
-        self.lp_bias[ids] = self._signed_range(ids, self.cfg.lp_height_bias_m_range)
-        self.lp_translation_xy[ids] = self._signed_range(ids, self.cfg.lp_translation_range_m, shape=(2,))
-        self.lp_yaw[ids] = self._signed_range(ids, self.cfg.lp_yaw_range_deg)
+        self.lp_dropout[ids] = low + lp_strength * (high - low)
+        self.lp_bias[ids] = self._signed_range(ids, self.cfg.lp_height_bias_m_range, branch="lp")
+        self.lp_translation_xy[ids] = self._signed_range(ids, self.cfg.lp_translation_range_m, shape=(2,), branch="lp")
+        self.lp_yaw[ids] = self._signed_range(ids, self.cfg.lp_yaw_range_deg, branch="lp")
         angle = 2 * math.pi * self.generator.uniform(ids)
         low, high = self.cfg.lp_drift_m_per_s
-        speed = low + strength * (high - low)
+        speed = low + lp_strength * (high - low)
         self.lp_drift_xy[ids] = torch.stack(
             (speed * angle.cos(), speed * angle.sin()), -1
         )
         low, high = self.cfg.lp_drift_deg_per_s
-        yaw_speed = low + self._severity_strength(ids) * (high - low)
+        yaw_speed = low + self._severity_strength(ids, branch="lp") * (high - low)
         self.lp_drift_yaw[ids] = yaw_speed * torch.where(self.generator.uniform(ids) < 0.5, -1.0, 1.0)
         if self.map_faults is not None:
-            self.map_faults.schedule(ids, strength)
-            self.lp_height_velocity[ids] = self._signed_range(ids, (-.05, .05))
-            self.vp_observed_effect[ids] = False
+            self.map_faults.schedule(ids, lp_strength)
+            self.lp_height_velocity[ids] = self._signed_range(ids, (-.05, .05), branch="lp")
             for name, bounds in (("vp_burst_on_frames", self.cfg.burst_on_frames),
                                  ("vp_burst_off_frames", self.cfg.burst_off_frames)):
                 getattr(self, name)[ids] = self.generator.randint(bounds[0], bounds[1]+1, ids)
+        if self.vp_faults is not None:
+            self.vp_faults.schedule(ids, vp_strength)
+        self.lp_observed_effect[ids] = self.vp_observed_effect[ids] = False
+        self.vp_source_observed_effect[ids] = False
         self.lp_freeze_initialized[ids] = False
         self.vp_freeze_initialized[ids] = False
         self.schedule_count[ids] += 1
@@ -300,7 +287,8 @@ class SelectorFaultManager:
             ("lp_block_mask", self.lp_shape, self.cfg.lp_block_fraction),
         ):
             h, w = shape
-            fraction = bounds[0] + strength * (bounds[1] - bounds[0])
+            branch_strength = vp_strength if name.startswith("vp") else lp_strength
+            fraction = bounds[0] + branch_strength * (bounds[1] - bounds[0])
             rh = (fraction * h * w * h / w).sqrt().round().long().clamp(1, h)
             rw = (fraction * h * w / rh).ceil().long().clamp(1, w)
             top = (self.generator.uniform(ids) * (h - rh + 1)).long()
@@ -327,6 +315,9 @@ class SelectorFaultManager:
         self.buffer_initialized[ids] = False
         self.lp_valid_buffer[ids] = 0
         self.vp_valid_buffer[ids] = 0
+        self.lp_last_effect_frame[ids] = self.vp_last_effect_frame[ids] = -1
+        if self.vp_faults is not None:
+            self.vp_faults.reset(ids)
         self._schedule(ids, initial=True)
 
     def snapshot(self):
@@ -335,6 +326,7 @@ class SelectorFaultManager:
             self.cursor.clone(),
             self.generator.get_state(),
             self.map_faults.snapshot() if self.map_faults is not None else None,
+            self.vp_faults.snapshot() if self.vp_faults is not None else None,
         )
 
     def restore(self, snapshot):
@@ -346,6 +338,10 @@ class SelectorFaultManager:
             if snapshot.map_state is None:
                 raise ValueError("extended map state is missing from fault snapshot")
             self.map_faults.restore(snapshot.map_state)
+        if self.vp_faults is not None:
+            if snapshot.vp_state is None:
+                raise ValueError("captured VP state is missing from fault snapshot")
+            self.vp_faults.restore(snapshot.vp_state)
 
     def unobservable_onset_within(self, horizon_frames):
         lp_pending = (self.lp_start_frame >= self.step_count) & (
@@ -370,6 +366,9 @@ class SelectorFaultManager:
             advanced_vp = self.vp_kind >= int(FaultKind.VP_COMPOUND)
             unseen = (la & advanced_lp & ~self.map_faults.state["observed_effect"])
             unseen |= va & advanced_vp & ~self.vp_observed_effect
+        if self.cfg.structured_vp_faults:
+            la, va = self._active(self.step_count-1)
+            unseen |= (la & ~self.lp_observed_effect) | (va & ~self.vp_observed_effect)
         return (
             reschedule
             | unseen
@@ -384,12 +383,12 @@ class SelectorFaultManager:
         if self.map_faults is not None:
             person = (self.lp_kind == int(FaultKind.LP_PERSON)) | (self.lp_kind == int(FaultKind.LP_COMPOUND))
             lp_active |= person & self.map_faults.residual() & (observed >= self.lp_start_frame)
-        return (
-            lp_active,
-            (observed >= self.vp_start_frame)
+        vp_active = ((observed >= self.vp_start_frame)
             & (observed < self.vp_start_frame + self.vp_duration_frames)
-            & (self.vp_kind != 0),
-        )
+            & (self.vp_kind != 0))
+        if self.vp_faults is not None:
+            vp_active |= self.vp_faults.residual() & (self.vp_kind != 0)
+        return lp_active, vp_active
 
     def audit_metadata(self):
         observed = (self.step_count - 1).clamp_min(0)
@@ -436,6 +435,23 @@ class SelectorFaultManager:
                 self.lp_drift_yaw,
             ), -1,
         )
+
+    def audit_source(self, *, history_frames=5, horizon_frames=10):
+        """Current-event effects present in observable history; never future labels."""
+        observed = self.step_count-1
+        lp_recent = (self.lp_last_effect_frame >= 0) & (self.lp_last_effect_frame >= observed-history_frames+1)
+        vp_recent = (self.vp_last_effect_frame >= 0) & (self.vp_last_effect_frame >= observed-history_frames+1)
+        no_new_plan = ~self.unobservable_onset_within(horizon_frames)
+        lp_clean = (self.lp_kind == 0) & ~lp_recent & no_new_plan
+        vp_clean = (self.vp_kind == 0) & ~vp_recent & no_new_plan
+        dt = self.cfg.update_period_s
+        return torch.stack((
+            (lp_recent & self.lp_observed_effect).float(),
+            (vp_recent & self.vp_source_observed_effect).float(), lp_clean.float(), vp_clean.float(),
+            torch.where(self.lp_last_effect_frame >= 0, (observed-self.lp_last_effect_frame).float()*dt, -1.),
+            torch.where(self.vp_last_effect_frame >= 0, (observed-self.vp_last_effect_frame).float()*dt, -1.),
+            self.lp_severity.float(), self.vp_severity.float(),
+        ), -1)
 
     def audit_map_noise(self):
         if self.map_faults is None:
@@ -545,6 +561,7 @@ class SelectorFaultManager:
         vp_packet_timestamp=None,
         env_ids=None,
         world_pose=None,
+        now=None,
     ):
         for data, shape in ((lp, self.lp_shape), (vp, self.vp_shape)):
             if data.shape != (self.num_envs, *shape):
@@ -600,6 +617,8 @@ class SelectorFaultManager:
             # Never silently discard a residual map when sampling the next plan.
             residual = self.map_faults.residual()
             due = due[~residual[due]]
+        if self.vp_faults is not None:
+            due = due[~self.vp_faults.residual()[due]]
         self._schedule(due)
         capacity = self.cfg.max_delay_frames + 1
         self.cursor[ids] = (self.cursor[ids] + 1) % capacity
@@ -614,6 +633,10 @@ class SelectorFaultManager:
             (self.lp_packet_buffer, lp_packet),
             (self.vp_packet_buffer, vp_packet),
         ):
+            if self.vp_faults is not None and any(buffer is candidate for candidate in (
+                self.vp_buffer, self.vp_valid_buffer, self.vp_time_buffer, self.vp_packet_buffer,
+            )):
+                continue
             buffer[first] = value[first, None]
             buffer[ids, self.cursor[ids]] = value[ids]
         self.buffer_initialized[ids] = True
@@ -622,12 +645,15 @@ class SelectorFaultManager:
         la, va = self._active(self.step_count)
         la &= selected
         va &= selected
+        legacy_va = va if self.vp_faults is None else torch.zeros_like(va)
         out_lp, out_vp = lp.clone(), vp.clone()
         lv, vv = lp_valid.clone(), vp_valid.clone()
         for name, kinds, on, data, support, time, packet in (
             ("lp", self.lp_kind, la, out_lp, lv, lp_time, lp_packet),
-            ("vp", self.vp_kind, va, out_vp, vv, vp_time, vp_packet),
+            ("vp", self.vp_kind, legacy_va, out_vp, vv, vp_time, vp_packet),
         ):
+            if name == "vp" and self.vp_faults is not None:
+                continue
             freeze = on & (kinds == int(FaultKind.FREEZE))
             initialized = getattr(self, name + "_freeze_initialized")
             new = freeze & ~initialized
@@ -654,7 +680,7 @@ class SelectorFaultManager:
             packet[delayed] = self._delayed(
                 getattr(self, name + "_packet_buffer"), delays
             )[delayed]
-        occluded = va & (self.vp_kind == int(FaultKind.VP_OCCLUSION))
+        occluded = legacy_va & (self.vp_kind == int(FaultKind.VP_OCCLUSION))
         mask = (
             self.vp_occlusion_mask[:, None].expand_as(vv)
             & occluded[:, None, None, None]
@@ -665,19 +691,19 @@ class SelectorFaultManager:
             (FaultKind.VP_SCALE, self.vp_scale, torch.zeros_like(self.vp_bias)),
             (FaultKind.VP_BIAS, torch.ones_like(self.vp_scale), self.vp_bias),
         ):
-            chosen = va & (self.vp_kind == int(kind))
+            chosen = legacy_va & (self.vp_kind == int(kind))
             out_vp[chosen] = (
                 out_vp[chosen] * scale[chosen, None, None, None]
                 + bias[chosen, None, None, None]
             ).clamp(0, 1)
-        shifted = va & (self.vp_kind == int(FaultKind.VP_SHIFT))
+        shifted = legacy_va & (self.vp_kind == int(FaultKind.VP_SHIFT))
         out_vp[shifted] = self._integer_shift(
             out_vp, self.vp_shift_x, self.vp_shift_y, 1.0
         )[shifted]
         vv[shifted] = self._integer_shift(vv, self.vp_shift_x, self.vp_shift_y, 0.0)[
             shifted
         ]
-        collapsed = va & (self.vp_kind == int(FaultKind.VP_COLLAPSE))
+        collapsed = legacy_va & (self.vp_kind == int(FaultKind.VP_COLLAPSE))
         out_vp[collapsed] = self.vp_collapse_value[collapsed, None, None, None]
         vv[collapsed] = 0.0
         dropout_ids = (
@@ -746,9 +772,39 @@ class SelectorFaultManager:
             cleared = selected & residual_before & ~self.map_faults.residual()
             overdue = cleared & (self.step_count >= self.lp_start_frame+self.lp_duration_frames)
             self.next_schedule_frame[overdue] = self.step_count[overdue] + self.cfg.min_recovery_frames
-            self._apply_extended_vp(out_vp, vv, vp_time, vp_packet, va)
+            if self.vp_faults is None:
+                self._apply_extended_vp(out_vp, vv, vp_time, vp_packet, va)
+        if self.vp_faults is not None:
+            residual_before = self.vp_faults.residual()
+            result = self.vp_faults.apply(vp, vp_valid, vp_time, vp_packet, ids,
+                                         active=va, plan=self, pose=world_pose, now=now)
+            out_vp, vv, vp_time, vp_packet = (value.clone() for value in result)
+            cleared = selected & residual_before & ~self.vp_faults.residual()
+            overdue = cleared & (self.step_count >= self.vp_start_frame+self.vp_duration_frames)
+            self.next_schedule_frame[overdue] = self.step_count[overdue]+self.cfg.min_recovery_frames
         lv = lv.clamp(0, 1)
         vv = vv.clamp(0, 1)
+        for name, data, raw, valid, raw_valid, timestamp, raw_timestamp in (
+            ("lp", out_lp, lp, lv, lp_valid, lp_time, lp_timestamp),
+            ("vp", out_vp, vp, vv, vp_valid, vp_time, vp_timestamp),
+        ):
+            changed = ((data-raw).abs() > 1e-5).flatten(1).any(-1)
+            changed |= ((valid-raw_valid).abs() > 1e-5).flatten(1).any(-1)
+            changed |= timestamp != raw_timestamp.to(self.device).reshape(self.num_envs)
+            changed &= selected & (getattr(self, name+"_kind") != 0)
+            changed &= self.step_count >= getattr(self, name+"_start_frame")
+            seen = changed
+            if name == "vp" and self.vp_faults is not None:
+                # Old delivered images can still be visible from the previous
+                # parent. They do not prove the new parent's effect was seen.
+                seen = changed & self.vp_faults.state["effect"]
+            if name == "vp":
+                self.vp_source_observed_effect[seen] = True
+                if self.vp_faults is not None:
+                    self.vp_observed_effect[seen] = True
+            else:
+                self.lp_observed_effect[seen] = True
+            getattr(self, name+"_last_effect_frame")[changed] = self.step_count[changed]
         self.step_count[ids] += 1
         return FaultBatch(
             out_lp, out_vp, lp_time, vp_time, la, va, lv, vv, lp_packet, vp_packet

@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from .labels import FIRST_FAILURE_BITS
+from .fault_kinds import FaultKind
 
 
 SCENARIO_NAMES = ("normal", "vp_only", "lp_only", "dual")
@@ -62,6 +63,7 @@ class CollectionAudit:
         self.funnel = torch.zeros(len(FUNNEL_STAGES), 4, 3, dtype=torch.long)
         self.pairs = torch.zeros(3, 1, 4, 3, 4, dtype=torch.long)
         self.candidate_batches = 0
+        self.kind_plans = torch.zeros(len(FaultKind), len(FaultKind), 3, dtype=torch.long)
 
     def observe_behavior_plans(self, episode_serial, faults) -> None:
         plan = torch.stack((episode_serial, faults.schedule_count), -1)
@@ -69,6 +71,8 @@ class CollectionAudit:
         category = (faults.lp_kind != 0).long() * 2 + (faults.vp_kind != 0).long()
         keys = category * 3 + faults.severity
         self.observed_plans += torch.bincount(keys[changed], minlength=12).reshape(4, 3).cpu()
+        kind_keys = (faults.lp_kind*len(FaultKind)+faults.vp_kind)*3+faults.severity
+        self.kind_plans += torch.bincount(kind_keys[changed], minlength=len(FaultKind)**2*3).reshape_as(self.kind_plans).cpu()
         self.last_plan.copy_(plan)
 
     def record_candidates(self, faults, labels, stage_masks, written) -> None:
@@ -93,6 +97,11 @@ class CollectionAudit:
             "severity_order": list(SEVERITY_NAMES),
             "observed_behavior_plans_by_planned_scenario_severity": self.observed_plans.tolist(),
             "observed_plan_scope": "from collection start through real behavior steps; excludes burn-in and all counterfactual/replay forks",
+            "fault_kind_order": [kind.name.lower() for kind in FaultKind],
+            "observed_behavior_plans_by_kind_pair": {
+                f"{lp}:{vp}": self.kind_plans[lp, vp].tolist()
+                for lp, vp in self.kind_plans.sum(-1).nonzero().tolist()
+            },
             "funnel_order": list(FUNNEL_STAGES),
             "funnel_by_active_scenario_severity": self.funnel.tolist(),
             "pair_stage_order": ["before_replay_filter", "after_replay_filter", "written"],

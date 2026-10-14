@@ -1,0 +1,2178 @@
+--- a/legged_lab/selector/analysis.py
++++ b/legged_lab/selector/analysis.py
+@@ -16,17 +16,15 @@
+ from .dataset import SPLIT_NAMES
+ from .labels import CLEARANCE_LIMIT_M, FIRST_FAILURE_BITS, FUTURE_METRIC_ORDER, TILT_LIMIT_RAD
+ from .lp_map_faults import NOISE_AUDIT_ORDER
++from .fault_kinds import FaultKind
++from .directed_audit import (SOURCE_AUDIT_ORDER, VP_AUDIT_ORDER,
++                             directed_audit_contract, source_rejection_masks)
+ 
+ 
+ LABEL_ORDER = ("lp_1.0s", "vp_1.0s")
+ AUDIT_FIELDS = ("event_identity", "fault_parameters", "first_failure_flags",
+                 "first_failure_cause_stable", "candidate_safety")
+-FAULT_NAMES = (
+-    "none", "freeze", "delay", "vp_occlusion", "vp_scale", "vp_bias", "vp_shift",
+-    "vp_collapse", "lp_random_dropout", "lp_block_dropout", "lp_height_bias",
+-    "lp_registration", "lp_drift", "lp_collapse",
+-    "lp_map_drift", "lp_person", "lp_compound", "vp_compound", "vp_burst",
+-)
++FAULT_NAMES = tuple(kind.name.lower() for kind in FaultKind)
+ PARAMETERS_BY_KIND = {
+     1: (), 2: ("delay_s",), 3: ("vp_occlusion_fraction",), 4: ("vp_scale",),
+     5: ("vp_bias_m",), 6: ("vp_shift_x_px", "vp_shift_y_px"),
+@@ -101,9 +99,16 @@
+     cause_rows = 0
+     initial_rows = initial_invalid = initial_failed = 0
+     episodes, plans = {}, {}
++    plan_rows, plan_last_time = {}, {}
++    min_event_spacing = None
+     event_rows = 0
+     parameter_summary = {}
+     noise_summary = {}
++    vp_summary = {}
++    directed_contract = manifest.get("metadata", {}).get("directed_audit_contract")
++    source_mode = manifest.get("metadata", {}).get("supplement_coverage", {}).get("config", {}).get("fault_source", "any")
++    directed_counts = {"available_rows": 0, "wrong_source": 0, "effect_not_observable": 0,
++                       "healthy_side_not_clean": 0, "source_outcome": 0}
+     audit_contract = manifest.get("metadata", {}).get("collection_audit_contract")
+     has_new_contract = audit_contract is not None
+     if has_new_contract and (
+@@ -129,11 +134,20 @@
+                 raise ValueError(f"invalid feature shape in {path}")
+             overall.add(labels)
+             splits[split].add(labels)
+-            for field in ("future_metrics", "fault_metadata", "execution_metadata", *AUDIT_FIELDS):
++            for field in ("future_metrics", "fault_metadata", "execution_metadata", "candidate_time", "feature_end_time", *AUDIT_FIELDS):
+                 if field in data:
+                     if len(data[field]) != n:
+                         raise ValueError(f"misaligned {field} in {path}")
+                     fields[field] += n
++            if ("candidate_time" in data) != ("feature_end_time" in data):
++                raise ValueError(f"unpaired candidate/feature timestamps in {path}")
++            if "candidate_time" in data:
++                for field in ("candidate_time", "feature_end_time"):
++                    value = data[field]
++                    if value.shape != (n,) or value.dtype != torch.float64 or not torch.isfinite(value).all():
++                        raise ValueError(f"invalid {field} in {path}")
++                if not torch.allclose(data["candidate_time"], data["feature_end_time"], rtol=0, atol=1e-6):
++                    raise ValueError(f"candidate/feature timestamps are not aligned in {path}")
+             if "noise_metadata" in data:
+                 noise = data["noise_metadata"]
+                 contract = manifest.get("metadata", {}).get("noise_audit_contract", {})
+@@ -150,6 +164,32 @@
+                 _group_update(groups, "lp_ghost_present", (noise[:, 8] > 0).long(), labels, advanced)
+                 _group_update(groups, "lp_support_bin", torch.bucketize(noise[:, 11].contiguous(), torch.tensor([.05,.5,.95]), right=True), labels, advanced)
+                 _group_update(groups, "lp_saturation_bin", torch.bucketize(noise[:, 12].contiguous(), torch.tensor([.01,.1,.5]), right=True), labels, advanced)
++            for field, order in (("source_metadata", SOURCE_AUDIT_ORDER), ("vp_fault_metadata", VP_AUDIT_ORDER)):
++                if field not in data:
++                    continue
++                if directed_contract != directed_audit_contract():
++                    raise ValueError(f"unsupported directed audit contract in {path}")
++                values = data[field]
++                if values.shape != (n, len(order)) or not torch.isfinite(values).all() or "fault_metadata" not in data:
++                    raise ValueError(f"invalid {field} in {path}")
++                fields[field] += n
++                if field == "vp_fault_metadata":
++                    for column, name in enumerate(order):
++                        _parameter_update(vp_summary, name, values[:, column])
++                else:
++                    if not ((values[:, :4] == 0) | (values[:, :4] == 1)).all():
++                        raise ValueError(f"invalid source flags in {path}")
++                    levels = values[:, 6:8]
++                    if not ((levels == levels.round()) & (levels >= 0) & (levels <= 2)).all():
++                        raise ValueError(f"invalid per-branch severity in {path}")
++                    directed_counts["available_rows"] += n
++                    for reason, mask in source_rejection_masks(source_mode, data["fault_metadata"], values).items():
++                        directed_counts[reason] += int(mask.sum())
++                    if source_mode != "any":
++                        target = {"lp_only": 1, "vp_only": 2, "dual": 3}[source_mode]
++                        pairs = labels[:, 0].long()+2*labels[:, 1].long()
++                        directed_counts["source_outcome"] += int(((pairs != 0) & (pairs != target)).sum())
++                    _group_update(groups, "branch_severity_pair", values[:, 6].long()*3+values[:, 7].long(), labels)
+             if any(f in data for f in AUDIT_FIELDS) and not has_new_contract:
+                 raise ValueError("new audit tensors require collection_audit_contract metadata")
+             if ("first_failure_flags" in data) != ("first_failure_cause_stable" in data):
+@@ -169,6 +209,10 @@
+                 for branch in range(2):
+                     times[branch] += torch.bincount(first[:, branch].clamp_min(0).long(), minlength=51)
+                 time_rows += n
++                both = labels.all(-1)
++                lead = first.amin(-1)*.02
++                bins = torch.bucketize(lead.contiguous(), torch.tensor([.2, .5]), right=True)
++                _group_update(groups, "both_failure_lead_time_bin", bins, labels, both)
+             if "first_failure_flags" in data:
+                 flags = data["first_failure_flags"].long()
+                 stable = data["first_failure_cause_stable"].bool()
+@@ -211,6 +255,16 @@
+                 _group_update(groups, "active_fault_severity", severity, labels, scenario != 0)
+                 _group_update(groups, "active_scenario_severity", scenario * 3 + severity, labels)
+                 _group_update(groups, "phase", faults[:, 3], labels)
++                planned_dual = faults[:, :2].ne(0).all(-1)
++                _group_update(groups, "dual_fault_kind_pair", faults[:, 0]*len(FAULT_NAMES)+faults[:, 1], labels, planned_dual)
++                if "fault_parameters" in data:
++                    params = data["fault_parameters"]
++                    delta = params[:, 4]-params[:, 5]
++                    order = torch.where(delta == 0, 0, torch.where(delta < 0, 1, 2))
++                    _group_update(groups, "dual_start_order", order, labels, planned_dual)
++                    overlap = (torch.minimum(params[:, 4]+params[:, 0], params[:, 5]+params[:, 1])
++                               - torch.maximum(params[:, 4], params[:, 5])).clamp_min(0)
++                    _parameter_update(parameter_summary, "dual:planned_overlap_s", overlap[planned_dual])
+                 for branch, name in enumerate(("lp", "vp")):
+                     active = faults[:, 6 + branch].bool()
+                     _group_update(groups, f"active_{name}_fault_kind", faults[:, branch], labels, active)
+@@ -233,6 +287,13 @@
+                 fault_rows = data.get("fault_metadata")
+                 for index, (env_id, episode, schedule) in enumerate(identity.tolist()):
+                     ep, plan = (env_id, episode), (env_id, episode, schedule)
++                    plan_rows[plan] = plan_rows.get(plan, 0)+1
++                    if "candidate_time" in data:
++                        now = float(data["candidate_time"][index])
++                        if plan in plan_last_time:
++                            spacing = now-plan_last_time[plan]
++                            min_event_spacing = spacing if min_event_spacing is None else min(min_event_spacing, spacing)
++                        plan_last_time[plan] = now
+                     split_bit = 1 << split_index
+                     old = episodes.get(ep, (0, 0, [0, 0, 0]))
+                     old[-1][split_index] |= packed[index]
+@@ -265,6 +326,11 @@
+         value["mean"] = value.pop("sum") / value["rows"]
+     for value in noise_summary.values():
+         value["mean"] = value.pop("sum") / value["rows"]
++    for value in vp_summary.values():
++        value["mean"] = value.pop("sum") / value["rows"]
++    directed_counts["fault_source"] = source_mode
++    directed_counts["verified"] = (source_mode != "any" and directed_counts["available_rows"] == overall.rows
++        and all(directed_counts[key] == 0 for key in ("wrong_source", "effect_not_observable", "healthy_side_not_clean", "source_outcome")))
+     return {
+         "report_version": 3,
+         "collection_complete": manifest.get("metadata", {}).get("collection_complete", False),
+@@ -283,9 +349,15 @@
+             "person_phase": ["approach", "near", "depart", "residual"],
+             "lp_support_bin": ["<.05", ".05-.5", ".5-.95", ">=.95"],
+             "lp_saturation_bin": ["<.01", ".01-.1", ".1-.5", ">=.5"],
++            "branch_severity_pair": "lp_severity * 3 + vp_severity",
++            "dual_fault_kind_pair": f"lp_kind_id * {len(FAULT_NAMES)} + vp_kind_id",
++            "dual_start_order": ["simultaneous", "lp_first", "vp_first"],
++            "both_failure_lead_time_bin": ["[0,.2)", "[.2,.5)", "[.5,1]"],
+         },
+         "by_group": {d: {k: c.result() for k, c in sorted(g.items())} for d, g in sorted(groups.items())},
+-        "field_rows": {f: fields[f] for f in ("future_metrics", "fault_metadata", "execution_metadata", *AUDIT_FIELDS, "noise_metadata")},
++        "field_rows": {f: fields[f] for f in (
++            "future_metrics", "fault_metadata", "execution_metadata", "candidate_time", "feature_end_time",
++            *AUDIT_FIELDS, "noise_metadata", "source_metadata", "vp_fault_metadata")},
+         "first_failure_time": {
+             "available_rows": time_rows, "control_dt_s": .02,
+             "no_failure_within_1s": times[:, 0].tolist(),
+@@ -311,10 +383,14 @@
+             "by_split": {s: {"episodes": event_counts(episodes, 1 << i), "plans": event_counts(plans, 1 << i)}
+                          for i, s in enumerate(SPLIT_NAMES)} if event_rows else None,
+             "accepted_unique_plans_by_planned_scenario_severity": accepted_plans.tolist() if event_rows else None,
++            "max_rows_per_plan": max(plan_rows.values(), default=0) if event_rows else None,
++            "min_spacing_s_within_plan": min_event_spacing,
+             "note": "plans include normal schedules; failure counts denote at least one failed counterfactual label, not real falls",
+         },
+         "fault_parameter_summary": parameter_summary,
+         "noise_parameter_summary": noise_summary,
++        "vp_parameter_summary": vp_summary,
++        "directed_acceptance": directed_counts,
+         "supplement_source": manifest.get("metadata", {}).get("supplement_source"),
+         "supplement_coverage": manifest.get("metadata", {}).get("supplement_coverage"),
+         "collection_audit": manifest.get("metadata", {}).get("collection_audit"),
+@@ -328,7 +404,7 @@
+         "safety_label_filter": manifest.get("metadata", {}).get("safety_label_filter"),
+         "sampling_progress": manifest.get("metadata", {}).get("sampling_progress"),
+         "notes": [
+-            "10/30/60 controls scheduled-plan draws; accepted frame fractions also depend on durations and filtering.",
++            "Severity probabilities control sampled levels; independent dual events record per-branch levels and a maximum plan level.",
+             "balanced_scenarios balances active fault categories, not safe/failure outcomes.",
+             "Only V4 data uses the one-second labels and ordinary-transition contract.",
+             "Replay diagnostics compare acceptance rules on the same candidate rollouts; retained counts precede quotas, written counts apply quotas.",
+--- a/legged_lab/selector/collection_audit.py
++++ b/legged_lab/selector/collection_audit.py
+@@ -5,6 +5,7 @@
+ import torch
+ 
+ from .labels import FIRST_FAILURE_BITS
++from .fault_kinds import FaultKind
+ 
+ 
+ SCENARIO_NAMES = ("normal", "vp_only", "lp_only", "dual")
+@@ -62,6 +63,7 @@
+         self.funnel = torch.zeros(len(FUNNEL_STAGES), 4, 3, dtype=torch.long)
+         self.pairs = torch.zeros(3, 1, 4, 3, 4, dtype=torch.long)
+         self.candidate_batches = 0
++        self.kind_plans = torch.zeros(len(FaultKind), len(FaultKind), 3, dtype=torch.long)
+ 
+     def observe_behavior_plans(self, episode_serial, faults) -> None:
+         plan = torch.stack((episode_serial, faults.schedule_count), -1)
+@@ -69,6 +71,8 @@
+         category = (faults.lp_kind != 0).long() * 2 + (faults.vp_kind != 0).long()
+         keys = category * 3 + faults.severity
+         self.observed_plans += torch.bincount(keys[changed], minlength=12).reshape(4, 3).cpu()
++        kind_keys = (faults.lp_kind*len(FaultKind)+faults.vp_kind)*3+faults.severity
++        self.kind_plans += torch.bincount(kind_keys[changed], minlength=len(FaultKind)**2*3).reshape_as(self.kind_plans).cpu()
+         self.last_plan.copy_(plan)
+ 
+     def record_candidates(self, faults, labels, stage_masks, written) -> None:
+@@ -93,6 +97,11 @@
+             "severity_order": list(SEVERITY_NAMES),
+             "observed_behavior_plans_by_planned_scenario_severity": self.observed_plans.tolist(),
+             "observed_plan_scope": "from collection start through real behavior steps; excludes burn-in and all counterfactual/replay forks",
++            "fault_kind_order": [kind.name.lower() for kind in FaultKind],
++            "observed_behavior_plans_by_kind_pair": {
++                f"{lp}:{vp}": self.kind_plans[lp, vp].tolist()
++                for lp, vp in self.kind_plans.sum(-1).nonzero().tolist()
++            },
+             "funnel_order": list(FUNNEL_STAGES),
+             "funnel_by_active_scenario_severity": self.funnel.tolist(),
+             "pair_stage_order": ["before_replay_filter", "after_replay_filter", "written"],
+--- a/legged_lab/selector/collector.py
++++ b/legged_lab/selector/collector.py
+@@ -15,6 +15,7 @@
+ from .features import FeatureHistory, SensorHealthTracker, build_selector_frame
+ from .lp_map_faults import NOISE_AUDIT_ORDER
+ from .supplement import OutcomeQuotaSampler
++from .directed_audit import directed_audit_contract
+ from .feature_contract import selector_feature_contract
+ from .labels import (
+     RolloutOutcome,
+@@ -404,6 +405,7 @@
+                 lp_packet_timestamp=torch.full_like(self.last_lp_timestamp, float(now)),
+                 vp_packet_timestamp=vp_timestamp,
+                 world_pose=world_pose,
++                now=now,
+             )
+             for name, value in (
+                 ("last_lp", faulted.lp),
+@@ -1161,6 +1163,10 @@
+                 "scope": "audit only, excluded from selector features",
+                 "person_phase_order": ["approach", "near", "depart", "residual"],
+                 "fault_event": "parent event includes bursts, gaps, corrections and residual cells"}
++        directed = (getattr(self.stream.faults.cfg, "structured_vp_faults", False)
++                    or getattr(getattr(self, "supplement_cfg", None), "fault_source", "any") != "any")
++        if directed:
++            metadata["directed_audit_contract"] = directed_audit_contract()
+         self._collection_audit = CollectionAudit(self.env.num_envs, self.device)
+         self._collection_audit.observe_behavior_plans(self.episode_serial, self.stream.faults)
+         filters = {
+@@ -1244,6 +1250,19 @@
+             parameters = self.stream.faults.audit_parameters()
+             noise_metadata = (self.stream.faults.audit_map_noise()
+                               if getattr(self.stream.faults.cfg, "extended_faults", False) else None)
++            source_metadata = self.stream.faults.audit_source() if directed else None
++            vp_fault_metadata = (self.stream.faults.vp_faults.audit(self.stream.faults)
++                                 if getattr(self.stream.faults, "vp_faults", None) is not None else None)
++            if source_metadata is not None:
++                # A clean source is also required to be currently available.
++                health_cfg = RuntimeConfig()
++                for column, sensor in ((2, "lp"), (3, "vp")):
++                    support = getattr(self.stream, "last_"+sensor+"_valid").flatten(1).mean(-1)
++                    timestamp = getattr(self.stream, "last_"+sensor+"_timestamp")
++                    age = now-timestamp
++                    available = torch.isfinite(timestamp) & (age >= -1e-6) & (age <= health_cfg.sensor_timeout_s)
++                    available &= support >= health_cfg.min_valid_ratio
++                    source_metadata[:, column] *= available.float()
+             event_identity = torch.stack((
+                 torch.arange(self.env.num_envs, device=self.device),
+                 self.episode_serial, self.stream.faults.schedule_count,
+@@ -1341,7 +1360,7 @@
+                 accepted[category] += len(ids)
+             if getattr(self, "quota_sampler", None) is not None:
+                 ids = self.quota_sampler.select(good, labels, event_identity, now,
+-                    faults=faults, parameters=parameters, noise=noise_metadata)
++                    faults=faults, parameters=parameters, noise=noise_metadata, source=source_metadata)
+                 for category in range(4):
+                     accepted[category] += int((scenario[ids] == category).sum())
+             else:
+@@ -1379,6 +1398,8 @@
+                     )[ids],
+                     candidate_safety=candidate_safety[ids],
+                     noise_metadata=noise_metadata[ids] if noise_metadata is not None else None,
++                    source_metadata=source_metadata[ids] if source_metadata is not None else None,
++                    vp_fault_metadata=vp_fault_metadata[ids] if vp_fault_metadata is not None else None,
+                 )
+                 self._progress("write_samples", rows=len(ids), accepted=collected)
+                 self.writer.append(batch)
+--- a/legged_lab/selector/config.py
++++ b/legged_lab/selector/config.py
+@@ -63,6 +63,19 @@
+     lp_person_main_fraction: float = 0.65
+     lp_map_confirm_frames: int = 3
+     lp_map_retention_radius_m: float = 2.5
++    # Directed profiles opt into capture-once VP histories and independent sides.
++    structured_vp_faults: bool = False
++    independent_dual_faults: bool = False
++    vp_depth_min_m: float = 0.1
++    vp_local_bias_m: tuple[float, float] = (0.04, 0.45)
++    vp_local_scale_error: tuple[float, float] = (0.03, 0.30)
++    vp_edge_mix: tuple[float, float] = (0.20, 0.90)
++    vp_subpixel_shift_px: tuple[float, float] = (0.30, 3.0)
++    vp_rotation_deg: tuple[float, float] = (0.30, 4.0)
++    vp_mask_speed_px_per_s: tuple[float, float] = (0.50, 4.0)
++    vp_filter_alpha: tuple[float, float] = (0.50, 0.90)
++    vp_max_hold_frames: int = 3
++    vp_residual_epsilon_m: float = 0.002
+ 
+     def validate(self) -> None:
+         for name in ("update_period_s", "lp_resolution_m", "vp_depth_max_m"):
+@@ -117,7 +130,28 @@
+         if (not math.isfinite(self.lp_invalid_height) or
+                 self.lp_height_clip[0] <= self.lp_invalid_height <= self.lp_height_clip[1]):
+             raise ValueError("lp_invalid_height must be finite and outside lp_height_clip")
+-        for name, count in (("lp_kind_weights", 11), ("vp_kind_weights", 9)):
++        for name in ("structured_vp_faults", "independent_dual_faults"):
++            if type(getattr(self, name)) is not bool:
++                raise ValueError(f"{name} must be boolean")
++        if self.structured_vp_faults and not self.extended_faults:
++            raise ValueError("structured VP faults require extended_faults")
++        if not 0 < self.vp_depth_min_m < self.vp_depth_max_m:
++            raise ValueError("VP depth minimum must lie between zero and depth maximum")
++        for name in ("vp_local_bias_m", "vp_local_scale_error", "vp_edge_mix",
++                     "vp_subpixel_shift_px", "vp_rotation_deg", "vp_mask_speed_px_per_s", "vp_filter_alpha"):
++            lo, hi = getattr(self, name)
++            if not all(math.isfinite(x) for x in (lo, hi)) or not 0 <= lo <= hi:
++                raise ValueError(f"{name} must contain finite nonnegative bounds")
++        if self.vp_edge_mix[1] > 1 or self.vp_local_scale_error[1] >= 1:
++            raise ValueError("edge mixing must be <= 1 and local scale error < 1")
++        if not 0 <= self.vp_filter_alpha[0] <= self.vp_filter_alpha[1] < 1:
++            raise ValueError("filter alpha must be in [0,1)")
++        if (type(self.vp_max_hold_frames) is not int or self.vp_max_hold_frames < 1
++            or (self.structured_vp_faults and self.vp_max_hold_frames > self.max_delay_frames)):
++            raise ValueError("VP hold length must be in [1,max_delay_frames]")
++        if not math.isfinite(self.vp_residual_epsilon_m) or self.vp_residual_epsilon_m <= 0:
++            raise ValueError("VP residual threshold must be positive and finite")
++        for name, count in (("lp_kind_weights", 11), ("vp_kind_weights", 16 if self.structured_vp_faults else 9)):
+             weights = getattr(self, name)
+             if weights and (not self.extended_faults or len(weights) != count
+                             or any(not math.isfinite(x) or x < 0 for x in weights)
+--- a/legged_lab/selector/dataset.py
++++ b/legged_lab/selector/dataset.py
+@@ -17,6 +17,7 @@
+ from .labels import FUTURE_METRIC_ORDER
+ from .collection_audit import FAULT_PARAMETER_ORDER, CANDIDATE_SAFETY_ORDER
+ from .lp_map_faults import NOISE_AUDIT_ORDER
++from .directed_audit import SOURCE_AUDIT_ORDER, VP_AUDIT_ORDER
+ 
+ 
+ SPLIT_NAMES = ("train", "validation", "test")
+@@ -86,6 +87,8 @@
+     first_failure_cause_stable: torch.Tensor | None = None
+     candidate_safety: torch.Tensor | None = None
+     noise_metadata: torch.Tensor | None = None
++    source_metadata: torch.Tensor | None = None
++    vp_fault_metadata: torch.Tensor | None = None
+ 
+     def validate(self, selector_cfg: SelectorConfig | None = None) -> None:
+         selector_cfg = selector_cfg or SelectorConfig()
+@@ -153,12 +156,18 @@
+             ("fault_parameters", len(FAULT_PARAMETER_ORDER)),
+             ("candidate_safety", len(CANDIDATE_SAFETY_ORDER)),
+             ("noise_metadata", len(NOISE_AUDIT_ORDER)),
++            ("source_metadata", len(SOURCE_AUDIT_ORDER)),
++            ("vp_fault_metadata", len(VP_AUDIT_ORDER)),
+         ):
+             value = getattr(self, name)
+             if value is not None and (
+                 value.shape != (batch, columns) or not torch.isfinite(value).all()
+             ):
+                 raise ValueError(f"{name} must have finite [batch, {columns}] values")
++        if (self.source_metadata is not None or self.vp_fault_metadata is not None) and self.fault_metadata is None:
++            raise ValueError("directed audit tensors require fault_metadata")
++        if self.source_metadata is not None and not ((self.source_metadata[:, :4] == 0) | (self.source_metadata[:, :4] == 1)).all():
++            raise ValueError("source effect/clean flags must be binary")
+         if (self.first_failure_flags is None) != (self.first_failure_cause_stable is None):
+             raise ValueError("first failure flags and replay agreement must be supplied together")
+         if self.first_failure_flags is not None:
+@@ -212,7 +221,7 @@
+             "future_metrics", "fault_metadata", "candidate_time", "feature_end_time",
+             "execution_metadata", "event_identity", "fault_parameters",
+             "first_failure_flags", "first_failure_cause_stable", "candidate_safety",
+-            "noise_metadata",
++            "noise_metadata", "source_metadata", "vp_fault_metadata",
+         )
+         fields = frozenset(name for name in optional_names if getattr(batch, name) is not None)
+         if self._optional_fields is not None and fields != self._optional_fields:
+@@ -264,6 +273,7 @@
+                 ("first_failure_cause_stable", torch.bool),
+                 ("candidate_safety", torch.float32),
+                 ("noise_metadata", torch.float32),
++                ("source_metadata", torch.float32), ("vp_fault_metadata", torch.float32),
+             ):
+                 value = getattr(batch, name)
+                 if value is not None:
+--- /dev/null
++++ b/legged_lab/selector/directed_audit.py
+@@ -0,0 +1,70 @@
++"""Directed collection provenance. These tensors never enter selector features."""
++
++import torch
++
++
++SOURCE_MODES = ("any", "lp_only", "vp_only", "dual")
++SOURCE_AUDIT_ORDER = (
++    "lp_effect_in_history", "vp_effect_in_history",
++    "lp_clean_label_window", "vp_clean_label_window",
++    "lp_effect_age_s", "vp_effect_age_s", "lp_severity", "vp_severity",
++)
++VP_AUDIT_ORDER = (
++    "lp_strength", "vp_strength", "local_bias_m", "local_scale_error",
++    "edge_mix", "warp_shift_x_px", "warp_shift_y_px", "warp_rotation_deg",
++    "mask_fraction", "mask_speed_px_per_s", "missing_return_mode",
++    "filter_alpha", "filter_error_max_m", "actual_delay_s", "holding_frame",
++    "current_effect", "current_support_ratio", "current_saturation_ratio",
++    "new_capture", "history_append", "source_age_s",
++    "mask_center_0_x", "mask_center_0_y", "mask_center_1_x", "mask_center_1_y",
++    "mask_center_2_x", "mask_center_2_y", "mask_direction_x", "mask_direction_y",
++    "field_mean", "field_std", "changed_pixel_fraction",
++    "history_interval_s",
++)
++
++
++def directed_audit_contract():
++    return {
++        "version": 1, "source_order": list(SOURCE_AUDIT_ORDER),
++        "vp_order": list(VP_AUDIT_ORDER),
++        "source_modes": list(SOURCE_MODES),
++        "history_frames": 5, "horizon_s": 1.0,
++        "effect_age_missing": -1.0,
++        "source_age_missing": -1.0,
++        "clean_label_window": "no injected fault in observable history or label window; current data available",
++        "missing_return_mode": ["zero_no_return", "nonfinite_no_return"],
++        "severity": "per branch; legacy plan severity is the maximum for independent dual events",
++        "scope": "audit and admission only; excluded from all selector features",
++        "vp_model": "input-level surrogate on captured depth in metres; not a camera renderer",
++        "mask_centers": "normalized image coordinates at parent start; motion uses direction, speed and event age",
++        "recovery_effect": "includes corrupted images remaining in VP/selector history; fully clean history is ineligible",
++        "history_interval_s": "newer delivered source timestamp minus previous; can be negative for reordered arrivals",
++    }
++
++
++def source_rejection_masks(mode, faults, source):
++    """Check source AND observed effects; labels are checked separately."""
++    if mode not in SOURCE_MODES:
++        raise ValueError(f"unknown fault source mode: {mode}")
++    n = len(faults)
++    if faults.shape != (n, 8):
++        raise ValueError("fault provenance requires [n,8] fault metadata")
++    zero = torch.zeros(n, device=faults.device, dtype=torch.bool)
++    if mode == "any":
++        return {"wrong_source": zero, "effect_not_observable": zero, "healthy_side_not_clean": zero}
++    if source is None or source.shape != (n, len(SOURCE_AUDIT_ORDER)) or not torch.isfinite(source).all():
++        raise ValueError("directed collection requires finite source audit metadata")
++    if not ((source[:, :4] == 0) | (source[:, :4] == 1)).all():
++        raise ValueError("source effect/clean flags must be binary")
++    lp, vp = faults[:, 0].ne(0), faults[:, 1].ne(0)
++    if mode == "lp_only":
++        match, effect, clean = lp & ~vp, source[:, 0].bool(), source[:, 3].bool()
++    elif mode == "vp_only":
++        match, effect, clean = ~lp & vp, source[:, 1].bool(), source[:, 2].bool()
++    else:
++        match = lp & vp
++        effect = source[:, 0].bool() & source[:, 1].bool()
++        clean = torch.ones_like(match)
++    # Exclusive rejection reasons, in the order admission evaluates them.
++    return {"wrong_source": ~match, "effect_not_observable": match & ~effect,
++            "healthy_side_not_clean": match & effect & ~clean}
+--- /dev/null
++++ b/legged_lab/selector/fault_kinds.py
+@@ -0,0 +1,53 @@
++"""Stable fault IDs; new collection families append to existing dataset IDs."""
++
++from enum import IntEnum
++
++
++class FaultKind(IntEnum):
++    NONE = 0
++    FREEZE = 1
++    DELAY = 2
++    VP_OCCLUSION = 3
++    VP_SCALE = 4
++    VP_BIAS = 5
++    VP_SHIFT = 6
++    VP_COLLAPSE = 7
++    LP_RANDOM_DROPOUT = 8
++    LP_BLOCK_DROPOUT = 9
++    LP_HEIGHT_BIAS = 10
++    LP_REGISTRATION = 11
++    LP_DRIFT = 12
++    LP_COLLAPSE = 13
++    LP_MAP_DRIFT = 14
++    LP_PERSON = 15
++    LP_COMPOUND = 16
++    VP_COMPOUND = 17
++    VP_BURST = 18
++    VP_LOCAL_DROPOUT = 19
++    VP_EDGE_MISMATCH = 20
++    VP_SPATIAL_BIAS = 21
++    VP_MOTION_WARP = 22
++    VP_TIME_JITTER = 23
++    VP_FILTER_TRAIL = 24
++    VP_DYNAMIC_OCCLUSION = 25
++
++
++VP_FAULTS = (
++    FaultKind.FREEZE, FaultKind.DELAY, FaultKind.VP_OCCLUSION,
++    FaultKind.VP_SCALE, FaultKind.VP_BIAS, FaultKind.VP_SHIFT, FaultKind.VP_COLLAPSE,
++)
++LP_FAULTS = (
++    FaultKind.FREEZE, FaultKind.DELAY, FaultKind.LP_RANDOM_DROPOUT,
++    FaultKind.LP_BLOCK_DROPOUT, FaultKind.LP_HEIGHT_BIAS,
++    FaultKind.LP_REGISTRATION, FaultKind.LP_DRIFT, FaultKind.LP_COLLAPSE,
++)
++EXTENDED_LP_FAULTS = LP_FAULTS + (
++    FaultKind.LP_MAP_DRIFT, FaultKind.LP_PERSON, FaultKind.LP_COMPOUND,
++)
++EXTENDED_VP_FAULTS = VP_FAULTS + (FaultKind.VP_COMPOUND, FaultKind.VP_BURST)
++STRUCTURED_VP_FAULTS = EXTENDED_VP_FAULTS + (
++    FaultKind.VP_LOCAL_DROPOUT, FaultKind.VP_EDGE_MISMATCH,
++    FaultKind.VP_SPATIAL_BIAS, FaultKind.VP_MOTION_WARP,
++    FaultKind.VP_TIME_JITTER, FaultKind.VP_FILTER_TRAIL,
++    FaultKind.VP_DYNAMIC_OCCLUSION,
++)
+--- a/legged_lab/selector/faults.py
++++ b/legged_lab/selector/faults.py
+@@ -2,58 +2,15 @@
+ 
+ from __future__ import annotations
+ from dataclasses import dataclass
+-from enum import IntEnum
+ import math
+ import torch
+ import torch.nn.functional as F
+ from .config import FaultConfig
+ from .randomness import PerEnvironmentRNG
+ from .lp_map_faults import ElevationMapFaults, NOISE_AUDIT_ORDER
+-
+-
+-class FaultKind(IntEnum):
+-    NONE = 0
+-    FREEZE = 1
+-    DELAY = 2
+-    VP_OCCLUSION = 3
+-    VP_SCALE = 4
+-    VP_BIAS = 5
+-    VP_SHIFT = 6
+-    VP_COLLAPSE = 7
+-    LP_RANDOM_DROPOUT = 8
+-    LP_BLOCK_DROPOUT = 9
+-    LP_HEIGHT_BIAS = 10
+-    LP_REGISTRATION = 11
+-    LP_DRIFT = 12
+-    LP_COLLAPSE = 13
+-    LP_MAP_DRIFT = 14
+-    LP_PERSON = 15
+-    LP_COMPOUND = 16
+-    VP_COMPOUND = 17
+-    VP_BURST = 18
+-
+-
+-VP_FAULTS = (
+-    FaultKind.FREEZE,
+-    FaultKind.DELAY,
+-    FaultKind.VP_OCCLUSION,
+-    FaultKind.VP_SCALE,
+-    FaultKind.VP_BIAS,
+-    FaultKind.VP_SHIFT,
+-    FaultKind.VP_COLLAPSE,
+-)
+-LP_FAULTS = (
+-    FaultKind.FREEZE,
+-    FaultKind.DELAY,
+-    FaultKind.LP_RANDOM_DROPOUT,
+-    FaultKind.LP_BLOCK_DROPOUT,
+-    FaultKind.LP_HEIGHT_BIAS,
+-    FaultKind.LP_REGISTRATION,
+-    FaultKind.LP_DRIFT,
+-    FaultKind.LP_COLLAPSE,
+-)
+-EXTENDED_LP_FAULTS = LP_FAULTS + (FaultKind.LP_MAP_DRIFT, FaultKind.LP_PERSON, FaultKind.LP_COMPOUND)
+-EXTENDED_VP_FAULTS = VP_FAULTS + (FaultKind.VP_COMPOUND, FaultKind.VP_BURST)
++from .fault_kinds import (FaultKind, VP_FAULTS, LP_FAULTS, EXTENDED_LP_FAULTS,
++                          EXTENDED_VP_FAULTS, STRUCTURED_VP_FAULTS)
++from .vp_faults import DepthFrameFaults
+ 
+ 
+ @dataclass
+@@ -62,6 +19,7 @@
+     cursor: torch.Tensor
+     generator_state: torch.Tensor
+     map_state: dict[str, torch.Tensor] | None = None
++    vp_state: dict[str, torch.Tensor] | None = None
+ 
+ 
+ @dataclass
+@@ -117,6 +75,7 @@
+             "vp_shift_y",
+             "schedule_count",
+             "vp_burst_on_frames", "vp_burst_off_frames",
++            "lp_severity", "vp_severity", "lp_last_effect_frame", "vp_last_effect_frame",
+         )
+         scalar = (
+             "vp_scale",
+@@ -127,6 +86,7 @@
+             "lp_yaw",
+             "lp_drift_yaw",
+             "lp_height_velocity",
++            "lp_strength", "vp_strength",
+         )
+         for name in integer:
+             setattr(self, name, torch.zeros(n, dtype=torch.long, device=self.device))
+@@ -143,7 +103,9 @@
+         self.lp_buffer = torch.full(
+             (n, capacity, *lp_shape), self.cfg.lp_invalid_height, device=self.device
+         )
+-        self.vp_buffer = torch.ones(n, capacity, *vp_shape, device=self.device)
++        # Structured VP owns its capture ring; keep no duplicate legacy images.
++        vp_capacity = 0 if self.cfg.structured_vp_faults else capacity
++        self.vp_buffer = torch.ones(n, vp_capacity, *vp_shape, device=self.device)
+         self.lp_valid_buffer = torch.zeros_like(self.lp_buffer)
+         self.vp_valid_buffer = torch.zeros_like(self.vp_buffer)
+         self.lp_time_buffer = torch.zeros(
+@@ -154,7 +116,7 @@
+         self.vp_packet_buffer = torch.zeros_like(self.lp_time_buffer)
+         self.buffer_initialized = torch.zeros(n, device=self.device, dtype=torch.bool)
+         self.lp_frozen = self.lp_buffer[:, 0].clone()
+-        self.vp_frozen = self.vp_buffer[:, 0].clone()
++        self.vp_frozen = torch.ones(n, *vp_shape, device=self.device)
+         self.lp_frozen_valid = torch.zeros_like(self.lp_frozen)
+         self.vp_frozen_valid = torch.zeros_like(self.vp_frozen)
+         self.lp_frozen_time = torch.zeros(n, device=self.device, dtype=torch.float64)
+@@ -164,8 +126,12 @@
+         self.lp_freeze_initialized = torch.zeros_like(self.buffer_initialized)
+         self.vp_freeze_initialized = torch.zeros_like(self.buffer_initialized)
+         self.vp_observed_effect = torch.zeros_like(self.buffer_initialized)
++        self.vp_source_observed_effect = torch.zeros_like(self.buffer_initialized)
++        self.lp_observed_effect = torch.zeros_like(self.buffer_initialized)
+         self.map_faults = (ElevationMapFaults(n, lp_shape, self.device, self.cfg, self.generator)
+                            if self.cfg.extended_faults else None)
++        self.vp_faults = (DepthFrameFaults(n, vp_shape, self.device, self.cfg, self.generator)
++                          if self.cfg.structured_vp_faults else None)
+         self.cursor = torch.full((n,), -1, device=self.device, dtype=torch.long)
+         self._SNAPSHOT_TENSORS = tuple(
+             name
+@@ -174,14 +140,14 @@
+         )
+         self.reset()
+ 
+-    def _severity_strength(self, ids, shape=()):
+-        level = self.severity[ids]
++    def _severity_strength(self, ids, shape=(), *, branch=None):
++        level = (self.severity if branch is None else getattr(self, branch+"_severity"))[ids]
+         lo = level.float().reshape(-1, *([1] * len(shape))) * 0.35
+         level = level.reshape(-1, *([1] * len(shape)))
+         hi = torch.where(level == 2, 1.0, lo + 0.35)
+         return lo + (hi - lo) * self.generator.uniform(ids, shape)
+ 
+-    def _signed_range(self, ids, bounds, *, neutral=0.0, shape=()):
++    def _signed_range(self, ids, bounds, *, neutral=0.0, shape=(), branch=None):
+         """Sample within exact bounds; severity measures distance from neutral.
+ 
+         The nearest allowed value is the anchor for one-sided bounds. Equal
+@@ -196,7 +162,7 @@
+         elif anchor == high:
+             choose_low = torch.ones_like(choose_low)
+         endpoint = torch.where(choose_low, low, high)
+-        return anchor + self._severity_strength(ids, shape) * (endpoint - anchor)
++        return anchor + self._severity_strength(ids, shape, branch=branch) * (endpoint - anchor)
+ 
+     def _schedule(self, ids, initial=False):
+         if len(ids) == 0:
+@@ -205,12 +171,15 @@
+         self.severity[ids] = self.generator.categorical(
+             self.cfg.severity_probabilities, ids
+         )
++        self.lp_severity[ids] = self.vp_severity[ids] = self.severity[ids]
+         self.lp_kind[ids] = 0
+         self.vp_kind[ids] = 0
++        vp_kinds = (STRUCTURED_VP_FAULTS if self.cfg.structured_vp_faults
++                    else EXTENDED_VP_FAULTS if self.cfg.extended_faults else VP_FAULTS)
+         for flags, kinds, target, weights in (
+             ((scenario == 2) | (scenario == 3), EXTENDED_LP_FAULTS if self.cfg.extended_faults else LP_FAULTS,
+              self.lp_kind, self.cfg.lp_kind_weights),
+-            ((scenario == 1) | (scenario == 3), EXTENDED_VP_FAULTS if self.cfg.extended_faults else VP_FAULTS,
++            ((scenario == 1) | (scenario == 3), vp_kinds,
+              self.vp_kind, self.cfg.vp_kind_weights),
+         ):
+             chosen = ids[flags]
+@@ -222,6 +191,15 @@
+         lo = level.float() * 0.35
+         hi = torch.where(level == 2, 1.0, lo + 0.35)
+         strength = lo + (hi - lo) * self.generator.uniform(ids)
++        lp_strength, vp_strength = strength.clone(), strength.clone()
++        dual = ids[scenario == 3]
++        if self.cfg.independent_dual_faults:
++            self.lp_severity[dual] = self.generator.categorical(self.cfg.severity_probabilities, dual)
++            self.vp_severity[dual] = self.generator.categorical(self.cfg.severity_probabilities, dual)
++            self.severity[dual] = torch.maximum(self.lp_severity[dual], self.vp_severity[dual])
++            lp_strength[scenario == 3] = self._severity_strength(dual, branch="lp")
++            vp_strength[scenario == 3] = self._severity_strength(dual, branch="vp")
++        self.lp_strength[ids], self.vp_strength[ids] = lp_strength, vp_strength
+         delay = (
+             self.generator.randint(0, self.cfg.max_start_delay_frames + 1, ids)
+             if initial
+@@ -230,20 +208,26 @@
+         self.start_frame[ids] = self.step_count[ids] + delay
+         span = self.cfg.max_duration_frames - self.cfg.min_duration_frames
+         self.duration_frames[ids] = (
+-            self.cfg.min_duration_frames + torch.round(strength * span).long()
++            self.cfg.min_duration_frames + torch.round(lp_strength * span).long()
+         )
+         self.lp_start_frame[ids] = self.start_frame[ids]
+         self.vp_start_frame[ids] = self.start_frame[ids]
+         self.lp_duration_frames[ids] = self.duration_frames[ids]
+         self.vp_duration_frames[ids] = self.duration_frames[ids]
+-        dual = ids[scenario == 3]
+         stagger = self.generator.randint(0, self.cfg.max_dual_stagger_frames + 1, dual)
+         lp_first = self.generator.uniform(dual) < 0.5
++        if self.cfg.independent_dual_faults and self.cfg.max_dual_stagger_frames:
++            order = self.generator.randint(0, 3, dual)
++            stagger = self.generator.randint(1, self.cfg.max_dual_stagger_frames+1, dual)
++            stagger[order == 0] = 0
++            lp_first = order != 2
+         self.lp_start_frame[dual] += torch.where(lp_first, 0, stagger)
+         self.vp_start_frame[dual] += torch.where(lp_first, stagger, 0)
+-        self.vp_duration_frames[dual] = self.generator.randint(
+-            self.cfg.min_duration_frames, self.cfg.max_duration_frames + 1, dual
+-        )
++        if self.cfg.independent_dual_faults:
++            self.vp_duration_frames[ids] = self.cfg.min_duration_frames + torch.round(vp_strength*span).long()
++        else:
++            self.vp_duration_frames[dual] = self.generator.randint(
++                self.cfg.min_duration_frames, self.cfg.max_duration_frames + 1, dual)
+         self.duration_frames[ids] = (
+             torch.maximum(
+                 self.lp_start_frame[ids] + self.lp_duration_frames[ids],
+@@ -258,12 +242,12 @@
+             self.start_frame[ids] + self.duration_frames[ids] + recovery
+         )
+         self.lp_delay[ids] = (
+-            1 + torch.round(strength * (self.cfg.max_delay_frames - 1)).long()
+-        )
+-        self.vp_delay[ids] = self.lp_delay[ids]
+-        self.vp_scale[ids] = self._signed_range(ids, self.cfg.vp_scale_range, neutral=1.0)
+-        self.vp_bias[ids] = self._signed_range(ids, self.cfg.vp_bias_m_range) / self.cfg.vp_depth_max_m
+-        shifts = (strength * self.cfg.vp_max_shift_pixels).round().long()
++            1 + torch.round(lp_strength * (self.cfg.max_delay_frames - 1)).long()
++        )
++        self.vp_delay[ids] = 1 + torch.round(vp_strength*(self.cfg.max_delay_frames-1)).long()
++        self.vp_scale[ids] = self._signed_range(ids, self.cfg.vp_scale_range, neutral=1.0, branch="vp")
++        self.vp_bias[ids] = self._signed_range(ids, self.cfg.vp_bias_m_range, branch="vp") / self.cfg.vp_depth_max_m
++        shifts = (vp_strength * self.cfg.vp_max_shift_pixels).round().long()
+         for name in ("vp_shift_x", "vp_shift_y"):
+             getattr(self, name)[ids] = shifts * torch.where(
+                 self.generator.uniform(ids) < 0.5, -1, 1
+@@ -272,26 +256,29 @@
+             [0.0, 1.0, -1.0], device=self.device
+         )[self.generator.randint(0, 3, ids)]
+         low, high = self.cfg.lp_dropout_fraction
+-        self.lp_dropout[ids] = low + strength * (high - low)
+-        self.lp_bias[ids] = self._signed_range(ids, self.cfg.lp_height_bias_m_range)
+-        self.lp_translation_xy[ids] = self._signed_range(ids, self.cfg.lp_translation_range_m, shape=(2,))
+-        self.lp_yaw[ids] = self._signed_range(ids, self.cfg.lp_yaw_range_deg)
++        self.lp_dropout[ids] = low + lp_strength * (high - low)
++        self.lp_bias[ids] = self._signed_range(ids, self.cfg.lp_height_bias_m_range, branch="lp")
++        self.lp_translation_xy[ids] = self._signed_range(ids, self.cfg.lp_translation_range_m, shape=(2,), branch="lp")
++        self.lp_yaw[ids] = self._signed_range(ids, self.cfg.lp_yaw_range_deg, branch="lp")
+         angle = 2 * math.pi * self.generator.uniform(ids)
+         low, high = self.cfg.lp_drift_m_per_s
+-        speed = low + strength * (high - low)
++        speed = low + lp_strength * (high - low)
+         self.lp_drift_xy[ids] = torch.stack(
+             (speed * angle.cos(), speed * angle.sin()), -1
+         )
+         low, high = self.cfg.lp_drift_deg_per_s
+-        yaw_speed = low + self._severity_strength(ids) * (high - low)
++        yaw_speed = low + self._severity_strength(ids, branch="lp") * (high - low)
+         self.lp_drift_yaw[ids] = yaw_speed * torch.where(self.generator.uniform(ids) < 0.5, -1.0, 1.0)
+         if self.map_faults is not None:
+-            self.map_faults.schedule(ids, strength)
+-            self.lp_height_velocity[ids] = self._signed_range(ids, (-.05, .05))
+-            self.vp_observed_effect[ids] = False
++            self.map_faults.schedule(ids, lp_strength)
++            self.lp_height_velocity[ids] = self._signed_range(ids, (-.05, .05), branch="lp")
+             for name, bounds in (("vp_burst_on_frames", self.cfg.burst_on_frames),
+                                  ("vp_burst_off_frames", self.cfg.burst_off_frames)):
+                 getattr(self, name)[ids] = self.generator.randint(bounds[0], bounds[1]+1, ids)
++        if self.vp_faults is not None:
++            self.vp_faults.schedule(ids, vp_strength)
++        self.lp_observed_effect[ids] = self.vp_observed_effect[ids] = False
++        self.vp_source_observed_effect[ids] = False
+         self.lp_freeze_initialized[ids] = False
+         self.vp_freeze_initialized[ids] = False
+         self.schedule_count[ids] += 1
+@@ -300,7 +287,8 @@
+             ("lp_block_mask", self.lp_shape, self.cfg.lp_block_fraction),
+         ):
+             h, w = shape
+-            fraction = bounds[0] + strength * (bounds[1] - bounds[0])
++            branch_strength = vp_strength if name.startswith("vp") else lp_strength
++            fraction = bounds[0] + branch_strength * (bounds[1] - bounds[0])
+             rh = (fraction * h * w * h / w).sqrt().round().long().clamp(1, h)
+             rw = (fraction * h * w / rh).ceil().long().clamp(1, w)
+             top = (self.generator.uniform(ids) * (h - rh + 1)).long()
+@@ -327,6 +315,9 @@
+         self.buffer_initialized[ids] = False
+         self.lp_valid_buffer[ids] = 0
+         self.vp_valid_buffer[ids] = 0
++        self.lp_last_effect_frame[ids] = self.vp_last_effect_frame[ids] = -1
++        if self.vp_faults is not None:
++            self.vp_faults.reset(ids)
+         self._schedule(ids, initial=True)
+ 
+     def snapshot(self):
+@@ -335,6 +326,7 @@
+             self.cursor.clone(),
+             self.generator.get_state(),
+             self.map_faults.snapshot() if self.map_faults is not None else None,
++            self.vp_faults.snapshot() if self.vp_faults is not None else None,
+         )
+ 
+     def restore(self, snapshot):
+@@ -346,6 +338,10 @@
+             if snapshot.map_state is None:
+                 raise ValueError("extended map state is missing from fault snapshot")
+             self.map_faults.restore(snapshot.map_state)
++        if self.vp_faults is not None:
++            if snapshot.vp_state is None:
++                raise ValueError("captured VP state is missing from fault snapshot")
++            self.vp_faults.restore(snapshot.vp_state)
+ 
+     def unobservable_onset_within(self, horizon_frames):
+         lp_pending = (self.lp_start_frame >= self.step_count) & (
+@@ -370,6 +366,9 @@
+             advanced_vp = self.vp_kind >= int(FaultKind.VP_COMPOUND)
+             unseen = (la & advanced_lp & ~self.map_faults.state["observed_effect"])
+             unseen |= va & advanced_vp & ~self.vp_observed_effect
++        if self.cfg.structured_vp_faults:
++            la, va = self._active(self.step_count-1)
++            unseen |= (la & ~self.lp_observed_effect) | (va & ~self.vp_observed_effect)
+         return (
+             reschedule
+             | unseen
+@@ -384,12 +383,12 @@
+         if self.map_faults is not None:
+             person = (self.lp_kind == int(FaultKind.LP_PERSON)) | (self.lp_kind == int(FaultKind.LP_COMPOUND))
+             lp_active |= person & self.map_faults.residual() & (observed >= self.lp_start_frame)
+-        return (
+-            lp_active,
+-            (observed >= self.vp_start_frame)
++        vp_active = ((observed >= self.vp_start_frame)
+             & (observed < self.vp_start_frame + self.vp_duration_frames)
+-            & (self.vp_kind != 0),
+-        )
++            & (self.vp_kind != 0))
++        if self.vp_faults is not None:
++            vp_active |= self.vp_faults.residual() & (self.vp_kind != 0)
++        return lp_active, vp_active
+ 
+     def audit_metadata(self):
+         observed = (self.step_count - 1).clamp_min(0)
+@@ -437,6 +436,23 @@
+             ), -1,
+         )
+ 
++    def audit_source(self, *, history_frames=5, horizon_frames=10):
++        """Current-event effects present in observable history; never future labels."""
++        observed = self.step_count-1
++        lp_recent = (self.lp_last_effect_frame >= 0) & (self.lp_last_effect_frame >= observed-history_frames+1)
++        vp_recent = (self.vp_last_effect_frame >= 0) & (self.vp_last_effect_frame >= observed-history_frames+1)
++        no_new_plan = ~self.unobservable_onset_within(horizon_frames)
++        lp_clean = (self.lp_kind == 0) & ~lp_recent & no_new_plan
++        vp_clean = (self.vp_kind == 0) & ~vp_recent & no_new_plan
++        dt = self.cfg.update_period_s
++        return torch.stack((
++            (lp_recent & self.lp_observed_effect).float(),
++            (vp_recent & self.vp_source_observed_effect).float(), lp_clean.float(), vp_clean.float(),
++            torch.where(self.lp_last_effect_frame >= 0, (observed-self.lp_last_effect_frame).float()*dt, -1.),
++            torch.where(self.vp_last_effect_frame >= 0, (observed-self.vp_last_effect_frame).float()*dt, -1.),
++            self.lp_severity.float(), self.vp_severity.float(),
++        ), -1)
++
+     def audit_map_noise(self):
+         if self.map_faults is None:
+             return torch.zeros(self.num_envs, len(NOISE_AUDIT_ORDER), device=self.device)
+@@ -545,6 +561,7 @@
+         vp_packet_timestamp=None,
+         env_ids=None,
+         world_pose=None,
++        now=None,
+     ):
+         for data, shape in ((lp, self.lp_shape), (vp, self.vp_shape)):
+             if data.shape != (self.num_envs, *shape):
+@@ -600,6 +617,8 @@
+             # Never silently discard a residual map when sampling the next plan.
+             residual = self.map_faults.residual()
+             due = due[~residual[due]]
++        if self.vp_faults is not None:
++            due = due[~self.vp_faults.residual()[due]]
+         self._schedule(due)
+         capacity = self.cfg.max_delay_frames + 1
+         self.cursor[ids] = (self.cursor[ids] + 1) % capacity
+@@ -614,6 +633,10 @@
+             (self.lp_packet_buffer, lp_packet),
+             (self.vp_packet_buffer, vp_packet),
+         ):
++            if self.vp_faults is not None and any(buffer is candidate for candidate in (
++                self.vp_buffer, self.vp_valid_buffer, self.vp_time_buffer, self.vp_packet_buffer,
++            )):
++                continue
+             buffer[first] = value[first, None]
+             buffer[ids, self.cursor[ids]] = value[ids]
+         self.buffer_initialized[ids] = True
+@@ -622,12 +645,15 @@
+         la, va = self._active(self.step_count)
+         la &= selected
+         va &= selected
++        legacy_va = va if self.vp_faults is None else torch.zeros_like(va)
+         out_lp, out_vp = lp.clone(), vp.clone()
+         lv, vv = lp_valid.clone(), vp_valid.clone()
+         for name, kinds, on, data, support, time, packet in (
+             ("lp", self.lp_kind, la, out_lp, lv, lp_time, lp_packet),
+-            ("vp", self.vp_kind, va, out_vp, vv, vp_time, vp_packet),
++            ("vp", self.vp_kind, legacy_va, out_vp, vv, vp_time, vp_packet),
+         ):
++            if name == "vp" and self.vp_faults is not None:
++                continue
+             freeze = on & (kinds == int(FaultKind.FREEZE))
+             initialized = getattr(self, name + "_freeze_initialized")
+             new = freeze & ~initialized
+@@ -654,7 +680,7 @@
+             packet[delayed] = self._delayed(
+                 getattr(self, name + "_packet_buffer"), delays
+             )[delayed]
+-        occluded = va & (self.vp_kind == int(FaultKind.VP_OCCLUSION))
++        occluded = legacy_va & (self.vp_kind == int(FaultKind.VP_OCCLUSION))
+         mask = (
+             self.vp_occlusion_mask[:, None].expand_as(vv)
+             & occluded[:, None, None, None]
+@@ -665,19 +691,19 @@
+             (FaultKind.VP_SCALE, self.vp_scale, torch.zeros_like(self.vp_bias)),
+             (FaultKind.VP_BIAS, torch.ones_like(self.vp_scale), self.vp_bias),
+         ):
+-            chosen = va & (self.vp_kind == int(kind))
++            chosen = legacy_va & (self.vp_kind == int(kind))
+             out_vp[chosen] = (
+                 out_vp[chosen] * scale[chosen, None, None, None]
+                 + bias[chosen, None, None, None]
+             ).clamp(0, 1)
+-        shifted = va & (self.vp_kind == int(FaultKind.VP_SHIFT))
++        shifted = legacy_va & (self.vp_kind == int(FaultKind.VP_SHIFT))
+         out_vp[shifted] = self._integer_shift(
+             out_vp, self.vp_shift_x, self.vp_shift_y, 1.0
+         )[shifted]
+         vv[shifted] = self._integer_shift(vv, self.vp_shift_x, self.vp_shift_y, 0.0)[
+             shifted
+         ]
+-        collapsed = va & (self.vp_kind == int(FaultKind.VP_COLLAPSE))
++        collapsed = legacy_va & (self.vp_kind == int(FaultKind.VP_COLLAPSE))
+         out_vp[collapsed] = self.vp_collapse_value[collapsed, None, None, None]
+         vv[collapsed] = 0.0
+         dropout_ids = (
+@@ -746,9 +772,39 @@
+             cleared = selected & residual_before & ~self.map_faults.residual()
+             overdue = cleared & (self.step_count >= self.lp_start_frame+self.lp_duration_frames)
+             self.next_schedule_frame[overdue] = self.step_count[overdue] + self.cfg.min_recovery_frames
+-            self._apply_extended_vp(out_vp, vv, vp_time, vp_packet, va)
++            if self.vp_faults is None:
++                self._apply_extended_vp(out_vp, vv, vp_time, vp_packet, va)
++        if self.vp_faults is not None:
++            residual_before = self.vp_faults.residual()
++            result = self.vp_faults.apply(vp, vp_valid, vp_time, vp_packet, ids,
++                                         active=va, plan=self, pose=world_pose, now=now)
++            out_vp, vv, vp_time, vp_packet = (value.clone() for value in result)
++            cleared = selected & residual_before & ~self.vp_faults.residual()
++            overdue = cleared & (self.step_count >= self.vp_start_frame+self.vp_duration_frames)
++            self.next_schedule_frame[overdue] = self.step_count[overdue]+self.cfg.min_recovery_frames
+         lv = lv.clamp(0, 1)
+         vv = vv.clamp(0, 1)
++        for name, data, raw, valid, raw_valid, timestamp, raw_timestamp in (
++            ("lp", out_lp, lp, lv, lp_valid, lp_time, lp_timestamp),
++            ("vp", out_vp, vp, vv, vp_valid, vp_time, vp_timestamp),
++        ):
++            changed = ((data-raw).abs() > 1e-5).flatten(1).any(-1)
++            changed |= ((valid-raw_valid).abs() > 1e-5).flatten(1).any(-1)
++            changed |= timestamp != raw_timestamp.to(self.device).reshape(self.num_envs)
++            changed &= selected & (getattr(self, name+"_kind") != 0)
++            changed &= self.step_count >= getattr(self, name+"_start_frame")
++            seen = changed
++            if name == "vp" and self.vp_faults is not None:
++                # Old delivered images can still be visible from the previous
++                # parent. They do not prove the new parent's effect was seen.
++                seen = changed & self.vp_faults.state["effect"]
++            if name == "vp":
++                self.vp_source_observed_effect[seen] = True
++                if self.vp_faults is not None:
++                    self.vp_observed_effect[seen] = True
++            else:
++                self.lp_observed_effect[seen] = True
++            getattr(self, name+"_last_effect_frame")[changed] = self.step_count[changed]
+         self.step_count[ids] += 1
+         return FaultBatch(
+             out_lp, out_vp, lp_time, vp_time, la, va, lv, vv, lp_packet, vp_packet
+--- a/legged_lab/selector/supplement.py
++++ b/legged_lab/selector/supplement.py
+@@ -8,14 +8,27 @@
+ 
+ from .config import FaultConfig
+ from .collection_audit import PAIR_NAMES
+-
+-
+-PROFILE_NAMES = ("baseline", "mixed", "lp_map", "vp_hard", "dual", "recovery")
++from .directed_audit import SOURCE_MODES, source_rejection_masks
++from .fault_kinds import FaultKind
++
++
++DIRECTED_PROFILES = {"directed_lp": "lp_only", "directed_vp": "vp_only", "directed_dual": "dual"}
++PROFILE_NAMES = ("baseline", "mixed", "lp_map", "vp_hard", "dual", "recovery", *DIRECTED_PROFILES)
+ LIFECYCLE_NAMES = (
+     "normal", "other_fault", "drift_early", "drift_mature",
+     "person_approach", "person_near", "person_depart", "person_residual",
+     "person_cleared", "recovered",
+ )
++
++
++def resolve_fault_source(profile, requested=None):
++    expected = DIRECTED_PROFILES.get(profile)
++    if expected is not None and requested not in (None, expected):
++        raise ValueError("directed profile and --fault-source disagree")
++    mode = requested or expected or "any"
++    if mode not in SOURCE_MODES:
++        raise ValueError("unknown --fault-source")
++    return mode
+ 
+ 
+ def lifecycle_classes(faults, parameters, noise):
+@@ -58,6 +71,8 @@
+         "mixed": (.10, .40, .30, .20), "lp_map": (.05, .05, .85, .05),
+         "vp_hard": (.05, .85, .05, .05), "dual": (.05, .10, .10, .75),
+         "recovery": (.25, .25, .25, .25),
++        "directed_lp": (0., 0., 1., 0.), "directed_vp": (0., 1., 0., 0.),
++        "directed_dual": (0., 0., 0., 1.),
+     }[name]
+     lp_weights = (.02, .04, .03, .04, .07, .07, .05, .03, .25, .25, .15)
+     vp_weights = (.04, .10, .12, .12, .12, .12, .03, .25, .10)
+@@ -75,6 +90,12 @@
+         cfg = replace(cfg, severity_probabilities=(.45, .40, .15),
+                       min_recovery_frames=25, max_recovery_frames=50,
+                       lp_map_random_walk_m=.004)
++    if name in DIRECTED_PROFILES:
++        cfg = replace(cfg, structured_vp_faults=True, independent_dual_faults=True,
++            lp_kind_weights=(.01, .04, .08, .08, .12, .12, .08, .02, .22, .15, .08),
++            vp_kind_weights=(.02, .04, .04, .02, .02, .02, .01, .10, .06,
++                             .11, .12, .13, .10, .08, .06, .07),
++            vp_occlusion_fraction=(.10, .65))
+     cfg.validate()
+     return cfg
+ 
+@@ -94,8 +115,15 @@
+     label_interval_frames: int = 1
+     randomize_label_phase: bool = False
+     max_samples_per_labelled_batch: int = 0
++    fault_source: str = "any"
+ 
+     def validate(self, target_samples):
++        if self.fault_source not in SOURCE_MODES:
++            raise ValueError(f"fault_source must be one of {SOURCE_MODES}")
++        if self.fault_source != "any" and not self.require_initial_safe:
++            raise ValueError("directed supplements require initially safe states")
++        if self.fault_source != "any" and self.split != "train":
++            raise ValueError("directed source/outcome selection is training-only")
+         if self.split not in ("train", "validation", "test"):
+             raise ValueError("invalid supplement split")
+         if self.split != "train" and self.pair_quotas is not None:
+@@ -104,6 +132,10 @@
+             len(self.pair_quotas) != 4 or any(type(q) is not int or q < 0 for q in self.pair_quotas)
+             or sum(self.pair_quotas) != target_samples):
+             raise ValueError("four pair quotas must sum exactly to target_samples")
++        if self.pair_quotas is not None and self.fault_source != "any":
++            allowed_pair = {"lp_only": 1, "vp_only": 2, "dual": 3}[self.fault_source]
++            if any(q for i, q in enumerate(self.pair_quotas) if i not in (0, allowed_pair)):
++                raise ValueError("directed quotas must match their fault source, or be both-safe controls")
+         if self.max_samples_per_event < 1 or not math.isfinite(self.min_event_spacing_s) or self.min_event_spacing_s < .2:
+             raise ValueError("event cap must be positive and spacing must be at least 0.2 s")
+         if type(self.max_no_progress_batches) is not int or self.max_no_progress_batches < 1:
+@@ -156,6 +188,14 @@
+         self.written_1s_by_lifecycle = [[0]*4 for _ in LIFECYCLE_NAMES]
+         self.written_time_bins = {}
+         self.rejections["temporal_budget"] = 0
++        for name in ("wrong_source", "effect_not_observable", "healthy_side_not_clean", "source_outcome"):
++            self.rejections[name] = 0
++        self.source_checked = 0
++        self.source_eligible_pairs = [0]*4
++        self.source_written_pairs = [0]*4
++        self.source_rejected_pairs = [0]*4
++        self.quota_rejected_pairs = [0]*4
++        self.kind_yield = {}
+ 
+     def start(self, now):
+         if self.collection_start is not None:
+@@ -198,9 +238,43 @@
+         for stage, count in enumerate(torch.bincount(stages, minlength=len(LIFECYCLE_NAMES)).tolist()):
+             self.seen_lifecycle[stage] += count
+ 
+-    def select(self, good, labels, event_identity, now, *, faults=None, parameters=None, noise=None):
++    def _record_kind_yield(self, faults, pairs, mask, stage):
++        if faults is None:
++            return
++        width = len(FaultKind)
++        keys = (faults[:, 0].long()*width+faults[:, 1].long()).cpu()*4+pairs
++        counts = torch.bincount(keys[mask.cpu()], minlength=width*width*4).reshape(width, width, 4)
++        for lp, vp in counts.sum(-1).nonzero().tolist():
++            value = self.kind_yield.setdefault(f"{lp}:{vp}", {
++                "stable_attempt_1s": [0]*4, "source_eligible_1s": [0]*4, "written_1s": [0]*4,
++            })
++            value[stage] = [a+b for a, b in zip(value[stage], counts[lp, vp].tolist())]
++
++    def select(self, good, labels, event_identity, now, *, faults=None, parameters=None, noise=None, source=None):
+         budget = self.sample_budget(now)
+         pairs = label_classes(labels).cpu()
++        self._record_kind_yield(faults, pairs, good, "stable_attempt_1s")
++        if self.cfg.fault_source != "any":
++            if faults is None:
++                raise ValueError("directed quotas require fault metadata")
++            self.source_checked += int(good.sum())
++            masks = source_rejection_masks(self.cfg.fault_source, faults, source)
++            rejected = torch.zeros_like(good)
++            for name, mask in masks.items():
++                self.rejections[name] += int((good & mask).sum())
++                rejected |= mask
++            eligible = good & ~rejected
++            self._record_kind_yield(faults, pairs, eligible, "source_eligible_1s")
++            for i, count in enumerate(torch.bincount(pairs[eligible.cpu()], minlength=4).tolist()):
++                self.source_eligible_pairs[i] += count
++            allowed = {"lp_only": 1, "vp_only": 2, "dual": 3}[self.cfg.fault_source]
++            mismatch = eligible & ~((pairs == 0) | (pairs == allowed)).to(good.device)
++            self.rejections["source_outcome"] += int(mismatch.sum())
++            for i, count in enumerate(torch.bincount(pairs[mismatch.cpu()], minlength=4).tolist()):
++                self.source_rejected_pairs[i] += count
++            good = eligible & ~mismatch
++        else:
++            self._record_kind_yield(faults, pairs, good, "source_eligible_1s")
+         candidates = good.nonzero().flatten().cpu()
+         events = event_identity.cpu().tolist()
+         stages = (lifecycle_classes(faults, parameters, noise).cpu()
+@@ -234,8 +308,11 @@
+                 room = self.cfg.pair_quotas[category]-self.counts[category]
+                 if room <= 0:
+                     self.rejections["outcome_quota"] += 1
++                    self.quota_rejected_pairs[category] += 1
+                     continue
+             self.counts[category] += 1
++            if self.cfg.fault_source != "any":
++                self.source_written_pairs[category] += 1
+             self.events[key] = (count+1, now)
+             self.written_lifecycle[int(stages[i])] += 1
+             self.written_1s_by_lifecycle[int(stages[i])][category] += 1
+@@ -243,6 +320,9 @@
+         time_bin = int((self.last_time-self.collection_start)//5)
+         if selected:
+             self.written_time_bins[str(time_bin)] = self.written_time_bins.get(str(time_bin), 0)+len(selected)
++        written = torch.zeros_like(good)
++        written[selected] = True
++        self._record_kind_yield(faults, pairs, written, "written_1s")
+         return torch.tensor(selected, dtype=torch.long, device=good.device)
+ 
+     def summary(self):
+@@ -253,6 +333,16 @@
+             "config": asdict(self.cfg), "pair_order": list(PAIR_NAMES),
+             "accepted_1s": self.counts, "eligible_1s": self.eligible_counts,
+             "independent_events": len(self.events), "rejections": self.rejections,
++            "source_acceptance": {
++                "fault_source": self.cfg.fault_source, "checked": self.source_checked,
++                "eligible_1s": self.source_eligible_pairs, "written_1s": self.source_written_pairs,
++                "rejected_outcomes_1s": self.source_rejected_pairs,
++                "quota_rejected_1s": self.quota_rejected_pairs,
++                "scope": "initially safe, observable, valid and replay-stable candidate pairs, before quotas",
++                "quota_rejected_scope": "rows visited before the time budget or target stopped admission",
++            },
++            "outcome_yield_by_kind_pair": self.kind_yield,
++            "kind_pair_key": "lp_kind_id:vp_kind_id; counts use pair_order",
+             "missing_1s": ([max(0,q-n) for q,n in zip(self.cfg.pair_quotas, self.counts)]
+                              if self.cfg.pair_quotas is not None else None),
+             "temporal_coverage": {
+--- /dev/null
++++ b/legged_lab/selector/vp_faults.py
+@@ -0,0 +1,358 @@
++"""Capture-once depth faults for directed supplements.
++
++Each captured source frame is corrupted in metres exactly once. Delivery faults
++select stored frames; the two delivered history frames are never re-corrupted.
++This is a policy-input surrogate, not a physical camera renderer.
++"""
++
++from __future__ import annotations
++
++import math
++import torch
++import torch.nn.functional as F
++
++from .fault_kinds import FaultKind as K
++from .directed_audit import VP_AUDIT_ORDER
++
++
++class DepthFrameFaults:
++    def __init__(self, num_envs, shape, device, cfg, rng):
++        if len(shape) != 3 or shape[0] != 2:
++            raise ValueError("capture-once VP faults require two depth history frames")
++        self.cfg, self.rng, self.device = cfg, rng, torch.device(device)
++        self.n, self.h, self.w = num_envs, shape[-2], shape[-1]
++        self.capacity = cfg.max_delay_frames + 1
++        self.state = {}
++        for name, tail, dtype in (
++            ("frames", (self.capacity, self.h, self.w), torch.float32),
++            ("supports", (self.capacity, self.h, self.w), torch.float32),
++            ("times", (self.capacity,), torch.float64),
++            ("history", (2, self.h, self.w), torch.float32),
++            ("history_support", (2, self.h, self.w), torch.float32),
++            ("history_times", (2,), torch.float64),
++            ("cursor", (), torch.int64), ("captures", (), torch.int64),
++            ("initialized", (), torch.bool), ("delivered", (), torch.bool),
++            ("last_capture", (), torch.float64), ("last_source", (), torch.float64),
++            ("last_packet", (), torch.float64), ("hold_left", (), torch.int64),
++            ("freeze_initialized", (), torch.bool),
++            ("frozen", (self.h, self.w), torch.float32),
++            ("frozen_support", (self.h, self.w), torch.float32),
++            ("frozen_time", (), torch.float64), ("frozen_packet", (), torch.float64),
++            ("field", (3, 6), torch.float32), ("centers", (3, 2), torch.float32),
++            ("mask_direction", (2,), torch.float32), ("bias_m", (), torch.float32),
++            ("scale_error", (), torch.float32), ("edge_mix", (), torch.float32),
++            ("shift", (2,), torch.float32), ("rotation_deg", (), torch.float32),
++            ("mask_fraction", (), torch.float32), ("mask_speed", (), torch.float32),
++            ("return_mode", (), torch.int64), ("alpha", (), torch.float32),
++            ("filter_output", (self.h, self.w), torch.float32),
++            ("filter_support", (self.h, self.w), torch.float32),
++            ("filter_error", (self.h, self.w), torch.float32),
++            ("filter_initialized", (), torch.bool),
++            ("previous_pose", (4,), torch.float32), ("pose_initialized", (), torch.bool),
++            ("actual_delay", (), torch.float32), ("holding", (), torch.bool),
++            ("effect", (), torch.bool), ("support_ratio", (), torch.float32),
++            ("saturation_ratio", (), torch.float32), ("new_capture", (), torch.bool),
++            ("history_append", (), torch.bool), ("source_age", (), torch.float32),
++            ("changed_fraction", (), torch.float32),
++        ):
++            self.state[name] = torch.zeros((num_envs, *tail), device=device, dtype=dtype)
++        y, x = torch.meshgrid(torch.linspace(0, 1, self.h, device=device),
++                              torch.linspace(0, 1, self.w, device=device), indexing="ij")
++        self.xy = torch.stack((x, y), -1)
++
++    def snapshot(self):
++        return {name: value.clone() for name, value in self.state.items()}
++
++    def restore(self, values):
++        if set(values) != set(self.state):
++            raise ValueError("VP fault snapshot schema changed")
++        for name, value in values.items():
++            self.state[name].copy_(value)
++
++    def reset(self, ids):
++        for value in self.state.values():
++            value[ids] = 0
++        self.state["last_source"][ids] = -torch.inf
++        self.state["last_packet"][ids] = -torch.inf
++        self.state["source_age"][ids] = -1
++
++    def schedule(self, ids, strength):
++        # A new parent event changes parameters, not previously captured images.
++        s = self.state
++        for name in ("hold_left", "freeze_initialized", "filter_initialized", "effect"):
++            s[name][ids] = 0
++        s["filter_error"][ids] = 0
++        sign = torch.where(self.rng.uniform(ids) < .5, -1., 1.)
++        for name, bounds in (
++            ("bias_m", self.cfg.vp_local_bias_m), ("scale_error", self.cfg.vp_local_scale_error),
++            ("edge_mix", self.cfg.vp_edge_mix), ("rotation_deg", self.cfg.vp_rotation_deg),
++            ("mask_fraction", self.cfg.vp_occlusion_fraction),
++            ("mask_speed", self.cfg.vp_mask_speed_px_per_s), ("alpha", self.cfg.vp_filter_alpha),
++        ):
++            s[name][ids] = bounds[0] + strength * (bounds[1]-bounds[0])
++        s["bias_m"][ids] *= sign
++        s["rotation_deg"][ids] *= sign
++        low, high = self.cfg.vp_subpixel_shift_px
++        s["shift"][ids] = (low + strength[:, None]*(high-low)) * torch.where(
++            self.rng.uniform(ids, (2,)) < .5, -1., 1.)
++        s["field"][ids] = self.rng.normal(ids, (3, 6))
++        s["centers"][ids] = .15 + .7*self.rng.uniform(ids, (3, 2))
++        angle = 2*math.pi*self.rng.uniform(ids)
++        s["mask_direction"][ids] = torch.stack((angle.cos(), angle.sin()), -1)
++        s["return_mode"][ids] = self.rng.randint(0, 2, ids)
++
++    def residual(self):
++        return self.state["filter_error"].abs().flatten(1).amax(-1) > self.cfg.vp_residual_epsilon_m
++
++    def _field(self, ids):
++        field = F.interpolate(self.state["field"][ids, None], size=(self.h, self.w),
++                              mode="bilinear", align_corners=True)[:, 0]
++        return field / field.abs().flatten(1).amax(-1).clamp_min(1.)[:, None, None]
++
++    def _mask(self, ids, elapsed, duration, *, moving=False, near=None):
++        s = self.state
++        seconds = elapsed.float()*self.cfg.update_period_s
++        centers = s["centers"][ids].clone()
++        drift = s["mask_direction"][ids] * s["mask_speed"][ids, None]
++        drift = drift * seconds[:, None] / torch.tensor([self.w, self.h], device=self.device)
++        centers += drift[:, None]
++        if moving:
++            progress = (elapsed.float()/duration.clamp_min(1)).clamp(0, 1)
++            centers[..., 0] = -.35 + 1.7*progress[:, None] + .2*(centers[..., 0]-.5)
++        delta = self.xy[None, None] - centers[:, :, None, None]
++        radius = (s["mask_fraction"][ids]/(3*math.pi)).sqrt().clamp_min(.01)
++        distance = ((delta[..., 0]/(1.4*radius[:, None, None, None])).square()
++                    + (delta[..., 1]/(.75*radius[:, None, None, None])).square()).amin(1)
++        distance += .20*self._field(ids)
++        if near is not None:
++            distance -= .35*near
++        # Smooth borders represent fractional raw support after resampling.
++        mask = ((1.15-distance)/.3).clamp(0, 1)
++        return mask * ((elapsed.float()+1)/3).clamp(0, 1)[:, None, None]
++
++    def _warp(self, data, valid, shift, angle, field=None):
++        n = len(data)
++        radians = torch.deg2rad(angle)
++        theta = torch.zeros(n, 2, 3, device=self.device)
++        theta[:, 0, 0], theta[:, 1, 1] = radians.cos(), radians.cos()
++        theta[:, 0, 1] = -radians.sin()*(self.h-1)/max(1, self.w-1)
++        theta[:, 1, 0] = radians.sin()*(self.w-1)/max(1, self.h-1)
++        theta[:, 0, 2] = -2*shift[:, 0]/max(1, self.w-1)
++        theta[:, 1, 2] = -2*shift[:, 1]/max(1, self.h-1)
++        grid = F.affine_grid(theta, (n, 2, self.h, self.w), align_corners=True)
++        if field is not None:
++            grid[..., 0] += .5*field/max(1, self.w-1)
++            grid[..., 1] += .5*field/max(1, self.h-1)
++        sampled = F.grid_sample(torch.stack((data*valid, valid), 1), grid,
++                                align_corners=True, mode="bilinear", padding_mode="zeros")
++        support = sampled[:, 1].clamp(0, 1)
++        depth = torch.where(support > 1e-6, sampled[:, 0]/support.clamp_min(1e-6),
++                            self.cfg.vp_depth_max_m)
++        return depth, support
++
++    def _corrupt(self, ids, raw, support, active, plan, pose):
++        s, cfg = self.state, self.cfg
++        depth, valid = raw.clone(), support.clone()
++        kinds = plan.vp_kind[ids]
++        elapsed = (plan.step_count[ids]-plan.vp_start_frame[ids]).clamp_min(0)
++        duration = plan.vp_duration_frames[ids]
++        on = elapsed % (plan.vp_burst_on_frames[ids]+plan.vp_burst_off_frames[ids]).clamp_min(1) < plan.vp_burst_on_frames[ids]
++
++        def rows(kind):
++            return (active & (kinds == int(kind))).nonzero().flatten()
++
++        evolving = active & ((kinds == int(K.VP_SPATIAL_BIAS)) | (kinds == int(K.VP_COMPOUND)))
++        evolving_ids = ids[evolving]
++        s["field"][evolving_ids] = .98*s["field"][evolving_ids] + .04*self.rng.normal(evolving_ids, (3, 6))
++        field = self._field(ids)
++        chosen = rows(K.VP_SPATIAL_BIAS)
++        ramp = (.3 + .7*(elapsed.float()/duration.clamp_min(1)).clamp(0, 1))
++        depth[chosen] = depth[chosen]*(1+s["scale_error"][ids[chosen], None, None]*field[chosen]) + s["bias_m"][ids[chosen], None, None]*field[chosen]*ramp[chosen, None, None]
++
++        chosen = rows(K.VP_EDGE_MISMATCH)
++        if len(chosen):
++            d, v = depth[chosen], valid[chosen]
++            low = -F.max_pool2d(-torch.where(v > .5, d, float("inf"))[:, None], 3, 1, 1)[:, 0]
++            high = F.max_pool2d(torch.where(v > .5, d, -float("inf"))[:, None], 3, 1, 1)[:, 0]
++            edges = (high-low > .06) & torch.isfinite(low) & torch.isfinite(high) & (v > 0)
++            wrong = torch.where(s["bias_m"][ids[chosen], None, None] > 0, high, low)
++            weight = s["edge_mix"][ids[chosen], None, None]*edges
++            depth[chosen] = torch.where(edges, d*(1-weight)+wrong*weight, d)
++
++        chosen = rows(K.VP_MOTION_WARP)
++        if len(chosen):
++            motion = torch.zeros(len(chosen), device=self.device)
++            if pose is not None:
++                previous = s["previous_pose"][ids[chosen]]
++                delta = pose[ids[chosen]]-previous
++                yaw = torch.atan2(delta[:, 3].sin(), delta[:, 3].cos()).abs()
++                motion = ((delta[:, :2].norm(dim=-1)+.2*yaw)/cfg.update_period_s).clamp(0, 2)
++                motion *= s["pose_initialized"][ids[chosen]]
++            gain = (.5+motion) * (.8+.2*torch.sin(elapsed[chosen].float()*.2))
++            depth[chosen], valid[chosen] = self._warp(depth[chosen], valid[chosen],
++                s["shift"][ids[chosen]]*gain[:, None], s["rotation_deg"][ids[chosen]]*gain, field[chosen])
++
++        for kind in (K.VP_SCALE, K.VP_BIAS, K.VP_SHIFT, K.VP_COLLAPSE, K.VP_OCCLUSION, K.VP_COMPOUND, K.VP_BURST):
++            chosen = rows(kind)
++            if not len(chosen):
++                continue
++            env = ids[chosen]
++            if kind in (K.VP_SCALE, K.VP_COMPOUND):
++                depth[chosen] *= plan.vp_scale[env, None, None]
++            if kind in (K.VP_BIAS, K.VP_COMPOUND):
++                depth[chosen] += plan.vp_bias[env, None, None]*cfg.vp_depth_max_m
++            if kind in (K.VP_SHIFT, K.VP_COMPOUND):
++                depth[chosen], valid[chosen] = self._warp(depth[chosen], valid[chosen],
++                    torch.stack((plan.vp_shift_x[env], plan.vp_shift_y[env]), -1).float(), torch.zeros(len(env), device=self.device))
++            if kind == K.VP_COLLAPSE:
++                depth[chosen] = plan.vp_collapse_value[env, None, None]*cfg.vp_depth_max_m
++                valid[chosen] = 0
++            if kind == K.VP_OCCLUSION:
++                mask = plan.vp_occlusion_mask[env]
++                depth[chosen] = torch.where(mask, cfg.vp_depth_max_m, depth[chosen])
++                valid[chosen] *= ~mask
++            if kind in (K.VP_COMPOUND, K.VP_BURST):
++                mask = self._mask(env, elapsed[chosen], duration[chosen], moving=True) * on[chosen, None, None]
++                depth[chosen] = depth[chosen]*(1-mask)+cfg.vp_depth_max_m*mask
++                valid[chosen] *= 1-mask
++                if kind == K.VP_COMPOUND:
++                    depth[chosen] += s["bias_m"][env, None, None]*field[chosen]
++                else:
++                    depth[chosen] += .25*plan.vp_bias[env, None, None]*cfg.vp_depth_max_m*(~on[chosen, None, None])
++
++        for kind in (K.VP_LOCAL_DROPOUT, K.VP_DYNAMIC_OCCLUSION):
++            chosen = rows(kind)
++            if not len(chosen):
++                continue
++            env = ids[chosen]
++            near = (1-raw[chosen]/cfg.vp_depth_max_m).clamp(0, 1)
++            mask = self._mask(env, elapsed[chosen], duration[chosen], moving=kind == K.VP_DYNAMIC_OCCLUSION,
++                              near=near if kind == K.VP_LOCAL_DROPOUT else None)
++            if kind == K.VP_LOCAL_DROPOUT:
++                # Bias holes toward currently visible near surfaces and edges.
++                fill = torch.where(s["return_mode"][env] == 0, 0., cfg.vp_depth_max_m)
++                depth[chosen] = depth[chosen]*(1-mask)+fill[:, None, None]*mask
++                valid[chosen] *= 1-mask
++            else:
++                # A foreground obstruction is a valid depth return, not a hole.
++                foreground = (raw[chosen]-s["bias_m"][env, None, None].abs()-.1).clamp_min(cfg.vp_depth_min_m)
++                depth[chosen] = depth[chosen]*(1-mask)+foreground*mask
++                valid[chosen] = torch.maximum(valid[chosen], mask)
++
++        filtered = rows(K.VP_FILTER_TRAIL)
++        env = ids[filtered]
++        first = env[~s["filter_initialized"][env]]
++        # Initialize from the previously delivered frame, when available.
++        s["filter_output"][first] = torch.where(s["delivered"][first, None, None], s["history"][first, -1], raw[filtered][~s["filter_initialized"][env]])
++        s["filter_support"][first] = torch.where(s["delivered"][first, None, None], s["history_support"][first, -1], support[filtered][~s["filter_initialized"][env]])
++        s["filter_initialized"][env] = True
++        alpha = s["alpha"][env, None, None]
++        depth[filtered] = (1-alpha)*depth[filtered]+alpha*s["filter_output"][env]
++        valid[filtered] = (1-alpha)*valid[filtered]+alpha*s["filter_support"][env]
++        s["filter_output"][env], s["filter_support"][env] = depth[filtered], valid[filtered]
++        s["filter_error"][env] = depth[filtered]-raw[filtered]
++        residual = (~active & self.residual()[ids]).nonzero().flatten()
++        env = ids[residual]
++        s["filter_error"][env] *= s["alpha"][env, None, None]
++        small = s["filter_error"][env].abs().flatten(1).amax(-1) <= cfg.vp_residual_epsilon_m
++        s["filter_error"][env[small]] = 0
++        depth[residual] += s["filter_error"][env]
++        if pose is not None:
++            s["previous_pose"][ids] = pose[ids]
++            s["pose_initialized"][ids] = True
++        return depth.clamp(cfg.vp_depth_min_m, cfg.vp_depth_max_m), valid.clamp(0, 1)
++
++    def apply(self, vp, support, source_time, packet_time, ids, *, active, plan, pose=None, now=None):
++        s, cfg = self.state, self.cfg
++        clock = (packet_time if now is None else torch.as_tensor(now, device=self.device, dtype=torch.float64).expand(self.n))
++        ready = torch.isfinite(source_time[ids])
++        captured = ids[ready & (~s["initialized"][ids] | (source_time[ids] != s["last_capture"][ids]))]
++        s["new_capture"][ids] = False
++        s["history_append"][ids] = False
++        if len(captured):
++            raw = torch.nan_to_num(vp[captured, -1], nan=1., posinf=1., neginf=1.)*cfg.vp_depth_max_m
++            raw = raw.clamp(cfg.vp_depth_min_m, cfg.vp_depth_max_m)
++            clean_support = support[captured, -1]
++            # Pass the scheduled active window, excluding filter residuals.
++            scheduled = active[captured] & (plan.step_count[captured] < plan.vp_start_frame[captured]+plan.vp_duration_frames[captured])
++            frame, valid = self._corrupt(captured, raw, clean_support, scheduled, plan, pose)
++            s["cursor"][captured] = (s["cursor"][captured]+1) % self.capacity
++            s["captures"][captured] += 1
++            s["frames"][captured, s["cursor"][captured]] = frame
++            s["supports"][captured, s["cursor"][captured]] = valid
++            s["times"][captured, s["cursor"][captured]] = source_time[captured]
++            s["last_capture"][captured] = source_time[captured]
++            s["initialized"][captured] = True
++            s["new_capture"][captured] = True
++            kinds = plan.vp_kind[captured]
++            delay = torch.zeros(len(captured), dtype=torch.long, device=self.device)
++            delayed = scheduled & ((kinds == int(K.DELAY)) | (kinds == int(K.VP_COMPOUND)))
++            delay[delayed] = plan.vp_delay[captured[delayed]]
++            jitter = scheduled & (kinds == int(K.VP_TIME_JITTER))
++            env = captured[jitter]
++            delay[jitter] = (self.rng.uniform(env)*(plan.vp_delay[env]+1)).long()
++            start_hold = (s["hold_left"][env] == 0) & (self.rng.uniform(env) < .25) & s["delivered"][env]
++            holding_ids = env[start_hold]
++            s["hold_left"][holding_ids] = self.rng.randint(1, cfg.vp_max_hold_frames+1, holding_ids)
++            delay = torch.minimum(delay, (s["captures"][captured]-1).clamp(0, cfg.max_delay_frames))
++            slot = (s["cursor"][captured]-delay) % self.capacity
++            image = s["frames"][captured, slot].clone()
++            image_support = s["supports"][captured, slot].clone()
++            timestamp = s["times"][captured, slot].clone()
++            packet = packet_time[captured].clone()
++            freeze = scheduled & (kinds == int(K.FREEZE))
++            new = captured[freeze & ~s["freeze_initialized"][captured]]
++            local_new = freeze & ~s["freeze_initialized"][captured]
++            s["frozen"][new], s["frozen_support"][new] = image[local_new], image_support[local_new]
++            s["frozen_time"][new], s["frozen_packet"][new] = timestamp[local_new], packet[local_new]
++            s["freeze_initialized"][new] = True
++            image[freeze] = s["frozen"][captured[freeze]]
++            image_support[freeze] = s["frozen_support"][captured[freeze]]
++            timestamp[freeze] = s["frozen_time"][captured[freeze]]
++            packet[freeze] = s["frozen_packet"][captured[freeze]]
++            hold = jitter & (s["hold_left"][captured] > 0) & s["delivered"][captured]
++            image[hold], image_support[hold] = s["history"][captured[hold], -1], s["history_support"][captured[hold], -1]
++            timestamp[hold], packet[hold] = s["last_source"][captured[hold]], s["last_packet"][captured[hold]]
++            s["hold_left"][captured[hold]] -= 1
++            append = ~s["delivered"][captured] | (timestamp != s["last_source"][captured])
++            first = captured[~s["delivered"][captured]]
++            s["history"][first] = image[~s["delivered"][captured], None]
++            s["history_support"][first] = image_support[~s["delivered"][captured], None]
++            s["history_times"][first] = timestamp[~s["delivered"][captured], None]
++            env = captured[append]
++            s["history"][env] = s["history"][env].roll(-1, 1)
++            s["history_support"][env] = s["history_support"][env].roll(-1, 1)
++            s["history_times"][env] = s["history_times"][env].roll(-1, 1)
++            s["history"][env, -1], s["history_support"][env, -1] = image[append], image_support[append]
++            s["history_times"][env, -1] = timestamp[append]
++            s["last_source"][captured], s["last_packet"][captured] = timestamp, packet
++            s["delivered"][captured] = True
++            s["history_append"][env] = True
++            s["actual_delay"][captured] = (source_time[captured]-timestamp).float().clamp_min(0)
++            s["holding"][captured] = hold | freeze
++            s["effect"][captured] = ((image-raw).abs() > 1e-5).flatten(1).any(-1) | ((image_support-clean_support).abs() > 1e-5).flatten(1).any(-1) | (timestamp != source_time[captured])
++            changed = ((image-raw).abs() > 1e-5) | ((image_support-clean_support).abs() > 1e-5)
++            s["changed_fraction"][captured] = changed.float().flatten(1).mean(-1)
++            s["support_ratio"][captured] = image_support.flatten(1).mean(-1)
++            s["saturation_ratio"][captured] = ((image <= cfg.vp_depth_min_m) | (image >= cfg.vp_depth_max_m)).float().flatten(1).mean(-1)
++        s["source_age"][ids] = torch.where(s["delivered"][ids],
++            (clock[ids]-s["last_source"][ids]).float().clamp_min(0), -1.)
++        return s["history"]/cfg.vp_depth_max_m, s["history_support"], s["last_source"], s["last_packet"]
++
++    def audit(self, plan):
++        s = self.state
++        values = (
++            plan.lp_strength, plan.vp_strength, s["bias_m"], s["scale_error"], s["edge_mix"],
++            s["shift"][:, 0], s["shift"][:, 1], s["rotation_deg"], s["mask_fraction"],
++            s["mask_speed"], s["return_mode"], s["alpha"], s["filter_error"].abs().flatten(1).amax(-1),
++            s["actual_delay"], s["holding"], s["effect"], s["support_ratio"],
++            s["saturation_ratio"], s["new_capture"], s["history_append"], s["source_age"],
++            s["centers"][:, 0, 0], s["centers"][:, 0, 1],
++            s["centers"][:, 1, 0], s["centers"][:, 1, 1],
++            s["centers"][:, 2, 0], s["centers"][:, 2, 1],
++            s["mask_direction"][:, 0], s["mask_direction"][:, 1],
++            s["field"].mean((-2, -1)), s["field"].std((-2, -1)), s["changed_fraction"],
++            (s["history_times"][:, 1]-s["history_times"][:, 0]).float(),
++        )
++        assert len(values) == len(VP_AUDIT_ORDER)
++        return torch.stack(tuple(value.float() for value in values), -1)
+--- /dev/null
++++ b/legged_lab/selector/run_selector_directed_pilot.sh
+@@ -0,0 +1,7 @@
++#!/usr/bin/env bash
++# Same source/replay/spacing acceptance as formal collection, 10,000 rows/bank.
++set -euo pipefail
++selector_pilot_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
++export SELECTOR_COLLECTION_PHASE=pilot
++export SELECTOR_SEED_BASE="${SELECTOR_SEED_BASE:-8100}"
++exec bash "$selector_pilot_dir/run_selector_outcome_supplement.sh" "$@"
+--- a/legged_lab/selector/run_selector_outcome_supplement.sh
++++ b/legged_lab/selector/run_selector_outcome_supplement.sh
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env bash
+-# Add at least 100,000 NEW training rows for each of the three failed outcomes.
++# Directed training-only banks; formal >=100k/bank, pilot >=10k/bank.
+ # Run with bash; strict shell options apply inside this script, not the terminal.
+ set -euo pipefail
+ 
+@@ -7,14 +7,20 @@
+ cd -- "$selector_script_dir/../.."
+ 
+ export PYTHONUNBUFFERED=1
++export SELECTOR_COLLECTION_PHASE="${SELECTOR_COLLECTION_PHASE:-formal}"
++case "$SELECTOR_COLLECTION_PHASE" in
++    pilot) selector_default_target=10000; selector_default_span=30 ;;
++    formal) selector_default_target=100000; selector_default_span=120 ;;
++    *) printf 'SELECTOR_COLLECTION_PHASE 必须为 pilot 或 formal。\n' >&2; exit 2 ;;
++esac
+ export SELECTOR_BASE="${SELECTOR_BASE:-$PWD/outputs/g1_renet_selector_v4_1s_normal_20261012_170014/dataset}"
+ export SELECTOR_TERRAIN="${SELECTOR_TERRAIN:-$(dirname -- "$SELECTOR_BASE")/terrain_distribution.json}"
+ export SELECTOR_CHECKPOINT="${SELECTOR_CHECKPOINT:-/data/Tienkung_lab/logs/g1_renet/2026-09-10_19-25-08/model_60000.pt}"
+ export SELECTOR_REFERENCE="${SELECTOR_REFERENCE:-$PWD/Exported_policy/policy.pt}"
+-export SELECTOR_OUTCOME_RUN="${SELECTOR_OUTCOME_RUN:-$PWD/outputs/g1_renet_selector_outcome_supplement_$(date +%Y%m%d_%H%M%S)}"
+-export SELECTOR_TARGET_PER_OUTCOME="${SELECTOR_TARGET_PER_OUTCOME:-100000}"
++export SELECTOR_OUTCOME_RUN="${SELECTOR_OUTCOME_RUN:-$PWD/outputs/g1_renet_selector_directed_${SELECTOR_COLLECTION_PHASE}_$(date +%Y%m%d_%H%M%S)}"
++export SELECTOR_TARGET_PER_OUTCOME="${SELECTOR_TARGET_PER_OUTCOME:-$selector_default_target}"
+ export SELECTOR_SEED_BASE="${SELECTOR_SEED_BASE:-6100}"
+-export SELECTOR_MIN_SPAN_SECONDS="${SELECTOR_MIN_SPAN_SECONDS:-120}"
++export SELECTOR_MIN_SPAN_SECONDS="${SELECTOR_MIN_SPAN_SECONDS:-$selector_default_span}"
+ export SELECTOR_MAX_CANDIDATE_BATCHES="${SELECTOR_MAX_CANDIDATE_BATCHES:-100000}"
+ export SELECTOR_MAX_NO_PROGRESS_BATCHES="${SELECTOR_MAX_NO_PROGRESS_BATCHES:-1000}"
+ selector_python="${SELECTOR_PYTHON:-python}"
+@@ -66,9 +72,11 @@
+ span = float(os.environ['SELECTOR_MIN_SPAN_SECONDS'])
+ candidate_limit = int(os.environ['SELECTOR_MAX_CANDIDATE_BATCHES'])
+ no_progress_limit = int(os.environ['SELECTOR_MAX_NO_PROGRESS_BATCHES'])
+-require(target >= 100000, '每类新增目标至少为 100000 条。')
+-require(math.isfinite(span) and span >= 120,
+-        'SELECTOR_MIN_SPAN_SECONDS 至少为 120 秒。')
++phase = os.environ['SELECTOR_COLLECTION_PHASE']
++minimum, min_span = (10000, 30.) if phase == 'pilot' else (100000, 120.)
++require(target >= minimum, f'{phase} 每类新增目标至少为 {minimum} 条。')
++require(math.isfinite(span) and span >= min_span,
++        f'{phase} SELECTOR_MIN_SPAN_SECONDS 至少为 {min_span:g} 秒。')
+ require(candidate_limit > 0 and span < candidate_limit * .1,
+         '候选批次数上限不足以覆盖最小采样时间跨度。')
+ require(no_progress_limit > 0, '无进展上限必须为正整数。')
+@@ -77,10 +85,11 @@
+ base_fault_seed = int(info.get('fault_seed', int(info.get('seed', 42)) + 2000)) & 0xFFFFFFFF
+ require(base_fault_seed not in {seed_base + i + 2000 for i in (1, 2, 3)},
+         '补采故障 seed 与主数据重复，请更换 SELECTOR_SEED_BASE。')
+-for module in ('torch', 'isaaclab'):
++for module in ('torch', 'isaaclab', 'isaacsim'):
+     require(importlib.util.find_spec(module) is not None,
+             f'当前 Python 找不到 {module}，请切换到运行 g1_renet 的环境。')
+ print('主数据：', paths['SELECTOR_BASE'])
++print('采集阶段：', phase)
+ print('本次新增目标：LP失败/VP安全、VP失败/LP安全、两路失败，各', target, '条。')
+ print('结果配额顺序：[两路安全, 仅LP失败, 仅VP失败, 两路失败]')
+ PY
+@@ -92,19 +101,22 @@
+     selector_quotas=(0 0 0 0)
+     case "$selector_bank" in
+         lp_failure)
+-            selector_profile=lp_map
++            selector_profile=directed_lp
++            selector_source=lp_only
+             selector_pair_index=1
+             selector_seed="$((SELECTOR_SEED_BASE + 1))"
+             selector_title='LP失败、VP安全'
+             ;;
+         vp_failure)
+-            selector_profile=vp_hard
++            selector_profile=directed_vp
++            selector_source=vp_only
+             selector_pair_index=2
+             selector_seed="$((SELECTOR_SEED_BASE + 2))"
+             selector_title='VP失败、LP安全'
+             ;;
+         both_failure)
+-            selector_profile=dual
++            selector_profile=directed_dual
++            selector_source=dual
+             selector_pair_index=3
+             selector_seed="$((SELECTOR_SEED_BASE + 3))"
+             selector_title='两路都失败'
+@@ -119,7 +131,8 @@
+         --checkpoint-path "$SELECTOR_CHECKPOINT" --reference-policy "$SELECTOR_REFERENCE" \
+         --terrain-histogram "$SELECTOR_TERRAIN" --base-dataset "$SELECTOR_BASE" \
+         --skip-dual-branch-export --num-envs 4096 --supplement-split train \
+-        --fault-profile "$selector_profile" --fault-severity-probabilities 0.10 0.30 0.60 \
++        --fault-profile "$selector_profile" --fault-source "$selector_source" \
++        --fault-severity-probabilities 0.10 0.30 0.60 \
+         --pair-quotas "${selector_quotas[@]}" --target-samples "$SELECTOR_TARGET_PER_OUTCOME" \
+         --seed "$selector_seed" --warmup-seconds 15 \
+         --min-collection-span-seconds "$SELECTOR_MIN_SPAN_SECONDS" \
+@@ -131,7 +144,7 @@
+         2>&1 | tee "$SELECTOR_OUTCOME_RUN/logs/collect_${selector_bank}.log"
+ 
+     # A bank is accepted only after both the manifest and actual label report agree.
+-    "$selector_python" - "$selector_dataset" "$selector_bank" "$selector_pair_index" "$selector_seed" <<'PY' \
++    "$selector_python" - "$selector_dataset" "$selector_bank" "$selector_pair_index" "$selector_seed" "$selector_source" <<'PY' \
+         | tee "$SELECTOR_OUTCOME_RUN/logs/verify_${selector_bank}.log"
+ from pathlib import Path
+ import hashlib
+@@ -142,6 +155,7 @@
+ 
+ root = Path(sys.argv[1])
+ bank, pair_index, seed = sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
++fault_source = sys.argv[5]
+ target = int(os.environ['SELECTOR_TARGET_PER_OUTCOME'])
+ manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+ report = json.loads((root / 'collection_analysis.json').read_text(encoding='utf-8'))
+@@ -165,12 +179,29 @@
+ coverage = report['supplement_coverage']
+ require(coverage['accepted_1s'] == expected, '结果配额记录不匹配')
+ require(coverage['config']['pair_quotas'] == expected, '配置不是指定结果配额')
++require(coverage['config'].get('fault_source') == fault_source, '故障来源过滤配置不匹配')
++require(coverage['source_acceptance']['written_1s'] == expected, '来源验收后的标签数不匹配')
++directed = report.get('directed_acceptance', {})
++require(directed.get('verified') is True and directed.get('fault_source') == fault_source
++        and directed.get('available_rows') == target, '实际保存样本未全部通过来源与可观测效应验收')
++require(report['field_rows'].get('vp_fault_metadata') == target, '缺少新 VP 故障审计字段')
++for field in ('future_metrics', 'candidate_time', 'feature_end_time', 'fault_parameters',
++              'event_identity', 'first_failure_flags', 'first_failure_cause_stable'):
++    require(report['field_rows'].get(field) == target, f'缺少验收字段：{field}')
++require(report['candidate_safety']['available_rows'] == target
++        and report['candidate_safety']['invalid_rows'] == 0
++        and report['candidate_safety']['already_violated_rows'] == 0, '采样起点无效或已经失败')
+ require(coverage['independent_events'] >= math.ceil(target / 8), '故障事件数量不足')
++require(report['events']['plans']['unique'] == coverage['independent_events'], '实际事件数量与覆盖报告不符')
++require(report['events']['max_rows_per_plan'] <= 8, '同一父事件超过 8 条')
++spacing = report['events']['min_spacing_s_within_plan']
++require(spacing is None or spacing >= .2-1e-6, '同一父事件的实际样本间隔小于 0.2 秒')
+ require(coverage['temporal_coverage']['collection_elapsed_s'] + 1e-6 >= float(os.environ['SELECTOR_MIN_SPAN_SECONDS']),
+         '采样时间跨度不足')
+ result = {'bank': bank, 'dataset': str(root.resolve()), 'new_pairs_1s': expected,
+           'fault_seed': seed + 2000, 'events': coverage['independent_events'],
+-          'training_only': True, 'verified': True}
++          'fault_source': fault_source, 'phase': os.environ['SELECTOR_COLLECTION_PHASE'],
++          'source_verified': True, 'training_only': True, 'verified': True}
+ (root.parent / 'quota_verification.json').write_text(
+     json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+ print('结果配额验收通过：', json.dumps(result, ensure_ascii=False))
+@@ -187,6 +218,7 @@
+            for bank in ('lp_failure', 'vp_failure', 'both_failure')]
+ total = [sum(r['new_pairs_1s'][i] for r in results) for i in range(4)]
+ summary = {'base_dataset': os.environ['SELECTOR_BASE'],
++           'phase': os.environ['SELECTOR_COLLECTION_PHASE'],
+            'pair_order': ['both_safe', 'lp_only_failure', 'vp_only_failure', 'both_failure'],
+            'new_pairs_1s': total, 'new_training_rows': sum(total),
+            'supplement_datasets': [r['dataset'] for r in results], 'banks': results}
+--- a/legged_lab/scripts/collect_selector_data.py
++++ b/legged_lab/scripts/collect_selector_data.py
+@@ -52,8 +52,10 @@
+ parser.add_argument("--behavior-seed", type=int, default=None)
+ parser.add_argument("--base-dataset", type=Path, default=None)
+ parser.add_argument("--supplement-split", choices=("train", "validation", "test"), default=None)
+-parser.add_argument("--fault-profile", choices=("baseline", "mixed", "lp_map", "vp_hard", "dual", "recovery"), default=None,
++parser.add_argument("--fault-profile", choices=("baseline", "mixed", "lp_map", "vp_hard", "dual", "recovery", "directed_lp", "directed_vp", "directed_dual"), default=None,
+                     help="Default: baseline for original collection, mixed for supplements.")
++parser.add_argument("--fault-source", choices=("any", "lp_only", "vp_only", "dual"), default=None,
++                    help="Validate injected source and observable effects; inferred for directed profiles.")
+ quota_args = parser.add_mutually_exclusive_group()
+ quota_args.add_argument("--pair-quotas", nargs=4, type=int, default=None,
+                         metavar=("BOTH_SAFE", "LP_FAIL", "VP_FAIL", "BOTH_FAIL"))
+@@ -148,7 +150,9 @@
+ from legged_lab.selector.collection_progress import CollectionProgress, close_simulation  # noqa: E402
+ from legged_lab.selector.collection_physics import create_collection_environment, collection_physics_settings  # noqa: E402
+ from legged_lab.selector.faults import SelectorFaultManager  # noqa: E402
+-from legged_lab.selector.supplement import fault_profile, SupplementConfig, scaled_pair_quotas  # noqa: E402
++from legged_lab.selector.supplement import (  # noqa: E402
++    fault_profile, SupplementConfig, scaled_pair_quotas, DIRECTED_PROFILES, resolve_fault_source,
++)
+ from legged_lab.selector.supplement_dataset import (  # noqa: E402
+     base_collection_partition, restrict_terrain_distribution, compatible_manifests,
+ )
+@@ -327,6 +331,9 @@
+         raise ValueError("use --base-dataset and --supplement-split together")
+     if not supplement_mode and (args_cli.pair_quotas is not None or args_cli.no_outcome_quotas):
+         raise ValueError("outcome quota options require supplement mode")
++    if not supplement_mode and (args_cli.fault_source is not None or args_cli.fault_profile in DIRECTED_PROFILES):
++        raise ValueError("directed profiles and source filters require supplement mode")
++    args_cli.fault_source = resolve_fault_source(args_cli.fault_profile, args_cli.fault_source)
+     if not supplement_mode and (args_cli.warmup_seconds is not None or args_cli.min_collection_span_seconds is not None
+                                or args_cli.label_interval_frames is not None or args_cli.randomize_label_phase is not None
+                                or args_cli.max_samples_per_labelled_batch):
+@@ -406,7 +413,8 @@
+                                    else 10 if production_temporal else 1),
+             randomize_label_phase=(args_cli.randomize_label_phase if args_cli.randomize_label_phase is not None
+                                    else production_temporal),
+-            max_samples_per_labelled_batch=args_cli.max_samples_per_labelled_batch)
++            max_samples_per_labelled_batch=args_cli.max_samples_per_labelled_batch,
++            fault_source=args_cli.fault_source)
+         supplement_cfg.validate(target_samples)
+         if supplement_cfg.min_collection_span_s >= args_cli.max_candidate_batches*.1:
+             raise ValueError("candidate budget is shorter than the requested real collection span")
+--- /dev/null
++++ b/rsl_rl/tests/test_selector_directed_supplement.py
+@@ -0,0 +1,412 @@
++"""Directed source admission, capture-once depth and snapshot regressions.
++
++These run on CPU without Isaac Sim; they do not establish physical rescue rates.
++"""
++
++from dataclasses import replace
++import argparse
++import ast
++from pathlib import Path
++
++import pytest
++import torch
++
++from legged_lab.selector.config import CollectionConfig, FaultConfig
++from legged_lab.selector.directed_audit import directed_audit_contract, SOURCE_AUDIT_ORDER, VP_AUDIT_ORDER
++from legged_lab.selector.faults import SelectorFaultManager, FaultKind as K
++from legged_lab.selector.fault_kinds import STRUCTURED_VP_FAULTS
++from legged_lab.selector.supplement import fault_profile, SupplementConfig, OutcomeQuotaSampler, resolve_fault_source
++from legged_lab.selector.dataset import SelectorBatch, SelectorDatasetWriter
++from legged_lab.selector.analysis import analyze_selector_dataset
++from legged_lab.selector.collection_audit import collection_audit_contract, CollectionAudit
++from legged_lab.selector.labels import FUTURE_METRIC_ORDER, SafetyOutcomeAccumulator, SafetyStepMetrics
++
++
++@pytest.mark.parametrize("name,scenario", [
++    ("directed_lp", (0., 0., 1., 0.)), ("directed_vp", (0., 1., 0., 0.)),
++    ("directed_dual", (0., 0., 0., 1.)),
++])
++def test_directed_profiles_have_exclusive_sources(name, scenario):
++    cfg = fault_profile(name)
++    assert cfg.scenario_probabilities == scenario
++    assert cfg.structured_vp_faults and cfg.independent_dual_faults
++    manager = SelectorFaultManager(128, cfg=cfg)
++    assert bool((manager.lp_kind != 0).all()) == (scenario[2]+scenario[3] == 1)
++    assert bool((manager.vp_kind != 0).all()) == (scenario[1]+scenario[3] == 1)
++    assert set(manager.vp_kind.tolist()) <= {0, *map(int, STRUCTURED_VP_FAULTS)}
++    assert manager.vp_buffer.numel() == 0  # no second copy of the VP capture ring
++
++
++def test_kind_proposals_count_parent_events_once_outside_forks():
++    manager = _manager(3, kind=K.VP_SPATIAL_BIAS)
++    audit = CollectionAudit(3, "cpu")
++    episodes = torch.zeros(3, dtype=torch.long)
++    audit.observe_behavior_plans(episodes, manager)
++    audit.observe_behavior_plans(episodes, manager)
++    proposals = audit.summary()["observed_behavior_plans_by_kind_pair"]
++    assert sum(proposals[f"0:{int(K.VP_SPATIAL_BIAS)}"]) == 3
++
++
++def _admission(mode, labels, kinds, *, source=None, quotas=None):
++    n = len(labels)
++    cfg = SupplementConfig(fault_source=mode, pair_quotas=quotas)
++    sampler = OutcomeQuotaSampler(cfg, sum(quotas) if quotas else n, seed=31)
++    faults = torch.zeros(n, 8, dtype=torch.long)
++    faults[:, :2] = torch.tensor(kinds)
++    params = torch.zeros(n, 21)
++    if source is None:
++        source = torch.zeros(n, len(SOURCE_AUDIT_ORDER))
++        source[:, :4] = 1
++    events = torch.stack((torch.arange(n), torch.zeros(n), torch.ones(n)), -1).long()
++    selected = sampler.select(torch.ones(n, dtype=torch.bool), torch.tensor(labels), events, 1.,
++                              faults=faults, parameters=params, source=source)
++    return selected, sampler
++
++
++@pytest.mark.parametrize("mode,desired,opposite", [("lp_only", [1, 0], [0, 1]), ("vp_only", [0, 1], [1, 0])])
++def test_single_banks_reject_reverse_and_dual_outcomes(mode, desired, opposite):
++    correct = [int(K.LP_HEIGHT_BIAS), 0] if mode == "lp_only" else [0, int(K.VP_BIAS)]
++    wrong = [0, int(K.VP_BIAS)] if mode == "lp_only" else [int(K.LP_HEIGHT_BIAS), 0]
++    selected, sampler = _admission(mode, [desired, desired, desired, opposite, [1, 1]],
++        [correct, wrong, [int(K.LP_HEIGHT_BIAS), int(K.VP_BIAS)], correct, correct])
++    assert selected.tolist() == [0]
++    assert sampler.rejections["wrong_source"] == 2
++    assert sampler.rejections["source_outcome"] == 2
++
++
++def test_dual_bank_needs_both_visible_effects_and_both_actual_failures():
++    source = torch.ones(5, len(SOURCE_AUDIT_ORDER))
++    source[1, 1] = 0
++    kinds = [[int(K.LP_HEIGHT_BIAS), int(K.VP_SPATIAL_BIAS)]]*5
++    quotas = (0, 0, 0, 1)
++    ids, sampler = _admission("dual", [[1, 1], [1, 1], [1, 0], [0, 1], [0, 0]], kinds, source=source, quotas=quotas)
++    assert ids.tolist() == [0]
++    assert sampler.rejections["effect_not_observable"] == 1
++    assert sampler.rejections["source_outcome"] == 2
++    assert sampler.source_eligible_pairs[0] == 1
++    assert sampler.counts[0] == 0
++    detail = sampler.summary()["outcome_yield_by_kind_pair"][f"{int(K.LP_HEIGHT_BIAS)}:{int(K.VP_SPATIAL_BIAS)}"]
++    assert detail["stable_attempt_1s"] == [1, 1, 1, 2]
++    assert detail["source_eligible_1s"] == [1, 1, 1, 1]
++    assert detail["written_1s"] == [0, 0, 0, 1]
++
++
++def test_unavailable_healthy_side_is_rejected():
++    source = torch.ones(2, len(SOURCE_AUDIT_ORDER))
++    source[1, 3] = 0
++    ids, sampler = _admission("lp_only", [[1, 0]]*2, [[int(K.LP_HEIGHT_BIAS), 0]]*2, source=source)
++    assert ids.tolist() == [0]
++    assert sampler.rejections["healthy_side_not_clean"] == 1
++
++
++def test_both_safe_controls_keep_the_same_source_contract():
++    ids, sampler = _admission("dual", [[0, 0], [0, 0]],
++                             [[int(K.LP_HEIGHT_BIAS), int(K.VP_BIAS)], [0, int(K.VP_BIAS)]], quotas=(1, 0, 0, 0))
++    assert ids.tolist() == [0]
++    assert sampler.counts == [1, 0, 0, 0]
++
++
++@pytest.mark.parametrize("cfg", [
++    SupplementConfig(fault_source="lp_only", pair_quotas=(0, 0, 1, 0)),
++    SupplementConfig(fault_source="dual", pair_quotas=(0, 1, 0, 0)),
++    SupplementConfig(fault_source="vp_only", split="test"),
++    SupplementConfig(fault_source="dual", require_initial_safe=False),
++])
++def test_invalid_source_configuration_is_not_silently_used(cfg):
++    with pytest.raises(ValueError):
++        cfg.validate(1)
++
++
++def test_event_cap_and_real_time_spacing():
++    sampler = OutcomeQuotaSampler(SupplementConfig(max_samples_per_event=2), 3, 42)
++    labels, good, event = torch.tensor([[1, 0]]), torch.tensor([True]), torch.tensor([[2, 9, 1]])
++    assert sampler.select(good, labels, event, 0.).tolist() == [0]
++    assert sampler.select(good, labels, event, .1).tolist() == []
++    assert sampler.select(good, labels, event, .2).tolist() == [0]
++    assert sampler.select(good, labels, event, .4).tolist() == []
++    assert sampler.rejections["event_spacing"] == 1 and sampler.rejections["event_cap"] == 1
++
++
++def _manager(n=1, kind=K.NONE, profile="directed_vp", **overrides):
++    cfg = replace(fault_profile(profile), max_start_delay_frames=0, **overrides)
++    manager = SelectorFaultManager(n, cfg=cfg, seed=913)
++    manager.lp_kind.zero_()
++    manager.vp_kind.fill_(int(kind))
++    manager.vp_start_frame.zero_()
++    manager.vp_duration_frames.fill_(100)
++    manager.next_schedule_frame.fill_(200)
++    return manager
++
++
++def _apply(manager, step, current=.4, *, previous=None, env_ids=None, same_source=None):
++    n = manager.num_envs
++    lp = torch.zeros(n, 11, 17)
++    frame = torch.as_tensor(current).float().expand(n, 18, 32)
++    previous = frame if previous is None else torch.as_tensor(previous).float().expand_as(frame)
++    vp = torch.stack((previous, frame), 1)
++    time = torch.full((n,), step*.1 if same_source is None else same_source, dtype=torch.float64)
++    return manager.apply(lp, vp, time, time, lp_valid=torch.ones_like(lp), vp_valid=torch.ones_like(vp),
++                         env_ids=env_ids, world_pose=torch.full((n, 4), step*.01), now=step*.1)
++
++
++def test_old_depth_frame_keeps_its_capture_time_corruption():
++    manager = _manager()
++    first = _apply(manager, 0, .2)
++    manager.vp_kind.fill_(int(K.VP_BIAS))
++    manager.vp_bias.fill_(.1)
++    second = _apply(manager, 1, .4, previous=.2)
++    torch.testing.assert_close(second.vp[:, 0], first.vp[:, -1])
++    torch.testing.assert_close(second.vp[:, -1], torch.full((1, 18, 32), .5))
++    rng = manager.generator.get_state()
++    repeated = _apply(manager, 2, .8, same_source=.1)
++    torch.testing.assert_close(repeated.vp, second.vp)
++    torch.testing.assert_close(rng, manager.generator.get_state())
++    third = _apply(manager, 3, .6, previous=.4)
++    torch.testing.assert_close(third.vp[:, 0], second.vp[:, -1])
++    torch.testing.assert_close(third.vp[:, -1], torch.full((1, 18, 32), .7))
++
++
++def test_freeze_survives_ring_wrap_and_does_not_append_history():
++    manager = _manager(kind=K.FREEZE)
++    first = _apply(manager, 0, .2)
++    for step in range(1, 15):
++        result = _apply(manager, step, .2+.02*step)
++        torch.testing.assert_close(result.vp, first.vp)
++        torch.testing.assert_close(result.vp_timestamp, first.vp_timestamp)
++        assert not manager.vp_faults.state["history_append"].any()
++    assert manager.audit_source()[0, 1] == 1
++
++
++def test_delay_selects_stored_source_without_rewriting_the_previous_frame():
++    manager = _manager(kind=K.DELAY)
++    manager.vp_delay.fill_(2)
++    results = [_apply(manager, step, .1+.1*step) for step in range(5)]
++    torch.testing.assert_close(results[4].vp[:, -1], torch.full((1, 18, 32), .3))
++    torch.testing.assert_close(results[4].vp[:, 0], results[3].vp[:, -1])
++    assert results[4].vp_timestamp.item() == pytest.approx(.2)
++    assert results[4].vp_packet_timestamp.item() == pytest.approx(.4)
++    assert manager.vp_faults.audit(manager)[0, VP_AUDIT_ORDER.index("history_interval_s")] == pytest.approx(.1)
++
++
++def test_missing_source_timestamp_does_not_create_a_captured_fault_frame():
++    manager = _manager(kind=K.VP_SPATIAL_BIAS)
++    rng = manager.generator.get_state()
++    result = _apply(manager, 0, same_source=-float("inf"))
++    assert not manager.vp_faults.state["initialized"].any()
++    assert not manager.vp_observed_effect.any()
++    assert manager.unobservable_onset_within(10).all()
++    assert not torch.isfinite(result.vp_timestamp).any()
++    torch.testing.assert_close(manager.generator.get_state(), rng)
++    assert torch.isfinite(manager.vp_faults.audit(manager)).all()
++
++
++def test_filter_trail_uses_fresh_timestamps_and_decays_after_fault():
++    manager = _manager(kind=K.VP_FILTER_TRAIL)
++    manager.vp_faults.state["alpha"].fill_(.8)
++    _apply(manager, 0, .2)
++    lagged = _apply(manager, 1, .8)
++    torch.testing.assert_close(lagged.vp[:, -1], torch.full((1, 18, 32), .32))
++    assert lagged.vp_timestamp.item() == pytest.approx(.1)
++    assert lagged.vp_packet_timestamp.item() == pytest.approx(.1)
++    manager.vp_duration_frames.fill_(2)
++    recovery = _apply(manager, 2, .8)
++    assert .32 < recovery.vp[0, -1].mean() < .8
++    for step in range(3, 40):
++        recovery = _apply(manager, step, .8)
++    assert not manager.vp_faults.residual().any()
++    torch.testing.assert_close(recovery.vp[:, -1], torch.full((1, 18, 32), .8))
++
++
++def test_geometric_error_is_not_faked_as_invalid_or_stale_data():
++    manager = _manager(kind=K.VP_SPATIAL_BIAS)
++    result = _apply(manager, 0)
++    assert not torch.allclose(result.vp[:, -1], torch.full((1, 18, 32), .4))
++    assert (result.vp_valid == 1).all()
++    assert result.vp_timestamp.item() == 0 and result.vp_packet_timestamp.item() == 0
++
++
++def test_edge_fault_on_a_flat_image_has_no_effect_and_is_not_labelled_as_visible():
++    manager = _manager(kind=K.VP_EDGE_MISMATCH)
++    _apply(manager, 0)
++    assert not manager.vp_observed_effect.any()
++    assert manager.unobservable_onset_within(10).all()
++    assert manager.audit_source()[0, 1] == 0
++
++
++def test_local_missing_depth_has_raw_invalid_support():
++    manager = _manager(kind=K.VP_LOCAL_DROPOUT)
++    for step in range(5):
++        result = _apply(manager, step)
++    assert (result.vp_valid[:, -1] == 0).any()
++    assert (result.vp_valid[:, -1] == 1).any()
++    assert torch.isfinite(result.vp).all()
++
++
++@pytest.mark.parametrize("kind", STRUCTURED_VP_FAULTS)
++def test_each_vp_family_replays_identically_from_snapshot(kind):
++    manager = _manager(kind=kind)
++    plane = torch.linspace(.1, .9, 32)[None].expand(18, -1).clone()
++    plane[:, 16:] += .08
++    for step in range(8):
++        _apply(manager, step, plane)
++    snapshot = manager.snapshot()
++    expected = [_apply(manager, step, plane+.001*step) for step in range(8, 15)]
++    expected_rng = manager.generator.get_state()
++    manager.restore(snapshot)
++    actual = [_apply(manager, step, plane+.001*step) for step in range(8, 15)]
++    for a, b in zip(actual, expected):
++        for field in ("vp", "vp_valid", "vp_timestamp", "vp_packet_timestamp", "lp", "lp_valid"):
++            torch.testing.assert_close(getattr(a, field), getattr(b, field), rtol=0, atol=0)
++    torch.testing.assert_close(manager.generator.get_state(), expected_rng)
++
++
++def test_resetting_another_row_does_not_advance_this_rows_noise():
++    a, b = _manager(2, kind=K.VP_SPATIAL_BIAS), _manager(2, kind=K.VP_SPATIAL_BIAS)
++    for step in range(3):
++        _apply(a, step)
++        _apply(b, step)
++    b.reset(torch.tensor([1]))
++    for step in range(3, 8):
++        expected, actual = _apply(a, step), _apply(b, step)
++        torch.testing.assert_close(actual.vp[0], expected.vp[0], rtol=0, atol=0)
++        assert b.generator.get_state()[0] == a.generator.get_state()[0]
++
++
++def test_dual_sides_have_independent_severity_and_all_three_start_orders():
++    manager = SelectorFaultManager(2048, cfg=fault_profile("directed_dual"))
++    assert (manager.lp_severity != manager.vp_severity).any()
++    assert (manager.lp_delay != manager.vp_delay).any()
++    delta = manager.lp_start_frame-manager.vp_start_frame
++    assert (delta == 0).any() and (delta < 0).any() and (delta > 0).any()
++
++
++def test_pending_second_fault_is_not_used_to_label_the_current_dual_state():
++    manager = _manager(profile="directed_dual", kind=K.VP_SPATIAL_BIAS)
++    manager.lp_kind.fill_(int(K.LP_HEIGHT_BIAS))
++    manager.lp_bias.fill_(.1)
++    manager.lp_start_frame.zero_()
++    manager.lp_duration_frames.fill_(100)
++    manager.vp_start_frame.fill_(4)
++    _apply(manager, 0)
++    assert manager.audit_source()[0, 0] == 1
++    assert manager.audit_source()[0, 1] == 0
++    assert manager.unobservable_onset_within(10).all()
++    for step in range(1, 5):
++        _apply(manager, step)
++    assert manager.audit_source()[0, :2].bool().all()
++    assert not manager.unobservable_onset_within(10).any()
++
++
++def test_old_parent_depth_cannot_prove_a_new_parents_unseen_effect():
++    manager = _manager(kind=K.VP_BIAS)
++    manager.vp_bias.fill_(.1)
++    _apply(manager, 0)
++    assert manager.vp_observed_effect.all()
++    manager._schedule(torch.tensor([0]))
++    manager.vp_kind.fill_(int(K.VP_EDGE_MISMATCH))
++    _apply(manager, 1, same_source=0.)
++    assert not manager.vp_observed_effect.any()
++    assert manager.audit_source()[0, 1] == 0
++    assert manager.unobservable_onset_within(10).all()
++
++
++@pytest.mark.parametrize("profile,source", [("directed_lp", "lp_only"), ("directed_vp", "vp_only"), ("directed_dual", "dual")])
++def test_directed_cli_source_cannot_be_bypassed(profile, source):
++    assert resolve_fault_source(profile) == source
++    assert resolve_fault_source(profile, source) == source
++    with pytest.raises(ValueError):
++        resolve_fault_source(profile, "any")
++
++
++def test_collect_cli_accepts_new_profiles_and_preserves_pure_configuration():
++    # Execute only argparse setup and the pure config function, never AppLauncher.
++    path = Path(__file__).resolve().parents[2]/"legged_lab/scripts/collect_selector_data.py"
++    tree = ast.parse(path.read_text())
++    nodes = []
++    for node in tree.body:
++        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in ("parser", "quota_args", "phase_args") for t in node.targets):
++            nodes.append(node)
++        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
++            func = node.value.func
++            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in ("parser", "quota_args", "phase_args"):
++                nodes.append(node)
++        if isinstance(node, ast.FunctionDef) and node.name == "collection_fault_config":
++            nodes.append(node)
++    namespace = {"argparse": argparse, "Path": Path, "fault_profile": fault_profile, "replace": replace}
++    exec(compile(ast.Module(nodes, type_ignores=[]), str(path), "exec"), namespace)
++    args = namespace["parser"].parse_args(["--fault-profile", "directed_dual", "--fault-source", "dual", "--supplement-split", "train"])
++    cfg = namespace["collection_fault_config"](args)
++    assert cfg.scenario_probabilities == (0., 0., 0., 1.)
++    assert cfg.structured_vp_faults
++
++
++def test_legacy_short_delay_config_and_shape_still_work():
++    cfg = replace(FaultConfig(), max_delay_frames=1)
++    manager = SelectorFaultManager(2, cfg=cfg)
++    assert manager.vp_faults is None
++    result = _apply(manager, 0)
++    assert result.vp.shape == (2, 2, 18, 32)
++
++
++@pytest.mark.parametrize("timeout_step,valid", [(1, False), (20, False), (50, True)])
++def test_directed_labels_still_use_the_full_one_second_timeout_contract(timeout_step, valid):
++    accumulator = SafetyOutcomeAccumulator(1, device="cpu")
++    frame = SafetyStepMetrics(torch.zeros(1), torch.full((1,), .8), torch.zeros(1),
++                              torch.zeros(1, dtype=torch.bool), torch.ones(1, dtype=torch.bool))
++    for step in range(1, 51):
++        timeout = torch.tensor([step == timeout_step])
++        accumulator.update(frame, timeout, timeout)
++    outcome = accumulator.outcome()
++    assert outcome.label_valid.item() is valid
++    assert not outcome.fail_1s.item()
++    assert outcome.first_timeout_step.item() == timeout_step
++
++
++def _write_bank(root, *, missing_source=False, wrong_effect=False):
++    n = 2
++    metadata = {"collection_complete": True, "collection_audit_contract": collection_audit_contract(),
++                "directed_audit_contract": directed_audit_contract(),
++                "supplement_coverage": {"config": {"fault_source": "dual"}}}
++    writer = SelectorDatasetWriter(root, collection_cfg=CollectionConfig(
++        num_envs=n, target_samples=n, shard_size=1, allow_nonproduction_num_envs=True),
++        metadata=metadata, fixed_split="train")
++    faults = torch.zeros(n, 8, dtype=torch.long)
++    faults[:, :2] = torch.tensor([int(K.LP_HEIGHT_BIAS), int(K.VP_SPATIAL_BIAS)])
++    faults[:, 6:] = 1
++    source = torch.ones(n, len(SOURCE_AUDIT_ORDER))
++    if wrong_effect:
++        source[1, 1] = 0
++    future = torch.zeros(n, 2, len(FUTURE_METRIC_ORDER))
++    future[:, :, 0] = torch.tensor([[5., 10.], [15., 30.]])
++    params = torch.zeros(n, 21)
++    params[:, :2] = 4.
++    params[:, 4:6] = torch.tensor([[-.5, -.5], [-.8, -.5]])
++    batch = SelectorBatch(torch.zeros(n, 5, 283), torch.ones(n, 2, dtype=torch.uint8),
++        ["terrain_seed42:type1:level2"]*n, torch.zeros(n), torch.ones(n), torch.arange(n),
++        future_metrics=future, fault_metadata=faults, fault_parameters=params,
++        source_metadata=None if missing_source else source, vp_fault_metadata=torch.zeros(n, len(VP_AUDIT_ORDER)),
++        event_identity=torch.tensor([[0, 1, 2], [1, 1, 2]]),
++        candidate_safety=torch.tensor([[0., .8, 0., 1.]]*n))
++    writer.append(batch)
++    writer.close()
++    return analyze_selector_dataset(root)
++
++
++def test_persisted_bank_analysis_checks_source_and_joint_failure_coverage(tmp_path):
++    report = _write_bank(tmp_path)
++    assert report["directed_acceptance"]["verified"]
++    assert report["overall"]["pair_counts"] == [[0, 0, 0, 2]]
++    assert report["field_rows"]["source_metadata"] == 2
++    assert report["by_group"]["dual_start_order"]["0"]["rows"] == 1
++    assert report["by_group"]["dual_start_order"]["1"]["rows"] == 1
++    assert report["by_group"]["both_failure_lead_time_bin"]["0"]["rows"] == 1
++    assert report["by_group"]["both_failure_lead_time_bin"]["1"]["rows"] == 1
++    payload = torch.load(next((tmp_path/"train").glob("shard_*.pt")), weights_only=False)
++    assert payload["features"].shape == (1, 5, 283)
++    assert payload["vp_fault_metadata"].shape == (1, len(VP_AUDIT_ORDER))
++
++
++@pytest.mark.parametrize("missing_source,wrong_effect", [(True, False), (False, True)])
++def test_audit_cannot_verify_missing_or_unobservable_source(tmp_path, missing_source, wrong_effect):
++    report = _write_bank(tmp_path, missing_source=missing_source, wrong_effect=wrong_effect)
++    assert not report["directed_acceptance"]["verified"]

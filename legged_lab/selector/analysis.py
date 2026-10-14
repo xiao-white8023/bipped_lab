@@ -16,17 +16,15 @@ from .collection_audit import (
 from .dataset import SPLIT_NAMES
 from .labels import CLEARANCE_LIMIT_M, FIRST_FAILURE_BITS, FUTURE_METRIC_ORDER, TILT_LIMIT_RAD
 from .lp_map_faults import NOISE_AUDIT_ORDER
+from .fault_kinds import FaultKind
+from .directed_audit import (SOURCE_AUDIT_ORDER, VP_AUDIT_ORDER,
+                             directed_audit_contract, source_rejection_masks)
 
 
 LABEL_ORDER = ("lp_1.0s", "vp_1.0s")
 AUDIT_FIELDS = ("event_identity", "fault_parameters", "first_failure_flags",
                 "first_failure_cause_stable", "candidate_safety")
-FAULT_NAMES = (
-    "none", "freeze", "delay", "vp_occlusion", "vp_scale", "vp_bias", "vp_shift",
-    "vp_collapse", "lp_random_dropout", "lp_block_dropout", "lp_height_bias",
-    "lp_registration", "lp_drift", "lp_collapse",
-    "lp_map_drift", "lp_person", "lp_compound", "vp_compound", "vp_burst",
-)
+FAULT_NAMES = tuple(kind.name.lower() for kind in FaultKind)
 PARAMETERS_BY_KIND = {
     1: (), 2: ("delay_s",), 3: ("vp_occlusion_fraction",), 4: ("vp_scale",),
     5: ("vp_bias_m",), 6: ("vp_shift_x_px", "vp_shift_y_px"),
@@ -101,9 +99,16 @@ def analyze_selector_dataset(root: str | Path) -> dict:
     cause_rows = 0
     initial_rows = initial_invalid = initial_failed = 0
     episodes, plans = {}, {}
+    plan_rows, plan_last_time = {}, {}
+    min_event_spacing = None
     event_rows = 0
     parameter_summary = {}
     noise_summary = {}
+    vp_summary = {}
+    directed_contract = manifest.get("metadata", {}).get("directed_audit_contract")
+    source_mode = manifest.get("metadata", {}).get("supplement_coverage", {}).get("config", {}).get("fault_source", "any")
+    directed_counts = {"available_rows": 0, "wrong_source": 0, "effect_not_observable": 0,
+                       "healthy_side_not_clean": 0, "source_outcome": 0}
     audit_contract = manifest.get("metadata", {}).get("collection_audit_contract")
     has_new_contract = audit_contract is not None
     if has_new_contract and (
@@ -129,11 +134,20 @@ def analyze_selector_dataset(root: str | Path) -> dict:
                 raise ValueError(f"invalid feature shape in {path}")
             overall.add(labels)
             splits[split].add(labels)
-            for field in ("future_metrics", "fault_metadata", "execution_metadata", *AUDIT_FIELDS):
+            for field in ("future_metrics", "fault_metadata", "execution_metadata", "candidate_time", "feature_end_time", *AUDIT_FIELDS):
                 if field in data:
                     if len(data[field]) != n:
                         raise ValueError(f"misaligned {field} in {path}")
                     fields[field] += n
+            if ("candidate_time" in data) != ("feature_end_time" in data):
+                raise ValueError(f"unpaired candidate/feature timestamps in {path}")
+            if "candidate_time" in data:
+                for field in ("candidate_time", "feature_end_time"):
+                    value = data[field]
+                    if value.shape != (n,) or value.dtype != torch.float64 or not torch.isfinite(value).all():
+                        raise ValueError(f"invalid {field} in {path}")
+                if not torch.allclose(data["candidate_time"], data["feature_end_time"], rtol=0, atol=1e-6):
+                    raise ValueError(f"candidate/feature timestamps are not aligned in {path}")
             if "noise_metadata" in data:
                 noise = data["noise_metadata"]
                 contract = manifest.get("metadata", {}).get("noise_audit_contract", {})
@@ -150,6 +164,32 @@ def analyze_selector_dataset(root: str | Path) -> dict:
                 _group_update(groups, "lp_ghost_present", (noise[:, 8] > 0).long(), labels, advanced)
                 _group_update(groups, "lp_support_bin", torch.bucketize(noise[:, 11].contiguous(), torch.tensor([.05,.5,.95]), right=True), labels, advanced)
                 _group_update(groups, "lp_saturation_bin", torch.bucketize(noise[:, 12].contiguous(), torch.tensor([.01,.1,.5]), right=True), labels, advanced)
+            for field, order in (("source_metadata", SOURCE_AUDIT_ORDER), ("vp_fault_metadata", VP_AUDIT_ORDER)):
+                if field not in data:
+                    continue
+                if directed_contract != directed_audit_contract():
+                    raise ValueError(f"unsupported directed audit contract in {path}")
+                values = data[field]
+                if values.shape != (n, len(order)) or not torch.isfinite(values).all() or "fault_metadata" not in data:
+                    raise ValueError(f"invalid {field} in {path}")
+                fields[field] += n
+                if field == "vp_fault_metadata":
+                    for column, name in enumerate(order):
+                        _parameter_update(vp_summary, name, values[:, column])
+                else:
+                    if not ((values[:, :4] == 0) | (values[:, :4] == 1)).all():
+                        raise ValueError(f"invalid source flags in {path}")
+                    levels = values[:, 6:8]
+                    if not ((levels == levels.round()) & (levels >= 0) & (levels <= 2)).all():
+                        raise ValueError(f"invalid per-branch severity in {path}")
+                    directed_counts["available_rows"] += n
+                    for reason, mask in source_rejection_masks(source_mode, data["fault_metadata"], values).items():
+                        directed_counts[reason] += int(mask.sum())
+                    if source_mode != "any":
+                        target = {"lp_only": 1, "vp_only": 2, "dual": 3}[source_mode]
+                        pairs = labels[:, 0].long()+2*labels[:, 1].long()
+                        directed_counts["source_outcome"] += int(((pairs != 0) & (pairs != target)).sum())
+                    _group_update(groups, "branch_severity_pair", values[:, 6].long()*3+values[:, 7].long(), labels)
             if any(f in data for f in AUDIT_FIELDS) and not has_new_contract:
                 raise ValueError("new audit tensors require collection_audit_contract metadata")
             if ("first_failure_flags" in data) != ("first_failure_cause_stable" in data):
@@ -169,6 +209,10 @@ def analyze_selector_dataset(root: str | Path) -> dict:
                 for branch in range(2):
                     times[branch] += torch.bincount(first[:, branch].clamp_min(0).long(), minlength=51)
                 time_rows += n
+                both = labels.all(-1)
+                lead = first.amin(-1)*.02
+                bins = torch.bucketize(lead.contiguous(), torch.tensor([.2, .5]), right=True)
+                _group_update(groups, "both_failure_lead_time_bin", bins, labels, both)
             if "first_failure_flags" in data:
                 flags = data["first_failure_flags"].long()
                 stable = data["first_failure_cause_stable"].bool()
@@ -211,6 +255,16 @@ def analyze_selector_dataset(root: str | Path) -> dict:
                 _group_update(groups, "active_fault_severity", severity, labels, scenario != 0)
                 _group_update(groups, "active_scenario_severity", scenario * 3 + severity, labels)
                 _group_update(groups, "phase", faults[:, 3], labels)
+                planned_dual = faults[:, :2].ne(0).all(-1)
+                _group_update(groups, "dual_fault_kind_pair", faults[:, 0]*len(FAULT_NAMES)+faults[:, 1], labels, planned_dual)
+                if "fault_parameters" in data:
+                    params = data["fault_parameters"]
+                    delta = params[:, 4]-params[:, 5]
+                    order = torch.where(delta == 0, 0, torch.where(delta < 0, 1, 2))
+                    _group_update(groups, "dual_start_order", order, labels, planned_dual)
+                    overlap = (torch.minimum(params[:, 4]+params[:, 0], params[:, 5]+params[:, 1])
+                               - torch.maximum(params[:, 4], params[:, 5])).clamp_min(0)
+                    _parameter_update(parameter_summary, "dual:planned_overlap_s", overlap[planned_dual])
                 for branch, name in enumerate(("lp", "vp")):
                     active = faults[:, 6 + branch].bool()
                     _group_update(groups, f"active_{name}_fault_kind", faults[:, branch], labels, active)
@@ -233,6 +287,13 @@ def analyze_selector_dataset(root: str | Path) -> dict:
                 fault_rows = data.get("fault_metadata")
                 for index, (env_id, episode, schedule) in enumerate(identity.tolist()):
                     ep, plan = (env_id, episode), (env_id, episode, schedule)
+                    plan_rows[plan] = plan_rows.get(plan, 0)+1
+                    if "candidate_time" in data:
+                        now = float(data["candidate_time"][index])
+                        if plan in plan_last_time:
+                            spacing = now-plan_last_time[plan]
+                            min_event_spacing = spacing if min_event_spacing is None else min(min_event_spacing, spacing)
+                        plan_last_time[plan] = now
                     split_bit = 1 << split_index
                     old = episodes.get(ep, (0, 0, [0, 0, 0]))
                     old[-1][split_index] |= packed[index]
@@ -265,6 +326,11 @@ def analyze_selector_dataset(root: str | Path) -> dict:
         value["mean"] = value.pop("sum") / value["rows"]
     for value in noise_summary.values():
         value["mean"] = value.pop("sum") / value["rows"]
+    for value in vp_summary.values():
+        value["mean"] = value.pop("sum") / value["rows"]
+    directed_counts["fault_source"] = source_mode
+    directed_counts["verified"] = (source_mode != "any" and directed_counts["available_rows"] == overall.rows
+        and all(directed_counts[key] == 0 for key in ("wrong_source", "effect_not_observable", "healthy_side_not_clean", "source_outcome")))
     return {
         "report_version": 3,
         "collection_complete": manifest.get("metadata", {}).get("collection_complete", False),
@@ -283,9 +349,15 @@ def analyze_selector_dataset(root: str | Path) -> dict:
             "person_phase": ["approach", "near", "depart", "residual"],
             "lp_support_bin": ["<.05", ".05-.5", ".5-.95", ">=.95"],
             "lp_saturation_bin": ["<.01", ".01-.1", ".1-.5", ">=.5"],
+            "branch_severity_pair": "lp_severity * 3 + vp_severity",
+            "dual_fault_kind_pair": f"lp_kind_id * {len(FAULT_NAMES)} + vp_kind_id",
+            "dual_start_order": ["simultaneous", "lp_first", "vp_first"],
+            "both_failure_lead_time_bin": ["[0,.2)", "[.2,.5)", "[.5,1]"],
         },
         "by_group": {d: {k: c.result() for k, c in sorted(g.items())} for d, g in sorted(groups.items())},
-        "field_rows": {f: fields[f] for f in ("future_metrics", "fault_metadata", "execution_metadata", *AUDIT_FIELDS, "noise_metadata")},
+        "field_rows": {f: fields[f] for f in (
+            "future_metrics", "fault_metadata", "execution_metadata", "candidate_time", "feature_end_time",
+            *AUDIT_FIELDS, "noise_metadata", "source_metadata", "vp_fault_metadata")},
         "first_failure_time": {
             "available_rows": time_rows, "control_dt_s": .02,
             "no_failure_within_1s": times[:, 0].tolist(),
@@ -311,10 +383,14 @@ def analyze_selector_dataset(root: str | Path) -> dict:
             "by_split": {s: {"episodes": event_counts(episodes, 1 << i), "plans": event_counts(plans, 1 << i)}
                          for i, s in enumerate(SPLIT_NAMES)} if event_rows else None,
             "accepted_unique_plans_by_planned_scenario_severity": accepted_plans.tolist() if event_rows else None,
+            "max_rows_per_plan": max(plan_rows.values(), default=0) if event_rows else None,
+            "min_spacing_s_within_plan": min_event_spacing,
             "note": "plans include normal schedules; failure counts denote at least one failed counterfactual label, not real falls",
         },
         "fault_parameter_summary": parameter_summary,
         "noise_parameter_summary": noise_summary,
+        "vp_parameter_summary": vp_summary,
+        "directed_acceptance": directed_counts,
         "supplement_source": manifest.get("metadata", {}).get("supplement_source"),
         "supplement_coverage": manifest.get("metadata", {}).get("supplement_coverage"),
         "collection_audit": manifest.get("metadata", {}).get("collection_audit"),
@@ -328,7 +404,7 @@ def analyze_selector_dataset(root: str | Path) -> dict:
         "safety_label_filter": manifest.get("metadata", {}).get("safety_label_filter"),
         "sampling_progress": manifest.get("metadata", {}).get("sampling_progress"),
         "notes": [
-            "10/30/60 controls scheduled-plan draws; accepted frame fractions also depend on durations and filtering.",
+            "Severity probabilities control sampled levels; independent dual events record per-branch levels and a maximum plan level.",
             "balanced_scenarios balances active fault categories, not safe/failure outcomes.",
             "Only V4 data uses the one-second labels and ordinary-transition contract.",
             "Replay diagnostics compare acceptance rules on the same candidate rollouts; retained counts precede quotas, written counts apply quotas.",

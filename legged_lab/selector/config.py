@@ -63,6 +63,19 @@ class FaultConfig:
     lp_person_main_fraction: float = 0.65
     lp_map_confirm_frames: int = 3
     lp_map_retention_radius_m: float = 2.5
+    # Directed profiles opt into capture-once VP histories and independent sides.
+    structured_vp_faults: bool = False
+    independent_dual_faults: bool = False
+    vp_depth_min_m: float = 0.1
+    vp_local_bias_m: tuple[float, float] = (0.04, 0.45)
+    vp_local_scale_error: tuple[float, float] = (0.03, 0.30)
+    vp_edge_mix: tuple[float, float] = (0.20, 0.90)
+    vp_subpixel_shift_px: tuple[float, float] = (0.30, 3.0)
+    vp_rotation_deg: tuple[float, float] = (0.30, 4.0)
+    vp_mask_speed_px_per_s: tuple[float, float] = (0.50, 4.0)
+    vp_filter_alpha: tuple[float, float] = (0.50, 0.90)
+    vp_max_hold_frames: int = 3
+    vp_residual_epsilon_m: float = 0.002
 
     def validate(self) -> None:
         for name in ("update_period_s", "lp_resolution_m", "vp_depth_max_m"):
@@ -117,7 +130,28 @@ class FaultConfig:
         if (not math.isfinite(self.lp_invalid_height) or
                 self.lp_height_clip[0] <= self.lp_invalid_height <= self.lp_height_clip[1]):
             raise ValueError("lp_invalid_height must be finite and outside lp_height_clip")
-        for name, count in (("lp_kind_weights", 11), ("vp_kind_weights", 9)):
+        for name in ("structured_vp_faults", "independent_dual_faults"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be boolean")
+        if self.structured_vp_faults and not self.extended_faults:
+            raise ValueError("structured VP faults require extended_faults")
+        if not 0 < self.vp_depth_min_m < self.vp_depth_max_m:
+            raise ValueError("VP depth minimum must lie between zero and depth maximum")
+        for name in ("vp_local_bias_m", "vp_local_scale_error", "vp_edge_mix",
+                     "vp_subpixel_shift_px", "vp_rotation_deg", "vp_mask_speed_px_per_s", "vp_filter_alpha"):
+            lo, hi = getattr(self, name)
+            if not all(math.isfinite(x) for x in (lo, hi)) or not 0 <= lo <= hi:
+                raise ValueError(f"{name} must contain finite nonnegative bounds")
+        if self.vp_edge_mix[1] > 1 or self.vp_local_scale_error[1] >= 1:
+            raise ValueError("edge mixing must be <= 1 and local scale error < 1")
+        if not 0 <= self.vp_filter_alpha[0] <= self.vp_filter_alpha[1] < 1:
+            raise ValueError("filter alpha must be in [0,1)")
+        if (type(self.vp_max_hold_frames) is not int or self.vp_max_hold_frames < 1
+            or (self.structured_vp_faults and self.vp_max_hold_frames > self.max_delay_frames)):
+            raise ValueError("VP hold length must be in [1,max_delay_frames]")
+        if not math.isfinite(self.vp_residual_epsilon_m) or self.vp_residual_epsilon_m <= 0:
+            raise ValueError("VP residual threshold must be positive and finite")
+        for name, count in (("lp_kind_weights", 11), ("vp_kind_weights", 16 if self.structured_vp_faults else 9)):
             weights = getattr(self, name)
             if weights and (not self.extended_faults or len(weights) != count
                             or any(not math.isfinite(x) or x < 0 for x in weights)

@@ -1,0 +1,195 @@
+{
+  "scope": "read-only diagnostic of fixed V5 model; no training, threshold fitting or production changes",
+  "source_checkpoint": "outputs/g1_renet_selector_v5_outcomes_20261013_211324/models/candidate_selector_checkpoint.pt",
+  "checkpoint_sha256": "f5dc8b227b5fee82d3ee7d8f6bd31eb727fe65bb9943b6a1caf07b89e066dd90",
+  "dataset_manifest_sha256": "93396f13e87f71f57e07dda7174e5838191662039b53ea931f7fbb8a2ae9fc22",
+  "splits": {
+    "train": {
+      "all_single_failure": {
+        "rows": 42589,
+        "errors": 944,
+        "error_rate": 0.022165347859776,
+        "unique_events": 5526,
+        "error_events": 548
+      },
+      "normal_single_failure": {
+        "rows": 400,
+        "errors": 100,
+        "error_rate": 0.25,
+        "unique_events": 228,
+        "error_events": 80
+      },
+      "lp_fault_vp_only_failure": {
+        "rows": 211,
+        "errors": 101,
+        "error_rate": 0.4786729857819905,
+        "unique_events": 121,
+        "error_events": 66
+      },
+      "vp_fault_lp_only_failure": {
+        "rows": 274,
+        "errors": 196,
+        "error_rate": 0.7153284671532847,
+        "unique_events": 142,
+        "error_events": 107
+      },
+      "lp_fault_lp_only_failure": {
+        "rows": 17567,
+        "errors": 56,
+        "error_rate": 0.0031877952980019354,
+        "unique_events": 1925,
+        "error_events": 34
+      },
+      "vp_fault_vp_only_failure": {
+        "rows": 5547,
+        "errors": 28,
+        "error_rate": 0.005047773571299802,
+        "unique_events": 881,
+        "error_events": 24
+      },
+      "dual_fault_single_failure": {
+        "rows": 18590,
+        "errors": 463,
+        "error_rate": 0.024905863367401828,
+        "unique_events": 2652,
+        "error_events": 250
+      }
+    },
+    "validation": {
+      "all_single_failure": {
+        "rows": 13708,
+        "errors": 388,
+        "error_rate": 0.028304639626495477,
+        "unique_events": 1744,
+        "error_events": 212
+      },
+      "normal_single_failure": {
+        "rows": 125,
+        "errors": 43,
+        "error_rate": 0.344,
+        "unique_events": 79,
+        "error_events": 33
+      },
+      "lp_fault_vp_only_failure": {
+        "rows": 45,
+        "errors": 29,
+        "error_rate": 0.6444444444444445,
+        "unique_events": 26,
+        "error_events": 18
+      },
+      "vp_fault_lp_only_failure": {
+        "rows": 99,
+        "errors": 85,
+        "error_rate": 0.8585858585858586,
+        "unique_events": 52,
+        "error_events": 48
+      },
+      "lp_fault_lp_only_failure": {
+        "rows": 5545,
+        "errors": 26,
+        "error_rate": 0.004688908926961226,
+        "unique_events": 589,
+        "error_events": 12
+      },
+      "vp_fault_vp_only_failure": {
+        "rows": 1923,
+        "errors": 16,
+        "error_rate": 0.008320332813312533,
+        "unique_events": 308,
+        "error_events": 12
+      },
+      "dual_fault_single_failure": {
+        "rows": 5971,
+        "errors": 189,
+        "error_rate": 0.031652989449003514,
+        "unique_events": 846,
+        "error_events": 93
+      }
+    },
+    "test": {
+      "all_single_failure": {
+        "rows": 11098,
+        "errors": 365,
+        "error_rate": 0.03288880879437737,
+        "unique_events": 1436,
+        "error_events": 186
+      },
+      "normal_single_failure": {
+        "rows": 95,
+        "errors": 45,
+        "error_rate": 0.47368421052631576,
+        "unique_events": 50,
+        "error_events": 24
+      },
+      "lp_fault_vp_only_failure": {
+        "rows": 65,
+        "errors": 35,
+        "error_rate": 0.5384615384615384,
+        "unique_events": 30,
+        "error_events": 19
+      },
+      "vp_fault_lp_only_failure": {
+        "rows": 80,
+        "errors": 59,
+        "error_rate": 0.7375,
+        "unique_events": 47,
+        "error_events": 37
+      },
+      "lp_fault_lp_only_failure": {
+        "rows": 4348,
+        "errors": 30,
+        "error_rate": 0.0068997240110395585,
+        "unique_events": 472,
+        "error_events": 18
+      },
+      "vp_fault_vp_only_failure": {
+        "rows": 1532,
+        "errors": 19,
+        "error_rate": 0.012402088772845953,
+        "unique_events": 251,
+        "error_events": 10
+      },
+      "dual_fault_single_failure": {
+        "rows": 4978,
+        "errors": 177,
+        "error_rate": 0.0355564483728405,
+        "unique_events": 690,
+        "error_events": 81
+      }
+    }
+  },
+  "training_rare_summary": {
+    "rows": 885,
+    "errors": 397,
+    "fraction_of_training_rows": 0.0013241188624846455,
+    "fraction_of_training_single_failure_errors": 0.4205508474576271
+  },
+  "training_direction_before_hold_and_margin": {
+    "normal_single_failure": {
+      "rows": 400,
+      "preferred_branch_wrong": 97,
+      "error_rate": 0.2425
+    },
+    "lp_fault_vp_only_failure": {
+      "rows": 211,
+      "preferred_branch_wrong": 100,
+      "error_rate": 0.47393364928909953
+    },
+    "vp_fault_lp_only_failure": {
+      "rows": 274,
+      "preferred_branch_wrong": 194,
+      "error_rate": 0.708029197080292
+    },
+    "lp_fault_lp_only_failure": {
+      "rows": 17567,
+      "preferred_branch_wrong": 57,
+      "error_rate": 0.0032447202140376843
+    },
+    "vp_fault_vp_only_failure": {
+      "rows": 5547,
+      "preferred_branch_wrong": 24,
+      "error_rate": 0.004326663061114116
+    }
+  },
+  "direction_diagnostic_scope": "Compare q1 and q2 only; no holds, margins, availability or time gates."
+}

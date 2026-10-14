@@ -8,14 +8,27 @@ import torch
 
 from .config import FaultConfig
 from .collection_audit import PAIR_NAMES
+from .directed_audit import SOURCE_MODES, source_rejection_masks
+from .fault_kinds import FaultKind
 
 
-PROFILE_NAMES = ("baseline", "mixed", "lp_map", "vp_hard", "dual", "recovery")
+DIRECTED_PROFILES = {"directed_lp": "lp_only", "directed_vp": "vp_only", "directed_dual": "dual"}
+PROFILE_NAMES = ("baseline", "mixed", "lp_map", "vp_hard", "dual", "recovery", *DIRECTED_PROFILES)
 LIFECYCLE_NAMES = (
     "normal", "other_fault", "drift_early", "drift_mature",
     "person_approach", "person_near", "person_depart", "person_residual",
     "person_cleared", "recovered",
 )
+
+
+def resolve_fault_source(profile, requested=None):
+    expected = DIRECTED_PROFILES.get(profile)
+    if expected is not None and requested not in (None, expected):
+        raise ValueError("directed profile and --fault-source disagree")
+    mode = requested or expected or "any"
+    if mode not in SOURCE_MODES:
+        raise ValueError("unknown --fault-source")
+    return mode
 
 
 def lifecycle_classes(faults, parameters, noise):
@@ -58,6 +71,8 @@ def fault_profile(name: str, base: FaultConfig | None = None) -> FaultConfig:
         "mixed": (.10, .40, .30, .20), "lp_map": (.05, .05, .85, .05),
         "vp_hard": (.05, .85, .05, .05), "dual": (.05, .10, .10, .75),
         "recovery": (.25, .25, .25, .25),
+        "directed_lp": (0., 0., 1., 0.), "directed_vp": (0., 1., 0., 0.),
+        "directed_dual": (0., 0., 0., 1.),
     }[name]
     lp_weights = (.02, .04, .03, .04, .07, .07, .05, .03, .25, .25, .15)
     vp_weights = (.04, .10, .12, .12, .12, .12, .03, .25, .10)
@@ -75,6 +90,12 @@ def fault_profile(name: str, base: FaultConfig | None = None) -> FaultConfig:
         cfg = replace(cfg, severity_probabilities=(.45, .40, .15),
                       min_recovery_frames=25, max_recovery_frames=50,
                       lp_map_random_walk_m=.004)
+    if name in DIRECTED_PROFILES:
+        cfg = replace(cfg, structured_vp_faults=True, independent_dual_faults=True,
+            lp_kind_weights=(.01, .04, .08, .08, .12, .12, .08, .02, .22, .15, .08),
+            vp_kind_weights=(.02, .04, .04, .02, .02, .02, .01, .10, .06,
+                             .11, .12, .13, .10, .08, .06, .07),
+            vp_occlusion_fraction=(.10, .65))
     cfg.validate()
     return cfg
 
@@ -94,8 +115,15 @@ class SupplementConfig:
     label_interval_frames: int = 1
     randomize_label_phase: bool = False
     max_samples_per_labelled_batch: int = 0
+    fault_source: str = "any"
 
     def validate(self, target_samples):
+        if self.fault_source not in SOURCE_MODES:
+            raise ValueError(f"fault_source must be one of {SOURCE_MODES}")
+        if self.fault_source != "any" and not self.require_initial_safe:
+            raise ValueError("directed supplements require initially safe states")
+        if self.fault_source != "any" and self.split != "train":
+            raise ValueError("directed source/outcome selection is training-only")
         if self.split not in ("train", "validation", "test"):
             raise ValueError("invalid supplement split")
         if self.split != "train" and self.pair_quotas is not None:
@@ -104,6 +132,10 @@ class SupplementConfig:
             len(self.pair_quotas) != 4 or any(type(q) is not int or q < 0 for q in self.pair_quotas)
             or sum(self.pair_quotas) != target_samples):
             raise ValueError("four pair quotas must sum exactly to target_samples")
+        if self.pair_quotas is not None and self.fault_source != "any":
+            allowed_pair = {"lp_only": 1, "vp_only": 2, "dual": 3}[self.fault_source]
+            if any(q for i, q in enumerate(self.pair_quotas) if i not in (0, allowed_pair)):
+                raise ValueError("directed quotas must match their fault source, or be both-safe controls")
         if self.max_samples_per_event < 1 or not math.isfinite(self.min_event_spacing_s) or self.min_event_spacing_s < .2:
             raise ValueError("event cap must be positive and spacing must be at least 0.2 s")
         if type(self.max_no_progress_batches) is not int or self.max_no_progress_batches < 1:
@@ -156,6 +188,14 @@ class OutcomeQuotaSampler:
         self.written_1s_by_lifecycle = [[0]*4 for _ in LIFECYCLE_NAMES]
         self.written_time_bins = {}
         self.rejections["temporal_budget"] = 0
+        for name in ("wrong_source", "effect_not_observable", "healthy_side_not_clean", "source_outcome"):
+            self.rejections[name] = 0
+        self.source_checked = 0
+        self.source_eligible_pairs = [0]*4
+        self.source_written_pairs = [0]*4
+        self.source_rejected_pairs = [0]*4
+        self.quota_rejected_pairs = [0]*4
+        self.kind_yield = {}
 
     def start(self, now):
         if self.collection_start is not None:
@@ -198,9 +238,43 @@ class OutcomeQuotaSampler:
         for stage, count in enumerate(torch.bincount(stages, minlength=len(LIFECYCLE_NAMES)).tolist()):
             self.seen_lifecycle[stage] += count
 
-    def select(self, good, labels, event_identity, now, *, faults=None, parameters=None, noise=None):
+    def _record_kind_yield(self, faults, pairs, mask, stage):
+        if faults is None:
+            return
+        width = len(FaultKind)
+        keys = (faults[:, 0].long()*width+faults[:, 1].long()).cpu()*4+pairs
+        counts = torch.bincount(keys[mask.cpu()], minlength=width*width*4).reshape(width, width, 4)
+        for lp, vp in counts.sum(-1).nonzero().tolist():
+            value = self.kind_yield.setdefault(f"{lp}:{vp}", {
+                "stable_attempt_1s": [0]*4, "source_eligible_1s": [0]*4, "written_1s": [0]*4,
+            })
+            value[stage] = [a+b for a, b in zip(value[stage], counts[lp, vp].tolist())]
+
+    def select(self, good, labels, event_identity, now, *, faults=None, parameters=None, noise=None, source=None):
         budget = self.sample_budget(now)
         pairs = label_classes(labels).cpu()
+        self._record_kind_yield(faults, pairs, good, "stable_attempt_1s")
+        if self.cfg.fault_source != "any":
+            if faults is None:
+                raise ValueError("directed quotas require fault metadata")
+            self.source_checked += int(good.sum())
+            masks = source_rejection_masks(self.cfg.fault_source, faults, source)
+            rejected = torch.zeros_like(good)
+            for name, mask in masks.items():
+                self.rejections[name] += int((good & mask).sum())
+                rejected |= mask
+            eligible = good & ~rejected
+            self._record_kind_yield(faults, pairs, eligible, "source_eligible_1s")
+            for i, count in enumerate(torch.bincount(pairs[eligible.cpu()], minlength=4).tolist()):
+                self.source_eligible_pairs[i] += count
+            allowed = {"lp_only": 1, "vp_only": 2, "dual": 3}[self.cfg.fault_source]
+            mismatch = eligible & ~((pairs == 0) | (pairs == allowed)).to(good.device)
+            self.rejections["source_outcome"] += int(mismatch.sum())
+            for i, count in enumerate(torch.bincount(pairs[mismatch.cpu()], minlength=4).tolist()):
+                self.source_rejected_pairs[i] += count
+            good = eligible & ~mismatch
+        else:
+            self._record_kind_yield(faults, pairs, good, "source_eligible_1s")
         candidates = good.nonzero().flatten().cpu()
         events = event_identity.cpu().tolist()
         stages = (lifecycle_classes(faults, parameters, noise).cpu()
@@ -234,8 +308,11 @@ class OutcomeQuotaSampler:
                 room = self.cfg.pair_quotas[category]-self.counts[category]
                 if room <= 0:
                     self.rejections["outcome_quota"] += 1
+                    self.quota_rejected_pairs[category] += 1
                     continue
             self.counts[category] += 1
+            if self.cfg.fault_source != "any":
+                self.source_written_pairs[category] += 1
             self.events[key] = (count+1, now)
             self.written_lifecycle[int(stages[i])] += 1
             self.written_1s_by_lifecycle[int(stages[i])][category] += 1
@@ -243,6 +320,9 @@ class OutcomeQuotaSampler:
         time_bin = int((self.last_time-self.collection_start)//5)
         if selected:
             self.written_time_bins[str(time_bin)] = self.written_time_bins.get(str(time_bin), 0)+len(selected)
+        written = torch.zeros_like(good)
+        written[selected] = True
+        self._record_kind_yield(faults, pairs, written, "written_1s")
         return torch.tensor(selected, dtype=torch.long, device=good.device)
 
     def summary(self):
@@ -253,6 +333,16 @@ class OutcomeQuotaSampler:
             "config": asdict(self.cfg), "pair_order": list(PAIR_NAMES),
             "accepted_1s": self.counts, "eligible_1s": self.eligible_counts,
             "independent_events": len(self.events), "rejections": self.rejections,
+            "source_acceptance": {
+                "fault_source": self.cfg.fault_source, "checked": self.source_checked,
+                "eligible_1s": self.source_eligible_pairs, "written_1s": self.source_written_pairs,
+                "rejected_outcomes_1s": self.source_rejected_pairs,
+                "quota_rejected_1s": self.quota_rejected_pairs,
+                "scope": "initially safe, observable, valid and replay-stable candidate pairs, before quotas",
+                "quota_rejected_scope": "rows visited before the time budget or target stopped admission",
+            },
+            "outcome_yield_by_kind_pair": self.kind_yield,
+            "kind_pair_key": "lp_kind_id:vp_kind_id; counts use pair_order",
             "missing_1s": ([max(0,q-n) for q,n in zip(self.cfg.pair_quotas, self.counts)]
                              if self.cfg.pair_quotas is not None else None),
             "temporal_coverage": {

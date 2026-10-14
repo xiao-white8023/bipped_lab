@@ -15,6 +15,7 @@ from .faults import FaultSnapshot, SelectorFaultManager
 from .features import FeatureHistory, SensorHealthTracker, build_selector_frame
 from .lp_map_faults import NOISE_AUDIT_ORDER
 from .supplement import OutcomeQuotaSampler
+from .directed_audit import directed_audit_contract
 from .feature_contract import selector_feature_contract
 from .labels import (
     RolloutOutcome,
@@ -404,6 +405,7 @@ class FaultedObservationStream:
                 lp_packet_timestamp=torch.full_like(self.last_lp_timestamp, float(now)),
                 vp_packet_timestamp=vp_timestamp,
                 world_pose=world_pose,
+                now=now,
             )
             for name, value in (
                 ("last_lp", faulted.lp),
@@ -1161,6 +1163,10 @@ class CounterfactualCollector:
                 "scope": "audit only, excluded from selector features",
                 "person_phase_order": ["approach", "near", "depart", "residual"],
                 "fault_event": "parent event includes bursts, gaps, corrections and residual cells"}
+        directed = (getattr(self.stream.faults.cfg, "structured_vp_faults", False)
+                    or getattr(getattr(self, "supplement_cfg", None), "fault_source", "any") != "any")
+        if directed:
+            metadata["directed_audit_contract"] = directed_audit_contract()
         self._collection_audit = CollectionAudit(self.env.num_envs, self.device)
         self._collection_audit.observe_behavior_plans(self.episode_serial, self.stream.faults)
         filters = {
@@ -1244,6 +1250,19 @@ class CounterfactualCollector:
             parameters = self.stream.faults.audit_parameters()
             noise_metadata = (self.stream.faults.audit_map_noise()
                               if getattr(self.stream.faults.cfg, "extended_faults", False) else None)
+            source_metadata = self.stream.faults.audit_source() if directed else None
+            vp_fault_metadata = (self.stream.faults.vp_faults.audit(self.stream.faults)
+                                 if getattr(self.stream.faults, "vp_faults", None) is not None else None)
+            if source_metadata is not None:
+                # A clean source is also required to be currently available.
+                health_cfg = RuntimeConfig()
+                for column, sensor in ((2, "lp"), (3, "vp")):
+                    support = getattr(self.stream, "last_"+sensor+"_valid").flatten(1).mean(-1)
+                    timestamp = getattr(self.stream, "last_"+sensor+"_timestamp")
+                    age = now-timestamp
+                    available = torch.isfinite(timestamp) & (age >= -1e-6) & (age <= health_cfg.sensor_timeout_s)
+                    available &= support >= health_cfg.min_valid_ratio
+                    source_metadata[:, column] *= available.float()
             event_identity = torch.stack((
                 torch.arange(self.env.num_envs, device=self.device),
                 self.episode_serial, self.stream.faults.schedule_count,
@@ -1341,7 +1360,7 @@ class CounterfactualCollector:
                 accepted[category] += len(ids)
             if getattr(self, "quota_sampler", None) is not None:
                 ids = self.quota_sampler.select(good, labels, event_identity, now,
-                    faults=faults, parameters=parameters, noise=noise_metadata)
+                    faults=faults, parameters=parameters, noise=noise_metadata, source=source_metadata)
                 for category in range(4):
                     accepted[category] += int((scenario[ids] == category).sum())
             else:
@@ -1379,6 +1398,8 @@ class CounterfactualCollector:
                     )[ids],
                     candidate_safety=candidate_safety[ids],
                     noise_metadata=noise_metadata[ids] if noise_metadata is not None else None,
+                    source_metadata=source_metadata[ids] if source_metadata is not None else None,
+                    vp_fault_metadata=vp_fault_metadata[ids] if vp_fault_metadata is not None else None,
                 )
                 self._progress("write_samples", rows=len(ids), accepted=collected)
                 self.writer.append(batch)

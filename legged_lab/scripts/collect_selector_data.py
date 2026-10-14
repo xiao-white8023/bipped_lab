@@ -52,8 +52,10 @@ parser.add_argument("--fault-seed", type=int, default=None)
 parser.add_argument("--behavior-seed", type=int, default=None)
 parser.add_argument("--base-dataset", type=Path, default=None)
 parser.add_argument("--supplement-split", choices=("train", "validation", "test"), default=None)
-parser.add_argument("--fault-profile", choices=("baseline", "mixed", "lp_map", "vp_hard", "dual", "recovery"), default=None,
+parser.add_argument("--fault-profile", choices=("baseline", "mixed", "lp_map", "vp_hard", "dual", "recovery", "directed_lp", "directed_vp", "directed_dual"), default=None,
                     help="Default: baseline for original collection, mixed for supplements.")
+parser.add_argument("--fault-source", choices=("any", "lp_only", "vp_only", "dual"), default=None,
+                    help="Validate injected source and observable effects; inferred for directed profiles.")
 quota_args = parser.add_mutually_exclusive_group()
 quota_args.add_argument("--pair-quotas", nargs=4, type=int, default=None,
                         metavar=("BOTH_SAFE", "LP_FAIL", "VP_FAIL", "BOTH_FAIL"))
@@ -148,7 +150,9 @@ from legged_lab.selector.dataset import SelectorDatasetWriter  # noqa: E402
 from legged_lab.selector.collection_progress import CollectionProgress, close_simulation  # noqa: E402
 from legged_lab.selector.collection_physics import create_collection_environment, collection_physics_settings  # noqa: E402
 from legged_lab.selector.faults import SelectorFaultManager  # noqa: E402
-from legged_lab.selector.supplement import fault_profile, SupplementConfig, scaled_pair_quotas  # noqa: E402
+from legged_lab.selector.supplement import (  # noqa: E402
+    fault_profile, SupplementConfig, scaled_pair_quotas, DIRECTED_PROFILES, resolve_fault_source,
+)
 from legged_lab.selector.supplement_dataset import (  # noqa: E402
     base_collection_partition, restrict_terrain_distribution, compatible_manifests,
 )
@@ -327,6 +331,9 @@ def main() -> None:
         raise ValueError("use --base-dataset and --supplement-split together")
     if not supplement_mode and (args_cli.pair_quotas is not None or args_cli.no_outcome_quotas):
         raise ValueError("outcome quota options require supplement mode")
+    if not supplement_mode and (args_cli.fault_source is not None or args_cli.fault_profile in DIRECTED_PROFILES):
+        raise ValueError("directed profiles and source filters require supplement mode")
+    args_cli.fault_source = resolve_fault_source(args_cli.fault_profile, args_cli.fault_source)
     if not supplement_mode and (args_cli.warmup_seconds is not None or args_cli.min_collection_span_seconds is not None
                                or args_cli.label_interval_frames is not None or args_cli.randomize_label_phase is not None
                                or args_cli.max_samples_per_labelled_batch):
@@ -406,7 +413,8 @@ def main() -> None:
                                    else 10 if production_temporal else 1),
             randomize_label_phase=(args_cli.randomize_label_phase if args_cli.randomize_label_phase is not None
                                    else production_temporal),
-            max_samples_per_labelled_batch=args_cli.max_samples_per_labelled_batch)
+            max_samples_per_labelled_batch=args_cli.max_samples_per_labelled_batch,
+            fault_source=args_cli.fault_source)
         supplement_cfg.validate(target_samples)
         if supplement_cfg.min_collection_span_s >= args_cli.max_candidate_batches*.1:
             raise ValueError("candidate budget is shorter than the requested real collection span")

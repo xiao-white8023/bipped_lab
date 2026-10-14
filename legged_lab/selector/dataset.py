@@ -17,6 +17,7 @@ from .config import CollectionConfig, SelectorConfig
 from .labels import FUTURE_METRIC_ORDER
 from .collection_audit import FAULT_PARAMETER_ORDER, CANDIDATE_SAFETY_ORDER
 from .lp_map_faults import NOISE_AUDIT_ORDER
+from .directed_audit import SOURCE_AUDIT_ORDER, VP_AUDIT_ORDER
 
 
 SPLIT_NAMES = ("train", "validation", "test")
@@ -86,6 +87,8 @@ class SelectorBatch:
     first_failure_cause_stable: torch.Tensor | None = None
     candidate_safety: torch.Tensor | None = None
     noise_metadata: torch.Tensor | None = None
+    source_metadata: torch.Tensor | None = None
+    vp_fault_metadata: torch.Tensor | None = None
 
     def validate(self, selector_cfg: SelectorConfig | None = None) -> None:
         selector_cfg = selector_cfg or SelectorConfig()
@@ -153,12 +156,18 @@ class SelectorBatch:
             ("fault_parameters", len(FAULT_PARAMETER_ORDER)),
             ("candidate_safety", len(CANDIDATE_SAFETY_ORDER)),
             ("noise_metadata", len(NOISE_AUDIT_ORDER)),
+            ("source_metadata", len(SOURCE_AUDIT_ORDER)),
+            ("vp_fault_metadata", len(VP_AUDIT_ORDER)),
         ):
             value = getattr(self, name)
             if value is not None and (
                 value.shape != (batch, columns) or not torch.isfinite(value).all()
             ):
                 raise ValueError(f"{name} must have finite [batch, {columns}] values")
+        if (self.source_metadata is not None or self.vp_fault_metadata is not None) and self.fault_metadata is None:
+            raise ValueError("directed audit tensors require fault_metadata")
+        if self.source_metadata is not None and not ((self.source_metadata[:, :4] == 0) | (self.source_metadata[:, :4] == 1)).all():
+            raise ValueError("source effect/clean flags must be binary")
         if (self.first_failure_flags is None) != (self.first_failure_cause_stable is None):
             raise ValueError("first failure flags and replay agreement must be supplied together")
         if self.first_failure_flags is not None:
@@ -212,7 +221,7 @@ class SelectorDatasetWriter:
             "future_metrics", "fault_metadata", "candidate_time", "feature_end_time",
             "execution_metadata", "event_identity", "fault_parameters",
             "first_failure_flags", "first_failure_cause_stable", "candidate_safety",
-            "noise_metadata",
+            "noise_metadata", "source_metadata", "vp_fault_metadata",
         )
         fields = frozenset(name for name in optional_names if getattr(batch, name) is not None)
         if self._optional_fields is not None and fields != self._optional_fields:
@@ -264,6 +273,7 @@ class SelectorDatasetWriter:
                 ("first_failure_cause_stable", torch.bool),
                 ("candidate_safety", torch.float32),
                 ("noise_metadata", torch.float32),
+                ("source_metadata", torch.float32), ("vp_fault_metadata", torch.float32),
             ):
                 value = getattr(batch, name)
                 if value is not None:

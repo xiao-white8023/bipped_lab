@@ -1,0 +1,221 @@
+[selector outcomes] checking split identities and contracts
+[selector outcomes] train class order=['both_safe', 'lp_only_failure', 'vp_only_failure', 'both_failure'] counts=[615165, 32784, 9805, 10615]
+[selector outcomes] device=cuda:0; frozen risk/normalizer/calibration; requirements={'max_dangerous_rate': 0.03, 'max_both_safe_switch_rate': 0.05, 'max_both_failure_switch_rate': 0.1, 'min_both_failure_recall': 0.8, 'min_both_failure_precision': 0.5, 'min_class_samples': 20, 'min_contrast_samples': 50}
+[selector outcomes seed=42] epoch=001 train=0.451320 validation=0.361029 joint=0.277439 contrast=0.083590
+[selector outcomes seed=42] epoch=002 train=0.316733 validation=0.355755 joint=0.273396 contrast=0.082359
+[selector outcomes seed=42] epoch=003 train=0.309172 validation=0.355971 joint=0.274467 contrast=0.081504
+[selector outcomes seed=42] epoch=004 train=0.304617 validation=0.356858 joint=0.274115 contrast=0.082743
+[selector outcomes seed=42] epoch=005 train=0.301217 validation=0.356708 joint=0.272900 contrast=0.083808
+[selector outcomes seed=42] epoch=006 train=0.298765 validation=0.357435 joint=0.275405 contrast=0.082030
+[selector outcomes seed=42] epoch=007 train=0.291656 validation=0.355458 joint=0.273690 contrast=0.081768
+[selector outcomes seed=42] epoch=008 train=0.287765 validation=0.360972 joint=0.276359 contrast=0.084613
+[selector outcomes seed=42] epoch=009 train=0.283951 validation=0.362255 joint=0.274112 contrast=0.088143
+[selector outcomes seed=42] epoch=010 train=0.278763 validation=0.362317 joint=0.273502 contrast=0.088815
+[selector outcomes seed=42] epoch=011 train=0.273513 validation=0.366528 joint=0.274885 contrast=0.091642
+[selector outcomes seed=42] epoch=012 train=0.269344 validation=0.369320 joint=0.276749 contrast=0.092571
+[selector outcomes seed=42] epoch=013 train=0.261683 validation=0.374000 joint=0.278457 contrast=0.095543
+[selector outcomes seed=42] epoch=014 train=0.256727 validation=0.379308 joint=0.282456 contrast=0.096853
+[selector outcomes seed=42] epoch=015 train=0.251998 validation=0.377123 joint=0.279348 contrast=0.097776
+[selector outcomes seed=42] epoch=016 train=0.248789 validation=0.387007 joint=0.283340 contrast=0.103667
+[selector outcomes seed=42] epoch=017 train=0.240954 validation=0.390158 joint=0.283589 contrast=0.106569
+[selector outcomes seed=42] epoch=018 train=0.236130 validation=0.399230 joint=0.284246 contrast=0.114984
+[selector outcomes seed=42] epoch=019 train=0.234031 validation=0.398261 joint=0.286285 contrast=0.111976
+[selector outcomes seed=42] epoch=020 train=0.225189 validation=0.407028 joint=0.287070 contrast=0.119959
+[selector outcomes seed=42] epoch=021 train=0.228892 validation=0.403439 joint=0.290352 contrast=0.113086
+[selector outcomes seed=42] epoch=022 train=0.216302 validation=0.416470 joint=0.292690 contrast=0.123781
+[selector outcomes seed=42] early stop; best_epoch=7
+[selector outcomes seed=42 snapshot=1] fit decision on validation; epoch=7
+[selector outcomes seed=42 snapshot=1] accepted=False dangerous=2.8305% joint_recall=80.0062%
+[selector outcomes seed=42 snapshot=2] fit decision on validation; epoch=2
+[selector outcomes seed=42 snapshot=2] accepted=False dangerous=2.6919% joint_recall=80.0062%
+[selector outcomes seed=43] epoch=001 train=0.436746 validation=0.360090 joint=0.277679 contrast=0.082411
+[selector outcomes seed=43] epoch=002 train=0.315432 validation=0.360567 joint=0.274690 contrast=0.085877
+[selector outcomes seed=43] epoch=003 train=0.309130 validation=0.358512 joint=0.273700 contrast=0.084812
+[selector outcomes seed=43] epoch=004 train=0.307738 validation=0.356279 joint=0.274625 contrast=0.081653
+[selector outcomes seed=43] epoch=005 train=0.300283 validation=0.354884 joint=0.273563 contrast=0.081321
+[selector outcomes seed=43] epoch=006 train=0.297495 validation=0.356108 joint=0.272128 contrast=0.083980
+[selector outcomes seed=43] epoch=007 train=0.291856 validation=0.358555 joint=0.276144 contrast=0.082411
+[selector outcomes seed=43] epoch=008 train=0.287406 validation=0.366784 joint=0.275021 contrast=0.091763
+[selector outcomes seed=43] epoch=009 train=0.282768 validation=0.362368 joint=0.276785 contrast=0.085584
+[selector outcomes seed=43] epoch=010 train=0.277311 validation=0.367332 joint=0.280328 contrast=0.087004
+[selector outcomes seed=43] epoch=011 train=0.272504 validation=0.364338 joint=0.277944 contrast=0.086395
+[selector outcomes seed=43] epoch=012 train=0.264391 validation=0.377224 joint=0.280669 contrast=0.096555
+[selector outcomes seed=43] epoch=013 train=0.259728 validation=0.374394 joint=0.282172 contrast=0.092222
+[selector outcomes seed=43] epoch=014 train=0.252025 validation=0.393012 joint=0.281499 contrast=0.111513
+[selector outcomes seed=43] epoch=015 train=0.249176 validation=0.384290 joint=0.283146 contrast=0.101145
+[selector outcomes seed=43] epoch=016 train=0.242826 validation=0.399407 joint=0.285387 contrast=0.114020
+[selector outcomes seed=43] epoch=017 train=0.240113 validation=0.391989 joint=0.287987 contrast=0.104002
+[selector outcomes seed=43] epoch=018 train=0.232117 validation=0.398331 joint=0.289584 contrast=0.108747
+[selector outcomes seed=43] epoch=019 train=0.229426 validation=0.403724 joint=0.288222 contrast=0.115502
+[selector outcomes seed=43] epoch=020 train=0.229697 validation=0.404886 joint=0.288982 contrast=0.115904
+[selector outcomes seed=43] early stop; best_epoch=5
+[selector outcomes seed=43 snapshot=1] fit decision on validation; epoch=5
+[selector outcomes seed=43 snapshot=1] accepted=False dangerous=2.8232% joint_recall=80.0062%
+[selector outcomes seed=43 snapshot=2] fit decision on validation; epoch=6
+[selector outcomes seed=43 snapshot=2] accepted=False dangerous=2.7575% joint_recall=80.0062%
+[selector outcomes seed=44] epoch=001 train=0.468859 validation=0.358916 joint=0.276324 contrast=0.082592
+[selector outcomes seed=44] epoch=002 train=0.316627 validation=0.355794 joint=0.273790 contrast=0.082003
+[selector outcomes seed=44] epoch=003 train=0.311072 validation=0.354331 joint=0.272634 contrast=0.081696
+[selector outcomes seed=44] epoch=004 train=0.303198 validation=0.355053 joint=0.273574 contrast=0.081479
+[selector outcomes seed=44] epoch=005 train=0.301866 validation=0.355730 joint=0.271820 contrast=0.083910
+[selector outcomes seed=44] epoch=006 train=0.298119 validation=0.356702 joint=0.273316 contrast=0.083386
+[selector outcomes seed=44] epoch=007 train=0.293900 validation=0.355812 joint=0.272669 contrast=0.083143
+[selector outcomes seed=44] epoch=008 train=0.289103 validation=0.358493 joint=0.273415 contrast=0.085078
+[selector outcomes seed=44] epoch=009 train=0.284624 validation=0.368908 joint=0.276878 contrast=0.092030
+[selector outcomes seed=44] epoch=010 train=0.281862 validation=0.361017 joint=0.275363 contrast=0.085653
+[selector outcomes seed=44] epoch=011 train=0.273822 validation=0.364711 joint=0.275409 contrast=0.089302
+[selector outcomes seed=44] epoch=012 train=0.268158 validation=0.365854 joint=0.276827 contrast=0.089027
+[selector outcomes seed=44] epoch=013 train=0.262300 validation=0.371804 joint=0.277802 contrast=0.094002
+[selector outcomes seed=44] epoch=014 train=0.257116 validation=0.375697 joint=0.280715 contrast=0.094982
+[selector outcomes seed=44] epoch=015 train=0.251726 validation=0.375653 joint=0.281001 contrast=0.094652
+[selector outcomes seed=44] epoch=016 train=0.245714 validation=0.383956 joint=0.282277 contrast=0.101679
+[selector outcomes seed=44] epoch=017 train=0.242929 validation=0.389933 joint=0.280863 contrast=0.109070
+[selector outcomes seed=44] epoch=018 train=0.235047 validation=0.401505 joint=0.288352 contrast=0.113153
+[selector outcomes seed=44] early stop; best_epoch=3
+[selector outcomes seed=44 snapshot=1] fit decision on validation; epoch=3
+[selector outcomes seed=44 snapshot=1] accepted=False dangerous=2.7137% joint_recall=80.0062%
+[selector outcomes seed=44 snapshot=2] fit decision on validation; epoch=4
+[selector outcomes seed=44 snapshot=2] accepted=False dangerous=2.7210% joint_recall=80.0062%
+[selector outcomes] frozen selection=outcome_seed_42_snapshot_1.pt; validation accepted=False
+[selector outcomes] reading test for reporting only; no further fitting or reselection
+{
+  "accepted_on_validation": false,
+  "checkpoint": "/home/user/TienKung-Lab/outputs/g1_renet_selector_v5_outcomes_20261013_211324/models/candidate_selector_checkpoint.pt",
+  "guard": {
+    "checks": {
+      "all_four_outcomes_have_coverage": true,
+      "both_branch_contrasts_have_coverage": true,
+      "both_failure_hold_effective": true,
+      "both_failure_switch_rate_within_target": false,
+      "both_failure_switches_not_worse": true,
+      "both_failure_warning_precision_within_target": true,
+      "both_failure_warning_recall_within_target": true,
+      "both_safe_switch_rate_within_target": false,
+      "dangerous_branch_rate_within_target": true,
+      "dangerous_count_not_worse": true,
+      "harmful_switches_not_worse": true,
+      "joint_failure_probability_calibrated": true,
+      "low_risk_hold_effective": false,
+      "lp_only_errors_not_worse": true,
+      "missed_rescues_not_worse": false,
+      "risk_auroc_at_least_0.85": true,
+      "risk_ece_at_most_0.05": true,
+      "vp_only_errors_not_worse": true
+    },
+    "fit_split": "validation",
+    "passed": false,
+    "requirements": {
+      "max_both_failure_switch_rate": 0.1,
+      "max_both_safe_switch_rate": 0.05,
+      "max_dangerous_rate": 0.03,
+      "min_both_failure_precision": 0.5,
+      "min_both_failure_recall": 0.8,
+      "min_class_samples": 20,
+      "min_contrast_samples": 50
+    },
+    "test_used_for_acceptance": false
+  },
+  "report": "/home/user/TienKung-Lab/outputs/g1_renet_selector_v5_outcomes_20261013_211324/models/outcome_training_report.json",
+  "test_candidate": {
+    "auroc/lp_1s": 0.9870814202563967,
+    "auroc/min": 0.9830870407994755,
+    "auroc/vp_1s": 0.9830870407994755,
+    "brier/lp_1s": 0.02108037658035755,
+    "brier/vp_1s": 0.013591867871582508,
+    "calibration/lp_1s_mean_risk": 0.0655120238661766,
+    "calibration/lp_1s_observed_failure_rate": 0.06459466459466459,
+    "calibration/lp_1s_signed_mean_error": 0.0009173592715120138,
+    "calibration/vp_1s_mean_risk": 0.03212997317314148,
+    "calibration/vp_1s_observed_failure_rate": 0.03194912083800973,
+    "calibration/vp_1s_signed_mean_error": 0.00018085233513175092,
+    "coverage/both_failure": 2838,
+    "coverage/both_safe": 159809,
+    "coverage/contrasting_samples": 11098,
+    "coverage/lp_1s_negative": 162522,
+    "coverage/lp_1s_positive": 11223,
+    "coverage/lp_only_failure": 8385,
+    "coverage/samples": 173745,
+    "coverage/vp_1s_negative": 168194,
+    "coverage/vp_1s_positive": 5551,
+    "coverage/vp_only_failure": 2713,
+    "ece/lp_1s": 0.003387270262464881,
+    "ece/max": 0.003387270262464881,
+    "ece/vp_1s": 0.002165461890399456,
+    "failure/always_lp": 0.06459466367959976,
+    "failure/always_vp": 0.03194912150502205,
+    "failure/improvement_over_best_fixed": 0.4229868624812375,
+    "failure/oracle": 0.016334282234311104,
+    "failure/selector": 0.01843506284058094,
+    "outcome/accuracy": 0.9573685526847839,
+    "outcome/auroc/both_failure": 0.9898213314361305,
+    "outcome/auroc/both_safe": 0.9821438594079719,
+    "outcome/auroc/lp_only_failure": 0.9864702729146058,
+    "outcome/auroc/vp_only_failure": 0.980224724383848,
+    "outcome/brier": 0.06125355139374733,
+    "outcome/conditional_lp_failure_auroc": 0.9950660713748002,
+    "outcome/ece/both_failure": 0.0012825888115912676,
+    "outcome/ece/both_safe": 0.0025462303310632706,
+    "outcome/ece/lp_only_failure": 0.0018826161976903677,
+    "outcome/ece/vp_only_failure": 0.001003862707875669,
+    "outcome/log_loss": 0.11030809581279755,
+    "selection/both_failure_flag_both_safe_count": 517,
+    "selection/both_failure_flag_false_negative_count": 597,
+    "selection/both_failure_flag_false_positive_count": 1334,
+    "selection/both_failure_flag_recall": 0.7896405919661733,
+    "selection/both_failure_flag_single_failure_count": 817,
+    "selection/both_failure_flag_true_positive_count": 2241,
+    "selection/both_failure_hold_count": 445,
+    "selection/both_failure_hold_single_failure_count": 0,
+    "selection/both_failure_hold_true_positive_count": 445,
+    "selection/both_unreliable_flag_count": 3575,
+    "selection/both_unreliable_flag_precision": 0.6268531468531469,
+    "selection/dangerous_branch_count": 365,
+    "selection/dangerous_branch_rate": 0.03288880879437737,
+    "selection/low_risk_hold_count": 0,
+    "selection/low_risk_hold_true_safe_count": 0,
+    "selection/lp_fraction": 0.5701228976249695,
+    "selection/lp_only_failure_correct_count": 8167,
+    "selection/lp_only_failure_wrong_count": 218,
+    "selection/lp_only_failure_wrong_rate": 0.02599880739415623,
+    "selection/vp_only_failure_correct_count": 2566,
+    "selection/vp_only_failure_wrong_count": 147,
+    "selection/vp_only_failure_wrong_rate": 0.054183560633984516,
+    "switch/both_failure_switch_count": 1531,
+    "switch/both_failure_switch_rate": 0.5394644115574349,
+    "switch/both_failure_switch_samples": 2838,
+    "switch/both_safe_switch_count": 32405,
+    "switch/both_safe_switch_rate": 0.202773310639576,
+    "switch/both_safe_switch_samples": 159809,
+    "switch/correct_rescue_count": 5399,
+    "switch/correct_rescue_rate": 0.9706939949658396,
+    "switch/correct_rescue_samples": 5562,
+    "switch/harmful_switch_count": 202,
+    "switch/harmful_switch_rate": 0.03648843930635838,
+    "switch/harmful_switch_samples": 5536,
+    "switch/missed_rescue_count": 163,
+    "switch/missed_rescue_rate": 0.029306005034160375,
+    "switch/missed_rescue_samples": 5562,
+    "switch/request_count": 39537,
+    "switch/request_fraction": 0.22755762934684753,
+    "switch/unnecessary_switch_count": 32607,
+    "switch/unnecessary_switch_rate": 0.1972058423296743,
+    "switch/unnecessary_switch_samples": 165345
+  },
+  "test_checks": {
+    "all_auroc_at_least_0.85": true,
+    "all_ece_at_most_0.05": true,
+    "all_four_outcomes_have_coverage": true,
+    "all_heads_have_class_coverage": true,
+    "both_branch_contrasts_have_coverage": true,
+    "both_failure_hold_effective": true,
+    "both_failure_switch_rate_within_target": false,
+    "both_failure_warning_precision_within_target": true,
+    "both_failure_warning_recall_within_target": false,
+    "both_safe_switch_rate_within_target": false,
+    "dangerous_branch_rate_at_most_0.03": false,
+    "dangerous_branch_rate_within_target": false,
+    "joint_failure_probability_calibrated": true,
+    "low_risk_hold_effective": false
+  }
+}
+[selector outcomes] no candidate passed; diagnostic checkpoint only; source retained

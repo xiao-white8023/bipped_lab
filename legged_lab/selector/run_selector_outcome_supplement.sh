@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Add at least 100,000 NEW training rows for each of the three failed outcomes.
+# Directed training-only banks; formal >=100k/bank, pilot >=10k/bank.
 # Run with bash; strict shell options apply inside this script, not the terminal.
 set -euo pipefail
 
@@ -7,14 +7,20 @@ selector_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd -- "$selector_script_dir/../.."
 
 export PYTHONUNBUFFERED=1
+export SELECTOR_COLLECTION_PHASE="${SELECTOR_COLLECTION_PHASE:-formal}"
+case "$SELECTOR_COLLECTION_PHASE" in
+    pilot) selector_default_target=10000; selector_default_span=30 ;;
+    formal) selector_default_target=100000; selector_default_span=120 ;;
+    *) printf 'SELECTOR_COLLECTION_PHASE 必须为 pilot 或 formal。\n' >&2; exit 2 ;;
+esac
 export SELECTOR_BASE="${SELECTOR_BASE:-$PWD/outputs/g1_renet_selector_v4_1s_normal_20261012_170014/dataset}"
 export SELECTOR_TERRAIN="${SELECTOR_TERRAIN:-$(dirname -- "$SELECTOR_BASE")/terrain_distribution.json}"
 export SELECTOR_CHECKPOINT="${SELECTOR_CHECKPOINT:-/data/Tienkung_lab/logs/g1_renet/2026-09-10_19-25-08/model_60000.pt}"
 export SELECTOR_REFERENCE="${SELECTOR_REFERENCE:-$PWD/Exported_policy/policy.pt}"
-export SELECTOR_OUTCOME_RUN="${SELECTOR_OUTCOME_RUN:-$PWD/outputs/g1_renet_selector_outcome_supplement_$(date +%Y%m%d_%H%M%S)}"
-export SELECTOR_TARGET_PER_OUTCOME="${SELECTOR_TARGET_PER_OUTCOME:-100000}"
+export SELECTOR_OUTCOME_RUN="${SELECTOR_OUTCOME_RUN:-$PWD/outputs/g1_renet_selector_directed_${SELECTOR_COLLECTION_PHASE}_$(date +%Y%m%d_%H%M%S)}"
+export SELECTOR_TARGET_PER_OUTCOME="${SELECTOR_TARGET_PER_OUTCOME:-$selector_default_target}"
 export SELECTOR_SEED_BASE="${SELECTOR_SEED_BASE:-6100}"
-export SELECTOR_MIN_SPAN_SECONDS="${SELECTOR_MIN_SPAN_SECONDS:-120}"
+export SELECTOR_MIN_SPAN_SECONDS="${SELECTOR_MIN_SPAN_SECONDS:-$selector_default_span}"
 export SELECTOR_MAX_CANDIDATE_BATCHES="${SELECTOR_MAX_CANDIDATE_BATCHES:-100000}"
 export SELECTOR_MAX_NO_PROGRESS_BATCHES="${SELECTOR_MAX_NO_PROGRESS_BATCHES:-1000}"
 selector_python="${SELECTOR_PYTHON:-python}"
@@ -66,9 +72,11 @@ seed_base = int(os.environ['SELECTOR_SEED_BASE'])
 span = float(os.environ['SELECTOR_MIN_SPAN_SECONDS'])
 candidate_limit = int(os.environ['SELECTOR_MAX_CANDIDATE_BATCHES'])
 no_progress_limit = int(os.environ['SELECTOR_MAX_NO_PROGRESS_BATCHES'])
-require(target >= 100000, '每类新增目标至少为 100000 条。')
-require(math.isfinite(span) and span >= 120,
-        'SELECTOR_MIN_SPAN_SECONDS 至少为 120 秒。')
+phase = os.environ['SELECTOR_COLLECTION_PHASE']
+minimum, min_span = (10000, 30.) if phase == 'pilot' else (100000, 120.)
+require(target >= minimum, f'{phase} 每类新增目标至少为 {minimum} 条。')
+require(math.isfinite(span) and span >= min_span,
+        f'{phase} SELECTOR_MIN_SPAN_SECONDS 至少为 {min_span:g} 秒。')
 require(candidate_limit > 0 and span < candidate_limit * .1,
         '候选批次数上限不足以覆盖最小采样时间跨度。')
 require(no_progress_limit > 0, '无进展上限必须为正整数。')
@@ -77,10 +85,11 @@ info = metadata.get('run_info', {})
 base_fault_seed = int(info.get('fault_seed', int(info.get('seed', 42)) + 2000)) & 0xFFFFFFFF
 require(base_fault_seed not in {seed_base + i + 2000 for i in (1, 2, 3)},
         '补采故障 seed 与主数据重复，请更换 SELECTOR_SEED_BASE。')
-for module in ('torch', 'isaaclab'):
+for module in ('torch', 'isaaclab', 'isaacsim'):
     require(importlib.util.find_spec(module) is not None,
             f'当前 Python 找不到 {module}，请切换到运行 g1_renet 的环境。')
 print('主数据：', paths['SELECTOR_BASE'])
+print('采集阶段：', phase)
 print('本次新增目标：LP失败/VP安全、VP失败/LP安全、两路失败，各', target, '条。')
 print('结果配额顺序：[两路安全, 仅LP失败, 仅VP失败, 两路失败]')
 PY
@@ -92,19 +101,22 @@ for selector_bank in lp_failure vp_failure both_failure; do
     selector_quotas=(0 0 0 0)
     case "$selector_bank" in
         lp_failure)
-            selector_profile=lp_map
+            selector_profile=directed_lp
+            selector_source=lp_only
             selector_pair_index=1
             selector_seed="$((SELECTOR_SEED_BASE + 1))"
             selector_title='LP失败、VP安全'
             ;;
         vp_failure)
-            selector_profile=vp_hard
+            selector_profile=directed_vp
+            selector_source=vp_only
             selector_pair_index=2
             selector_seed="$((SELECTOR_SEED_BASE + 2))"
             selector_title='VP失败、LP安全'
             ;;
         both_failure)
-            selector_profile=dual
+            selector_profile=directed_dual
+            selector_source=dual
             selector_pair_index=3
             selector_seed="$((SELECTOR_SEED_BASE + 3))"
             selector_title='两路都失败'
@@ -119,7 +131,8 @@ for selector_bank in lp_failure vp_failure both_failure; do
         --checkpoint-path "$SELECTOR_CHECKPOINT" --reference-policy "$SELECTOR_REFERENCE" \
         --terrain-histogram "$SELECTOR_TERRAIN" --base-dataset "$SELECTOR_BASE" \
         --skip-dual-branch-export --num-envs 4096 --supplement-split train \
-        --fault-profile "$selector_profile" --fault-severity-probabilities 0.10 0.30 0.60 \
+        --fault-profile "$selector_profile" --fault-source "$selector_source" \
+        --fault-severity-probabilities 0.10 0.30 0.60 \
         --pair-quotas "${selector_quotas[@]}" --target-samples "$SELECTOR_TARGET_PER_OUTCOME" \
         --seed "$selector_seed" --warmup-seconds 15 \
         --min-collection-span-seconds "$SELECTOR_MIN_SPAN_SECONDS" \
@@ -131,7 +144,7 @@ for selector_bank in lp_failure vp_failure both_failure; do
         2>&1 | tee "$SELECTOR_OUTCOME_RUN/logs/collect_${selector_bank}.log"
 
     # A bank is accepted only after both the manifest and actual label report agree.
-    "$selector_python" - "$selector_dataset" "$selector_bank" "$selector_pair_index" "$selector_seed" <<'PY' \
+    "$selector_python" - "$selector_dataset" "$selector_bank" "$selector_pair_index" "$selector_seed" "$selector_source" <<'PY' \
         | tee "$SELECTOR_OUTCOME_RUN/logs/verify_${selector_bank}.log"
 from pathlib import Path
 import hashlib
@@ -142,6 +155,7 @@ import sys
 
 root = Path(sys.argv[1])
 bank, pair_index, seed = sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+fault_source = sys.argv[5]
 target = int(os.environ['SELECTOR_TARGET_PER_OUTCOME'])
 manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
 report = json.loads((root / 'collection_analysis.json').read_text(encoding='utf-8'))
@@ -165,12 +179,29 @@ require(int(manifest['metadata']['run_info']['fault_seed']) == seed + 2000, '故
 coverage = report['supplement_coverage']
 require(coverage['accepted_1s'] == expected, '结果配额记录不匹配')
 require(coverage['config']['pair_quotas'] == expected, '配置不是指定结果配额')
+require(coverage['config'].get('fault_source') == fault_source, '故障来源过滤配置不匹配')
+require(coverage['source_acceptance']['written_1s'] == expected, '来源验收后的标签数不匹配')
+directed = report.get('directed_acceptance', {})
+require(directed.get('verified') is True and directed.get('fault_source') == fault_source
+        and directed.get('available_rows') == target, '实际保存样本未全部通过来源与可观测效应验收')
+require(report['field_rows'].get('vp_fault_metadata') == target, '缺少新 VP 故障审计字段')
+for field in ('future_metrics', 'candidate_time', 'feature_end_time', 'fault_parameters',
+              'event_identity', 'first_failure_flags', 'first_failure_cause_stable'):
+    require(report['field_rows'].get(field) == target, f'缺少验收字段：{field}')
+require(report['candidate_safety']['available_rows'] == target
+        and report['candidate_safety']['invalid_rows'] == 0
+        and report['candidate_safety']['already_violated_rows'] == 0, '采样起点无效或已经失败')
 require(coverage['independent_events'] >= math.ceil(target / 8), '故障事件数量不足')
+require(report['events']['plans']['unique'] == coverage['independent_events'], '实际事件数量与覆盖报告不符')
+require(report['events']['max_rows_per_plan'] <= 8, '同一父事件超过 8 条')
+spacing = report['events']['min_spacing_s_within_plan']
+require(spacing is None or spacing >= .2-1e-6, '同一父事件的实际样本间隔小于 0.2 秒')
 require(coverage['temporal_coverage']['collection_elapsed_s'] + 1e-6 >= float(os.environ['SELECTOR_MIN_SPAN_SECONDS']),
         '采样时间跨度不足')
 result = {'bank': bank, 'dataset': str(root.resolve()), 'new_pairs_1s': expected,
           'fault_seed': seed + 2000, 'events': coverage['independent_events'],
-          'training_only': True, 'verified': True}
+          'fault_source': fault_source, 'phase': os.environ['SELECTOR_COLLECTION_PHASE'],
+          'source_verified': True, 'training_only': True, 'verified': True}
 (root.parent / 'quota_verification.json').write_text(
     json.dumps(result, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 print('结果配额验收通过：', json.dumps(result, ensure_ascii=False))
@@ -187,6 +218,7 @@ results = [json.loads((run / bank / 'quota_verification.json').read_text(encodin
            for bank in ('lp_failure', 'vp_failure', 'both_failure')]
 total = [sum(r['new_pairs_1s'][i] for r in results) for i in range(4)]
 summary = {'base_dataset': os.environ['SELECTOR_BASE'],
+           'phase': os.environ['SELECTOR_COLLECTION_PHASE'],
            'pair_order': ['both_safe', 'lp_only_failure', 'vp_only_failure', 'both_failure'],
            'new_pairs_1s': total, 'new_training_rows': sum(total),
            'supplement_datasets': [r['dataset'] for r in results], 'banks': results}

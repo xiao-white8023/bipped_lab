@@ -1,0 +1,12 @@
+{
+  "additional_sources": [],
+  "base_counts": {
+    "test": 173745,
+    "train": 668369,
+    "validation": 206462
+  },
+  "base_manifest_sha256": "93396f13e87f71f57e07dda7174e5838191662039b53ea931f7fbb8a2ae9fc22",
+  "base_root": "/home/user/TienKung-Lab/outputs/g1_renet_selector_v4_1s_normal_20261012_170014/dataset",
+  "training_samples": 668369,
+  "validation_and_test": "original dataset only; stress sets reported separately"
+}
