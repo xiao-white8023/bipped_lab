@@ -46,6 +46,8 @@ parser.add_argument(
 )
 parser.add_argument("--output", type=Path, default=None)
 parser.add_argument("--target-samples", type=int, default=None)
+parser.add_argument("--shard-size", type=int, default=8192,
+                    help="Rows per saved shard; smaller shards reduce pending RAM data.")
 parser.add_argument("--terrain-mode", choices=("main", "ood"), default="main")
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--fault-seed", type=int, default=None)
@@ -423,6 +425,7 @@ def main() -> None:
         checkpoint_path=str(checkpoint_path),
         num_envs=args_cli.num_envs,
         target_samples=target_samples,
+        shard_size=args_cli.shard_size,
         allow_nonproduction_num_envs=args_cli.smoke_test,
         behavior_min_dwell_frames=args_cli.behavior_min_dwell_frames,
         behavior_max_dwell_frames=args_cli.behavior_max_dwell_frames,
@@ -622,13 +625,13 @@ def main() -> None:
         collector.collect()
     finally:
         collection_failed = sys.exc_info()[0] is not None
-        progress.announce("finalize_collection_audit", collection_failed=collection_failed)
-        collector.finalize_audit()
-        progress.announce("save_dataset_manifest")
-        manifest = writer.close()
-        progress.announce("dataset_saved", manifest=str(manifest),
-                          collection_complete=writer.metadata.get("collection_complete", False))
         try:
+            progress.announce("finalize_collection_audit", collection_failed=collection_failed)
+            collector.finalize_audit()
+            progress.announce("save_dataset_manifest")
+            manifest = writer.close()
+            progress.announce("dataset_saved", manifest=str(manifest),
+                              collection_complete=writer.metadata.get("collection_complete", False))
             progress.announce("analyze_saved_dataset", timeout_s=args_cli.analysis_timeout_seconds)
             # CPU work runs outside the Kit/PhysX thread pools. The parent
             # heartbeat remains active if loading/reporting is slow.
@@ -641,7 +644,7 @@ def main() -> None:
         except Exception:
             if not collection_failed:
                 raise
-            print("[selector] partial analysis failed; preserving original collection error", file=sys.stderr)
+            print("[selector] collection cleanup failed; preserving original collection error", file=sys.stderr)
             traceback.print_exc()
     progress.announce("verify_frozen_sources")
     protected_after = {str(path): sha256(path) for path in PROTECTED_FILES}

@@ -313,12 +313,33 @@ class SelectorDatasetWriter:
         return output
 
     def _flush_one(self, split: str, count: int) -> None:
-        payload = self._take_rows(self._pending[split], count)
+        if count <= 0 or count > self._pending_count[split]:
+            raise ValueError(f"invalid pending row count for {split}: {count}")
         index = self._shard_index[split]
         destination = self.root / split / f"shard_{index:05d}.pt"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if index and not (destination.parent / f"shard_{index-1:05d}.pt").is_file():
+            raise FileNotFoundError(
+                f"previous selector shard disappeared from {destination.parent}; "
+                "check the output filesystem before continuing"
+            )
+        if destination.exists():
+            raise FileExistsError(f"refusing to overwrite selector shard: {destination}")
+        # _take_rows mutates its list. Commit this new list only after the
+        # complete shard has been saved and atomically renamed successfully.
+        pending_after_save = list(self._pending[split])
+        payload = self._take_rows(pending_after_save, count)
         temporary = destination.with_suffix(".pt.tmp")
-        torch.save(payload, temporary)
-        os.replace(temporary, destination)
+        try:
+            torch.save(payload, temporary)
+            os.replace(temporary, destination)
+        except BaseException:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        self._pending[split] = pending_after_save
         self._shard_index[split] += 1
         self._pending_count[split] -= count
         self._counts[split] += count
@@ -327,6 +348,10 @@ class SelectorDatasetWriter:
         for split in SPLIT_NAMES:
             if self._pending_count[split]:
                 self._flush_one(split, self._pending_count[split])
+            for index in range(self._shard_index[split]):
+                shard = self.root / split / f"shard_{index:05d}.pt"
+                if not shard.is_file() or shard.stat().st_size == 0:
+                    raise FileNotFoundError(f"saved selector shard is unavailable: {shard}")
         overlap = (
             (self._groups["train"] & self._groups["validation"])
             | (self._groups["train"] & self._groups["test"])
@@ -355,6 +380,7 @@ class SelectorDatasetWriter:
             "fixed_split": self.fixed_split,
         }
         destination = self.root / "manifest.json"
+        self.root.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_suffix(".json.tmp")
         temporary.write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"

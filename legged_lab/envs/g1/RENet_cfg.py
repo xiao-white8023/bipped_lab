@@ -258,8 +258,7 @@ class G1RENETENVCFG:
     amp_observation_dim: int = G1_RENET_AMP_DIM
     lp_height = LPHeightCfg(noise=PgttNoiseCfg(start_iteration=30000))
     amp_motion_files_display = [
-        f"{G1_RENET_AMP_DISPLAY_DIR}/{name}.txt"
-        for name in G1_RENET_AMP_CLIP_NAMES
+    "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/make_g1_23dof/training/visualization/walk_turns_40s.txt"
     ]
     device: str = "cuda:0"
     # VP 深度高斯噪声与概率模糊从第一张图像开始启用；LP 仍保留 30000 次门槛。
@@ -732,8 +731,8 @@ class G1RENETAGENTCFG:
     neptune_project = "walk"
     wandb_project = "walk"
     resume = False
-    load_run = "2026-09-04_14-11-25"
-    load_checkpoint = "model_60000.pt"
+    load_run = ".*"
+    load_checkpoint = "model_.*.pt"
 
     # amp parameter
     amp_reward_coef = 0.3  # 风格奖励系数 动作像专家数据

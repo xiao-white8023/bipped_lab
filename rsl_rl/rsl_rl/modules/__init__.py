@@ -30,6 +30,7 @@ from .estimator import Estimator, MLPHistoryEncoder
 from .moe_actor_critic import MoeActorCritic
 from .mha_actor_critic import MhaActorCritic
 from .renet_actor_critic import RENetActorCritic
+from .g1_depth_actor_critic import G1DepthActorCritic
 
 
 __all__ = [
@@ -45,4 +46,5 @@ __all__ = [
     "MoeActorCritic",
     "MhaActorCritic",
     "RENetActorCritic",
+    "G1DepthActorCritic",
 ]

@@ -259,7 +259,7 @@ class G1StudentDeploymentExporter(nn.Module):
         pass
 
 
-def export_policy_as_jit(policy, normalizer, path, filename="policy.pt", metadata=None):
+def export_policy_as_jit(policy, normalizer, path, filename="policy.pt", metadata=None, metadata_filename="renet_contract.json"):
     if not os.path.exists(path):
         os.makedirs(path, exist_ok=True)
 
@@ -286,7 +286,7 @@ def export_policy_as_jit(policy, normalizer, path, filename="policy.pt", metadat
     save_path = os.path.join(path, filename)
     extra_files = {}
     if metadata is not None:
-        extra_files["renet_contract.json"] = json.dumps(
+        extra_files[metadata_filename] = json.dumps(
             metadata, ensure_ascii=False, sort_keys=True
         )
     torch.jit.save(traced_model, save_path, _extra_files=extra_files)

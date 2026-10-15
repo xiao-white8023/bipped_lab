@@ -77,7 +77,7 @@ class G1RENetEnv(VecEnv):
         绑定默认物理材质（如上面配置的摩擦系数）；
         最终，self.sim成为控制仿真启动、暂停、步进的核心对象（后续会调用self.sim.reset()启动仿真，self.sim.step()步进物理）。
         '''
-        self.lp_height_source = cfg.renet.lp_height_source
+        self.lp_height_source = cfg.renet.lp_height_source # "pgtt_full_atten"
         self.lp_runtime_cfg = resolve_pgtt_height_cfg(cfg.lp_height, self.lp_height_source)
         selected_period = self.lp_runtime_cfg.update_period
         if selected_period <= 0 or not math.isclose(
@@ -359,7 +359,7 @@ class G1RENetEnv(VecEnv):
         Self.scene['robot']只能定位到整个机器人 而不能定位到某些刚体
         '''
         self.robot_cfg = SceneEntityCfg(name="robot")  # 此时self.robot_cfg 还只是创建一个定位规则 
-        self.robot_cfg.resolve(self.scene) # 这一步是从场景中 定位机器人刚体
+        self.robot_cfg.resolve(self.scene) # 这一步是从场景中 定位机器人
         self.termination_contact_cfg = SceneEntityCfg(
             name="contact_sensor", body_names=self.cfg.robot.terminate_contacts_body_names
         )
@@ -380,7 +380,7 @@ class G1RENetEnv(VecEnv):
         self.action = torch.zeros(
             self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False
         )
-        # 为每一个环境创建一个mask
+        # 为每一个环境创建一个mask shape:[num,1]
         self.renet_estimator_mask = torch.zeros(self.num_envs, 1, dtype=torch.float, device=self.device)
         self.renet_training_iteration = 0
         self._pgtt_noise_stage_active = False
@@ -397,11 +397,11 @@ class G1RENetEnv(VecEnv):
                 (self.num_envs, self.depth_history_frames, self.camera_height, self.camera_width),
                 device=self.device, dtype=torch.float
             )
-            self.depth_last_capture_time = torch.full((self.num_envs,), -torch.inf, device=self.device)
-            self.depth_initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
-            self.depth_valid_buffer = torch.zeros_like(self.depth_buffer)
+            self.depth_last_capture_time = torch.full((self.num_envs,), -torch.inf, device=self.device) # 每个环境上次写入深度历史的时间
+            self.depth_initialized = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device) # 每个环境是否完成首次填充
+            self.depth_valid_buffer = torch.zeros_like(self.depth_buffer) # 两帧深度图对应的像素有效性
             self.depth_current_valid = torch.zeros(
-                self.num_envs, self.camera_height, self.camera_width, device=self.device)
+                self.num_envs, self.camera_height, self.camera_width, device=self.device) # 当前处理帧的像素有效性
         #
         self.amp_observation_dim = self.cfg.amp_observation_dim
         if type(self.amp_observation_dim) is not int or self.amp_observation_dim not in (50, 58):

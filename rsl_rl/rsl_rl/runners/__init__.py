@@ -23,6 +23,7 @@ from .on_policy_runner import OnPolicyRunner
 from .constrained_on_policy_runner import ConstrainedOnPolicyRunner
 from .film_on_policy_runner import FilmOnPolicyRunner
 from .renet_amp_on_policy_runner import RENetAmpOnPolicyRunner
+from .depth_amp_on_policy_runner import DepthAmpOnPolicyRunner
 
 
 class _RemovedRunner:
@@ -45,4 +46,5 @@ __all__ = [
     "G1OnPolicyRunner",
     "FilmOnPolicyRunner",
     "RENetAmpOnPolicyRunner",
+    "DepthAmpOnPolicyRunner",
 ]

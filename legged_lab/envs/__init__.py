@@ -6,6 +6,8 @@ from legged_lab.envs.g1.g1_film_cfg import G129MOE_FILMAGENTENV,G129MOE_FILMENVC
 from legged_lab.envs.g1.g1_film_env import G1MOEFILMEnv
 from legged_lab.envs.g1.RENet_cfg import G1RENETAGENTCFG,G1RENETENVCFG
 from legged_lab.envs.g1.RENet_env import G1RENetEnv
+from legged_lab.envs.g1.g1_depth_cfg import G1DEPTHAGENTCFG, G1DEPTHENVCFG
+from legged_lab.envs.g1.g1_depth_env import G1DepthEnv
 from legged_lab.envs.g1.atten_cfg import AttenAGENTENV,AttenCFG
 from legged_lab.envs.g1.atten_env import AttenEnv
 from legged_lab.envs.g1.g1_recovery_cfg import G1RecoveryAgentCfg,G1RecoveryEnvCfg
@@ -16,5 +18,6 @@ from legged_lab.utils.task_registry import task_registry
 task_registry.register("g1_rough",G1ROUGHEnv,G129WALK_ROUGHENVCFG(),G129WALK_ROUGHAGENTENV())
 task_registry.register("g1_film",G1MOEFILMEnv,G129MOE_FILMENVCFG(),G129MOE_FILMAGENTENV())
 task_registry.register("g1_renet",G1RENetEnv,G1RENETENVCFG(),G1RENETAGENTCFG())
+task_registry.register("g1_depth",G1DepthEnv,G1DEPTHENVCFG(),G1DEPTHAGENTCFG())
 task_registry.register("g1_atten",AttenEnv,AttenCFG(),AttenAGENTENV())
 task_registry.register("g1_recovery",G1RecoveryEnv,G1RecoveryEnvCfg(),G1RecoveryAgentCfg())

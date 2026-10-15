@@ -4,6 +4,9 @@ import sys
 
 # --- 修复 1: 路径置顶 ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
+repo_root = os.path.abspath(os.path.join(current_dir, "../.."))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
 local_rsl_rl_path = os.path.abspath(os.path.join(current_dir, "../../rsl_rl"))
 if local_rsl_rl_path not in sys.path:
     sys.path.insert(0, local_rsl_rl_path)
@@ -34,7 +37,7 @@ parser.add_argument(
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-if args_cli.task is not None and "sensor" in args_cli.task:
+if args_cli.task is not None and ("sensor" in args_cli.task or args_cli.task == "g1_depth"):
     args_cli.enable_cameras = True
 
 # ==============================================================================
@@ -63,6 +66,7 @@ from rsl_rl.runners.g1_student_on_policy_runner import G1StudentOnPolicyRunner
 
 from legged_lab.envs import * # noqa:F401, F403
 from legged_lab.envs.g1.RENet_cfg import configure_agent_for_lp_source
+from rsl_rl.runners import DepthAmpOnPolicyRunner
 from legged_lab.utils.cli_args import update_rsl_rl_cfg
 
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -72,7 +76,7 @@ torch.backends.cudnn.benchmark = False
 
 
 def train():
-    runner: OnPolicyRunner | AmpOnPolicyRunner
+    runner: OnPolicyRunner | AmpOnPolicyRunner | DepthAmpOnPolicyRunner
 
     env_class_name = args_cli.task
     env_cfg, agent_cfg = task_registry.get_cfgs(env_class_name)
@@ -82,11 +86,14 @@ def train():
         env_cfg.scene.num_envs = args_cli.num_envs
 
     agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
+    if env_class_name == "g1_depth":
+        agent_cfg.device = args_cli.device
+        env_cfg.device = args_cli.device
     if args_cli.lp_height_source is not None:
         if not hasattr(env_cfg, "lp_height"):
             raise ValueError("--lp_height_source is only supported by g1_renet")
         env_cfg.renet.lp_height_source = args_cli.lp_height_source
-    if hasattr(env_cfg, "lp_height"):
+    if hasattr(env_cfg, "lp_height"): # 判断lp_height是否存在于env_cfg中
         configure_agent_for_lp_source(env_cfg, agent_cfg)
     env_cfg.scene.seed = agent_cfg.seed
 
@@ -157,10 +164,14 @@ def train():
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
     if hasattr(env, "lp_observation_contract"):
         dump_yaml(os.path.join(log_dir, "params", "lp_observation_contract.yaml"), env.lp_observation_contract)
+    if hasattr(env, "depth_observation_contract"):
+        dump_yaml(os.path.join(log_dir, "params", "depth_observation_contract.yaml"), env.depth_observation_contract)
+    if hasattr(env, "foot_edge_monitor"):
+        env.foot_edge_monitor.save_metadata(os.path.join(log_dir, "params", "foot_edge"))
 
     runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
 
 
 if __name__ == "__main__":
     train()
-    simulation_app.close()
+    simulation_app.close(skip_cleanup=args_cli.task == "g1_depth" and args_cli.headless)

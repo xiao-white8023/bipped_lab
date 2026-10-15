@@ -1,0 +1,17 @@
+{
+  "bank": "lp_failure",
+  "dataset": "/home/user/TienKung-Lab/outputs/g1_renet_selector_directed_20k_20261014_104733/lp_failure/dataset",
+  "new_pairs_1s": [
+    0,
+    20000,
+    0,
+    0
+  ],
+  "fault_seed": 1791948054,
+  "events": 13347,
+  "fault_source": "lp_only",
+  "phase": "pilot",
+  "source_verified": true,
+  "training_only": true,
+  "verified": true
+}
