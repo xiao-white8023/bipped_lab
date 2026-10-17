@@ -1,0 +1,2094 @@
+{
+  "metadata_integrity": {
+    "labels_match": true,
+    "branch_match": true,
+    "sample_id_match": true
+  },
+  "groups": {
+    "all_need": {
+      "rows": 6822,
+      "planned_source": {
+        "0": 31,
+        "1": 2544,
+        "2": 953,
+        "3": 3294
+      },
+      "active_source": {
+        "0": 43,
+        "1": 2936,
+        "2": 1004,
+        "3": 2839
+      },
+      "lp_kind": {
+        "0": 984,
+        "1": 140,
+        "2": 150,
+        "8": 1489,
+        "9": 1785,
+        "10": 137,
+        "11": 107,
+        "12": 129,
+        "13": 1901
+      },
+      "vp_kind": {
+        "0": 2575,
+        "1": 532,
+        "2": 462,
+        "3": 598,
+        "4": 441,
+        "5": 488,
+        "6": 467,
+        "7": 1259
+      },
+      "severity": {
+        "0": 159,
+        "1": 1407,
+        "2": 5256
+      },
+      "phase": {
+        "-1": 3,
+        "0": 6807,
+        "1": 12
+      },
+      "terrain_level": {
+        "0": 160,
+        "1": 296,
+        "2": 1010,
+        "3": 1081,
+        "5": 2533,
+        "6": 1742
+      },
+      "terrain_type": {
+        "1": 1065,
+        "2": 658,
+        "3": 836,
+        "6": 398,
+        "7": 220,
+        "8": 630,
+        "9": 159,
+        "10": 381,
+        "11": 90,
+        "12": 151,
+        "13": 541,
+        "15": 380,
+        "16": 160,
+        "17": 407,
+        "18": 404,
+        "19": 342
+      },
+      "current_branch": {
+        "0": 1619,
+        "1": 5203
+      },
+      "predicted_class": {
+        "0": 800,
+        "1": 4561,
+        "2": 1129,
+        "3": 332
+      },
+      "dwell_lt1": 2748,
+      "dwell_le1": 3001,
+      "blend_positive": 0,
+      "dwell_quantiles": [
+        0.0,
+        0.5999999642372131,
+        1.1999999284744263,
+        2.200000047683716,
+        5.099999904632568
+      ],
+      "first_failure_le5": 304,
+      "first_failure_quantiles": [
+        1.0,
+        17.0,
+        27.0,
+        38.0,
+        50.0
+      ],
+      "first_failure_flags": {
+        "3": 5107,
+        "4": 325,
+        "7": 24,
+        "8": 1273,
+        "11": 39,
+        "12": 50,
+        "15": 4
+      }
+    },
+    "all_missed": {
+      "rows": 1157,
+      "planned_source": {
+        "0": 24,
+        "1": 204,
+        "2": 242,
+        "3": 687
+      },
+      "active_source": {
+        "0": 32,
+        "1": 248,
+        "2": 254,
+        "3": 623
+      },
+      "lp_kind": {
+        "0": 266,
+        "1": 76,
+        "2": 50,
+        "8": 258,
+        "9": 193,
+        "10": 45,
+        "11": 48,
+        "12": 48,
+        "13": 173
+      },
+      "vp_kind": {
+        "0": 228,
+        "1": 111,
+        "2": 39,
+        "3": 181,
+        "4": 68,
+        "5": 102,
+        "6": 178,
+        "7": 250
+      },
+      "severity": {
+        "0": 21,
+        "1": 280,
+        "2": 856
+      },
+      "phase": {
+        "-1": 1,
+        "0": 1148,
+        "1": 8
+      },
+      "terrain_level": {
+        "0": 28,
+        "1": 62,
+        "2": 147,
+        "3": 136,
+        "5": 452,
+        "6": 332
+      },
+      "terrain_type": {
+        "1": 187,
+        "2": 121,
+        "3": 143,
+        "6": 60,
+        "7": 47,
+        "8": 118,
+        "9": 26,
+        "10": 65,
+        "11": 28,
+        "12": 21,
+        "13": 49,
+        "15": 61,
+        "16": 28,
+        "17": 72,
+        "18": 69,
+        "19": 62
+      },
+      "current_branch": {
+        "0": 504,
+        "1": 653
+      },
+      "predicted_class": {
+        "0": 800,
+        "1": 11,
+        "2": 14,
+        "3": 332
+      },
+      "dwell_lt1": 403,
+      "dwell_le1": 440,
+      "blend_positive": 0,
+      "dwell_quantiles": [
+        0.09999999403953552,
+        0.699999988079071,
+        1.399999976158142,
+        2.5,
+        5.099999904632568
+      ],
+      "first_failure_le5": 56,
+      "first_failure_quantiles": [
+        1.0,
+        23.0,
+        35.0,
+        44.0,
+        50.0
+      ],
+      "first_failure_flags": {
+        "3": 668,
+        "4": 103,
+        "7": 10,
+        "8": 345,
+        "11": 13,
+        "12": 15,
+        "15": 3
+      }
+    },
+    "miss_q0": {
+      "rows": 800,
+      "planned_source": {
+        "0": 21,
+        "1": 154,
+        "2": 221,
+        "3": 404
+      },
+      "active_source": {
+        "0": 25,
+        "1": 182,
+        "2": 235,
+        "3": 358
+      },
+      "lp_kind": {
+        "0": 242,
+        "1": 59,
+        "2": 45,
+        "8": 163,
+        "9": 75,
+        "10": 35,
+        "11": 25,
+        "12": 34,
+        "13": 122
+      },
+      "vp_kind": {
+        "0": 175,
+        "1": 69,
+        "2": 18,
+        "3": 120,
+        "4": 47,
+        "5": 76,
+        "6": 139,
+        "7": 156
+      },
+      "severity": {
+        "0": 10,
+        "1": 177,
+        "2": 613
+      },
+      "phase": {
+        "-1": 1,
+        "0": 795,
+        "1": 4
+      },
+      "terrain_level": {
+        "0": 25,
+        "1": 39,
+        "2": 107,
+        "3": 77,
+        "5": 319,
+        "6": 233
+      },
+      "terrain_type": {
+        "1": 121,
+        "2": 87,
+        "3": 92,
+        "6": 43,
+        "7": 39,
+        "8": 87,
+        "9": 24,
+        "10": 55,
+        "11": 11,
+        "12": 16,
+        "13": 30,
+        "15": 47,
+        "16": 25,
+        "17": 44,
+        "18": 43,
+        "19": 36
+      },
+      "current_branch": {
+        "0": 399,
+        "1": 401
+      },
+      "predicted_class": {
+        "0": 800
+      },
+      "dwell_lt1": 291,
+      "dwell_le1": 316,
+      "blend_positive": 0,
+      "dwell_quantiles": [
+        0.09999999403953552,
+        0.5999999642372131,
+        1.5,
+        2.5449999570846558,
+        5.099999904632568
+      ],
+      "first_failure_le5": 4,
+      "first_failure_quantiles": [
+        4.0,
+        30.0,
+        39.0,
+        45.0,
+        50.0
+      ],
+      "first_failure_flags": {
+        "3": 447,
+        "4": 68,
+        "7": 6,
+        "8": 253,
+        "11": 10,
+        "12": 14,
+        "15": 2
+      }
+    },
+    "miss_q3": {
+      "rows": 332,
+      "planned_source": {
+        "1": 46,
+        "2": 21,
+        "3": 265
+      },
+      "active_source": {
+        "0": 4,
+        "1": 61,
+        "2": 19,
+        "3": 248
+      },
+      "lp_kind": {
+        "0": 21,
+        "1": 16,
+        "2": 4,
+        "8": 90,
+        "9": 108,
+        "10": 6,
+        "11": 23,
+        "12": 14,
+        "13": 50
+      },
+      "vp_kind": {
+        "0": 46,
+        "1": 42,
+        "2": 21,
+        "3": 59,
+        "4": 21,
+        "5": 25,
+        "6": 39,
+        "7": 79
+      },
+      "severity": {
+        "0": 10,
+        "1": 94,
+        "2": 228
+      },
+      "phase": {
+        "0": 328,
+        "1": 4
+      },
+      "terrain_level": {
+        "0": 3,
+        "1": 18,
+        "2": 39,
+        "3": 55,
+        "5": 123,
+        "6": 94
+      },
+      "terrain_type": {
+        "1": 65,
+        "2": 33,
+        "3": 49,
+        "6": 17,
+        "7": 8,
+        "8": 26,
+        "9": 2,
+        "10": 10,
+        "11": 12,
+        "12": 5,
+        "13": 19,
+        "15": 13,
+        "16": 3,
+        "17": 24,
+        "18": 24,
+        "19": 22
+      },
+      "current_branch": {
+        "0": 94,
+        "1": 238
+      },
+      "predicted_class": {
+        "3": 332
+      },
+      "dwell_lt1": 111,
+      "dwell_le1": 123,
+      "blend_positive": 0,
+      "dwell_quantiles": [
+        0.09999999403953552,
+        0.7999999523162842,
+        1.2999999523162842,
+        2.200000047683716,
+        4.799999713897705
+      ],
+      "first_failure_le5": 52,
+      "first_failure_quantiles": [
+        1.0,
+        9.0,
+        21.0,
+        31.0,
+        50.0
+      ],
+      "first_failure_flags": {
+        "3": 205,
+        "4": 34,
+        "7": 4,
+        "8": 85,
+        "11": 2,
+        "12": 1,
+        "15": 1
+      }
+    },
+    "vp_need": {
+      "rows": 1619,
+      "planned_source": {
+        "0": 21,
+        "1": 1,
+        "2": 949,
+        "3": 648
+      },
+      "active_source": {
+        "0": 26,
+        "2": 1004,
+        "3": 589
+      },
+      "lp_kind": {
+        "0": 970,
+        "1": 85,
+        "2": 142,
+        "8": 55,
+        "9": 20,
+        "10": 119,
+        "11": 95,
+        "12": 125,
+        "13": 8
+      },
+      "vp_kind": {
+        "0": 22,
+        "1": 96,
+        "2": 13,
+        "3": 216,
+        "4": 44,
+        "5": 59,
+        "6": 168,
+        "7": 1001
+      },
+      "severity": {
+        "0": 69,
+        "1": 416,
+        "2": 1134
+      },
+      "phase": {
+        "-1": 3,
+        "0": 1611,
+        "1": 5
+      },
+      "terrain_level": {
+        "0": 32,
+        "1": 70,
+        "2": 209,
+        "3": 241,
+        "5": 614,
+        "6": 453
+      },
+      "terrain_type": {
+        "1": 264,
+        "2": 181,
+        "3": 192,
+        "6": 113,
+        "7": 34,
+        "8": 160,
+        "9": 23,
+        "10": 110,
+        "11": 39,
+        "12": 26,
+        "13": 118,
+        "15": 65,
+        "16": 32,
+        "17": 131,
+        "18": 69,
+        "19": 62
+      },
+      "current_branch": {
+        "0": 1619
+      },
+      "predicted_class": {
+        "0": 399,
+        "1": 11,
+        "2": 1115,
+        "3": 94
+      },
+      "dwell_lt1": 676,
+      "dwell_le1": 737,
+      "blend_positive": 0,
+      "dwell_quantiles": [
+        0.09999999403953552,
+        0.5999999642372131,
+        1.1999999284744263,
+        2.299999952316284,
+        5.099999904632568
+      ],
+      "first_failure_le5": 7,
+      "first_failure_quantiles": [
+        2.0,
+        22.0,
+        31.0,
+        39.0,
+        50.0
+      ],
+      "first_failure_flags": {
+        "3": 245,
+        "4": 270,
+        "7": 7,
+        "8": 1029,
+        "11": 23,
+        "12": 41,
+        "15": 4
+      }
+    },
+    "vp_missed": {
+      "rows": 504,
+      "planned_source": {
+        "0": 14,
+        "1": 1,
+        "2": 238,
+        "3": 251
+      },
+      "active_source": {
+        "0": 15,
+        "2": 254,
+        "3": 235
+      },
+      "lp_kind": {
+        "0": 252,
+        "1": 42,
+        "2": 43,
+        "8": 30,
+        "9": 19,
+        "10": 27,
+        "11": 41,
+        "12": 44,
+        "13": 6
+      },
+      "vp_kind": {
+        "0": 15,
+        "1": 26,
+        "2": 2,
+        "3": 99,
+        "4": 25,
+        "5": 40,
+        "6": 98,
+        "7": 199
+      },
+      "severity": {
+        "0": 6,
+        "1": 116,
+        "2": 382
+      },
+      "phase": {
+        "-1": 1,
+        "0": 502,
+        "1": 1
+      },
+      "terrain_level": {
+        "0": 12,
+        "1": 30,
+        "2": 54,
+        "3": 54,
+        "5": 187,
+        "6": 167
+      },
+      "terrain_type": {
+        "1": 86,
+        "2": 69,
+        "3": 58,
+        "6": 30,
+        "7": 13,
+        "8": 54,
+        "9": 12,
+        "10": 44,
+        "11": 18,
+        "12": 7,
+        "13": 20,
+        "15": 12,
+        "16": 12,
+        "17": 32,
+        "18": 17,
+        "19": 20
+      },
+      "current_branch": {
+        "0": 504
+      },
+      "predicted_class": {
+        "0": 399,
+        "1": 11,
+        "3": 94
+      },
+      "dwell_lt1": 188,
+      "dwell_le1": 205,
+      "blend_positive": 0,
+      "dwell_quantiles": [
+        0.09999999403953552,
+        0.5999999642372131,
+        1.399999976158142,
+        2.3999998569488525,
+        5.099999904632568
+      ],
+      "first_failure_le5": 5,
+      "first_failure_quantiles": [
+        3.0,
+        27.0,
+        36.0,
+        44.0,
+        50.0
+      ],
+      "first_failure_flags": {
+        "3": 121,
+        "4": 89,
+        "7": 3,
+        "8": 266,
+        "11": 7,
+        "12": 15,
+        "15": 3
+      }
+    },
+    "vp_missed_q0": {
+      "rows": 399,
+      "planned_source": {
+        "0": 14,
+        "1": 1,
+        "2": 219,
+        "3": 165
+      },
+      "active_source": {
+        "0": 15,
+        "2": 235,
+        "3": 149
+      },
+      "lp_kind": {
+        "0": 233,
+        "1": 34,
+        "2": 39,
+        "8": 16,
+        "9": 6,
+        "10": 21,
+        "11": 18,
+        "12": 31,
+        "13": 1
+      },
+      "vp_kind": {
+        "0": 15,
+        "1": 17,
+        "2": 2,
+        "3": 82,
+        "4": 25,
+        "5": 34,
+        "6": 92,
+        "7": 132
+      },
+      "severity": {
+        "0": 5,
+        "1": 82,
+        "2": 312
+      },
+      "phase": {
+        "-1": 1,
+        "0": 397,
+        "1": 1
+      },
+      "terrain_level": {
+        "0": 12,
+        "1": 23,
+        "2": 41,
+        "3": 38,
+        "5": 150,
+        "6": 135
+      },
+      "terrain_type": {
+        "1": 68,
+        "2": 58,
+        "3": 46,
+        "6": 25,
+        "7": 11,
+        "8": 41,
+        "9": 12,
+        "10": 39,
+        "11": 11,
+        "12": 6,
+        "13": 12,
+        "15": 6,
+        "16": 12,
+        "17": 22,
+        "18": 13,
+        "19": 17
+      },
+      "current_branch": {
+        "0": 399
+      },
+      "predicted_class": {
+        "0": 399
+      },
+      "dwell_lt1": 151,
+      "dwell_le1": 164,
+      "blend_positive": 0,
+      "dwell_quantiles": [
+        0.09999999403953552,
+        0.5999999642372131,
+        1.399999976158142,
+        2.3999998569488525,
+        5.099999904632568
+      ],
+      "first_failure_le5": 3,
+      "first_failure_quantiles": [
+        4.0,
+        29.0,
+        37.0,
+        44.0,
+        50.0
+      ],
+      "first_failure_flags": {
+        "3": 108,
+        "4": 64,
+        "7": 3,
+        "8": 202,
+        "11": 6,
+        "12": 14,
+        "15": 2
+      }
+    },
+    "vp_missed_q3": {
+      "rows": 94,
+      "planned_source": {
+        "2": 19,
+        "3": 75
+      },
+      "active_source": {
+        "2": 19,
+        "3": 75
+      },
+      "lp_kind": {
+        "0": 19,
+        "1": 7,
+        "2": 4,
+        "8": 14,
+        "9": 4,
+        "10": 6,
+        "11": 23,
+        "12": 13,
+        "13": 4
+      },
+      "vp_kind": {
+        "1": 9,
+        "3": 16,
+        "5": 5,
+        "6": 6,
+        "7": 58
+      },
+      "severity": {
+        "0": 1,
+        "1": 30,
+        "2": 63
+      },
+      "phase": {
+        "0": 94
+      },
+      "terrain_level": {
+        "1": 2,
+        "2": 12,
+        "3": 16,
+        "5": 32,
+        "6": 32
+      },
+      "terrain_type": {
+        "1": 18,
+        "2": 10,
+        "3": 12,
+        "6": 5,
+        "7": 2,
+        "8": 9,
+        "10": 5,
+        "11": 2,
+        "12": 1,
+        "13": 8,
+        "15": 5,
+        "17": 10,
+        "18": 4,
+        "19": 3
+      },
+      "current_branch": {
+        "0": 94
+      },
+      "predicted_class": {
+        "3": 94
+      },
+      "dwell_lt1": 37,
+      "dwell_le1": 41,
+      "blend_positive": 0,
+      "dwell_quantiles": [
+        0.09999999403953552,
+        0.699999988079071,
+        1.1999999284744263,
+        2.3749998807907104,
+        4.0
+      ],
+      "first_failure_le5": 2,
+      "first_failure_quantiles": [
+        3.0,
+        20.25,
+        29.0,
+        39.0,
+        50.0
+      ],
+      "first_failure_flags": {
+        "3": 10,
+        "4": 24,
+        "8": 58,
+        "12": 1,
+        "15": 1
+      }
+    },
+    "lp_missed": {
+      "rows": 653,
+      "planned_source": {
+        "0": 10,
+        "1": 203,
+        "2": 4,
+        "3": 436
+      },
+      "active_source": {
+        "0": 17,
+        "1": 248,
+        "3": 388
+      },
+      "lp_kind": {
+        "0": 14,
+        "1": 34,
+        "2": 7,
+        "8": 228,
+        "9": 174,
+        "10": 18,
+        "11": 7,
+        "12": 4,
+        "13": 167
+      },
+      "vp_kind": {
+        "0": 213,
+        "1": 85,
+        "2": 37,
+        "3": 82,
+        "4": 43,
+        "5": 62,
+        "6": 80,
+        "7": 51
+      },
+      "severity": {
+        "0": 15,
+        "1": 164,
+        "2": 474
+      },
+      "phase": {
+        "0": 646,
+        "1": 7
+      },
+      "terrain_level": {
+        "0": 16,
+        "1": 32,
+        "2": 93,
+        "3": 82,
+        "5": 265,
+        "6": 165
+      },
+      "terrain_type": {
+        "1": 101,
+        "2": 52,
+        "3": 85,
+        "6": 30,
+        "7": 34,
+        "8": 64,
+        "9": 14,
+        "10": 21,
+        "11": 10,
+        "12": 14,
+        "13": 29,
+        "15": 49,
+        "16": 16,
+        "17": 40,
+        "18": 52,
+        "19": 42
+      },
+      "current_branch": {
+        "1": 653
+      },
+      "predicted_class": {
+        "0": 401,
+        "2": 14,
+        "3": 238
+      },
+      "dwell_lt1": 215,
+      "dwell_le1": 235,
+      "blend_positive": 0,
+      "dwell_quantiles": [
+        0.09999999403953552,
+        0.699999988079071,
+        1.4399999380111694,
+        2.5,
+        5.099999904632568
+      ],
+      "first_failure_le5": 51,
+      "first_failure_quantiles": [
+        1.0,
+        20.0,
+        33.0,
+        44.0,
+        50.0
+      ],
+      "first_failure_flags": {
+        "3": 547,
+        "4": 14,
+        "7": 7,
+        "8": 79,
+        "11": 6
+      }
+    }
+  },
+  "all_breakdown": {
+    "planned": {
+      "0": {
+        "need": 31,
+        "missed": 24,
+        "missed_q0": 21,
+        "missed_q3": 0,
+        "missed_wrong_single": 3
+      },
+      "1": {
+        "need": 2544,
+        "missed": 204,
+        "missed_q0": 154,
+        "missed_q3": 46,
+        "missed_wrong_single": 4
+      },
+      "2": {
+        "need": 953,
+        "missed": 242,
+        "missed_q0": 221,
+        "missed_q3": 21,
+        "missed_wrong_single": 0
+      },
+      "3": {
+        "need": 3294,
+        "missed": 687,
+        "missed_q0": 404,
+        "missed_q3": 265,
+        "missed_wrong_single": 18
+      }
+    },
+    "active": {
+      "0": {
+        "need": 43,
+        "missed": 32,
+        "missed_q0": 25,
+        "missed_q3": 4,
+        "missed_wrong_single": 3
+      },
+      "1": {
+        "need": 2936,
+        "missed": 248,
+        "missed_q0": 182,
+        "missed_q3": 61,
+        "missed_wrong_single": 5
+      },
+      "2": {
+        "need": 1004,
+        "missed": 254,
+        "missed_q0": 235,
+        "missed_q3": 19,
+        "missed_wrong_single": 0
+      },
+      "3": {
+        "need": 2839,
+        "missed": 623,
+        "missed_q0": 358,
+        "missed_q3": 248,
+        "missed_wrong_single": 17
+      }
+    },
+    "terrain_level": {
+      "0": {
+        "need": 160,
+        "missed": 28,
+        "missed_q0": 25,
+        "missed_q3": 3,
+        "missed_wrong_single": 0
+      },
+      "1": {
+        "need": 296,
+        "missed": 62,
+        "missed_q0": 39,
+        "missed_q3": 18,
+        "missed_wrong_single": 5
+      },
+      "2": {
+        "need": 1010,
+        "missed": 147,
+        "missed_q0": 107,
+        "missed_q3": 39,
+        "missed_wrong_single": 1
+      },
+      "3": {
+        "need": 1081,
+        "missed": 136,
+        "missed_q0": 77,
+        "missed_q3": 55,
+        "missed_wrong_single": 4
+      },
+      "5": {
+        "need": 2533,
+        "missed": 452,
+        "missed_q0": 319,
+        "missed_q3": 123,
+        "missed_wrong_single": 10
+      },
+      "6": {
+        "need": 1742,
+        "missed": 332,
+        "missed_q0": 233,
+        "missed_q3": 94,
+        "missed_wrong_single": 5
+      }
+    },
+    "terrain_type": {
+      "1": {
+        "need": 1065,
+        "missed": 187,
+        "missed_q0": 121,
+        "missed_q3": 65,
+        "missed_wrong_single": 1
+      },
+      "2": {
+        "need": 658,
+        "missed": 121,
+        "missed_q0": 87,
+        "missed_q3": 33,
+        "missed_wrong_single": 1
+      },
+      "3": {
+        "need": 836,
+        "missed": 143,
+        "missed_q0": 92,
+        "missed_q3": 49,
+        "missed_wrong_single": 2
+      },
+      "6": {
+        "need": 398,
+        "missed": 60,
+        "missed_q0": 43,
+        "missed_q3": 17,
+        "missed_wrong_single": 0
+      },
+      "7": {
+        "need": 220,
+        "missed": 47,
+        "missed_q0": 39,
+        "missed_q3": 8,
+        "missed_wrong_single": 0
+      },
+      "8": {
+        "need": 630,
+        "missed": 118,
+        "missed_q0": 87,
+        "missed_q3": 26,
+        "missed_wrong_single": 5
+      },
+      "9": {
+        "need": 159,
+        "missed": 26,
+        "missed_q0": 24,
+        "missed_q3": 2,
+        "missed_wrong_single": 0
+      },
+      "10": {
+        "need": 381,
+        "missed": 65,
+        "missed_q0": 55,
+        "missed_q3": 10,
+        "missed_wrong_single": 0
+      },
+      "11": {
+        "need": 90,
+        "missed": 28,
+        "missed_q0": 11,
+        "missed_q3": 12,
+        "missed_wrong_single": 5
+      },
+      "12": {
+        "need": 151,
+        "missed": 21,
+        "missed_q0": 16,
+        "missed_q3": 5,
+        "missed_wrong_single": 0
+      },
+      "13": {
+        "need": 541,
+        "missed": 49,
+        "missed_q0": 30,
+        "missed_q3": 19,
+        "missed_wrong_single": 0
+      },
+      "15": {
+        "need": 380,
+        "missed": 61,
+        "missed_q0": 47,
+        "missed_q3": 13,
+        "missed_wrong_single": 1
+      },
+      "16": {
+        "need": 160,
+        "missed": 28,
+        "missed_q0": 25,
+        "missed_q3": 3,
+        "missed_wrong_single": 0
+      },
+      "17": {
+        "need": 407,
+        "missed": 72,
+        "missed_q0": 44,
+        "missed_q3": 24,
+        "missed_wrong_single": 4
+      },
+      "18": {
+        "need": 404,
+        "missed": 69,
+        "missed_q0": 43,
+        "missed_q3": 24,
+        "missed_wrong_single": 2
+      },
+      "19": {
+        "need": 342,
+        "missed": 62,
+        "missed_q0": 36,
+        "missed_q3": 22,
+        "missed_wrong_single": 4
+      }
+    },
+    "vp_kind": {
+      "0": {
+        "need": 2575,
+        "missed": 228,
+        "missed_q0": 175,
+        "missed_q3": 46,
+        "missed_wrong_single": 7
+      },
+      "1": {
+        "need": 532,
+        "missed": 111,
+        "missed_q0": 69,
+        "missed_q3": 42,
+        "missed_wrong_single": 0
+      },
+      "2": {
+        "need": 462,
+        "missed": 39,
+        "missed_q0": 18,
+        "missed_q3": 21,
+        "missed_wrong_single": 0
+      },
+      "3": {
+        "need": 598,
+        "missed": 181,
+        "missed_q0": 120,
+        "missed_q3": 59,
+        "missed_wrong_single": 2
+      },
+      "4": {
+        "need": 441,
+        "missed": 68,
+        "missed_q0": 47,
+        "missed_q3": 21,
+        "missed_wrong_single": 0
+      },
+      "5": {
+        "need": 488,
+        "missed": 102,
+        "missed_q0": 76,
+        "missed_q3": 25,
+        "missed_wrong_single": 1
+      },
+      "6": {
+        "need": 467,
+        "missed": 178,
+        "missed_q0": 139,
+        "missed_q3": 39,
+        "missed_wrong_single": 0
+      },
+      "7": {
+        "need": 1259,
+        "missed": 250,
+        "missed_q0": 156,
+        "missed_q3": 79,
+        "missed_wrong_single": 15
+      }
+    },
+    "lp_kind": {
+      "0": {
+        "need": 984,
+        "missed": 266,
+        "missed_q0": 242,
+        "missed_q3": 21,
+        "missed_wrong_single": 3
+      },
+      "1": {
+        "need": 140,
+        "missed": 76,
+        "missed_q0": 59,
+        "missed_q3": 16,
+        "missed_wrong_single": 1
+      },
+      "2": {
+        "need": 150,
+        "missed": 50,
+        "missed_q0": 45,
+        "missed_q3": 4,
+        "missed_wrong_single": 1
+      },
+      "8": {
+        "need": 1489,
+        "missed": 258,
+        "missed_q0": 163,
+        "missed_q3": 90,
+        "missed_wrong_single": 5
+      },
+      "9": {
+        "need": 1785,
+        "missed": 193,
+        "missed_q0": 75,
+        "missed_q3": 108,
+        "missed_wrong_single": 10
+      },
+      "10": {
+        "need": 137,
+        "missed": 45,
+        "missed_q0": 35,
+        "missed_q3": 6,
+        "missed_wrong_single": 4
+      },
+      "11": {
+        "need": 107,
+        "missed": 48,
+        "missed_q0": 25,
+        "missed_q3": 23,
+        "missed_wrong_single": 0
+      },
+      "12": {
+        "need": 129,
+        "missed": 48,
+        "missed_q0": 34,
+        "missed_q3": 14,
+        "missed_wrong_single": 0
+      },
+      "13": {
+        "need": 1901,
+        "missed": 173,
+        "missed_q0": 122,
+        "missed_q3": 50,
+        "missed_wrong_single": 1
+      }
+    },
+    "severity": {
+      "0": {
+        "need": 159,
+        "missed": 21,
+        "missed_q0": 10,
+        "missed_q3": 10,
+        "missed_wrong_single": 1
+      },
+      "1": {
+        "need": 1407,
+        "missed": 280,
+        "missed_q0": 177,
+        "missed_q3": 94,
+        "missed_wrong_single": 9
+      },
+      "2": {
+        "need": 5256,
+        "missed": 856,
+        "missed_q0": 613,
+        "missed_q3": 228,
+        "missed_wrong_single": 15
+      }
+    },
+    "phase": {
+      "-1": {
+        "need": 3,
+        "missed": 1,
+        "missed_q0": 1,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "0": {
+        "need": 6807,
+        "missed": 1148,
+        "missed_q0": 795,
+        "missed_q3": 328,
+        "missed_wrong_single": 25
+      },
+      "1": {
+        "need": 12,
+        "missed": 8,
+        "missed_q0": 4,
+        "missed_q3": 4,
+        "missed_wrong_single": 0
+      }
+    }
+  },
+  "VP_breakdown": {
+    "planned": {
+      "0": {
+        "need": 21,
+        "missed": 14,
+        "missed_q0": 14,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "1": {
+        "need": 1,
+        "missed": 1,
+        "missed_q0": 1,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "2": {
+        "need": 949,
+        "missed": 238,
+        "missed_q0": 219,
+        "missed_q3": 19,
+        "missed_wrong_single": 0
+      },
+      "3": {
+        "need": 648,
+        "missed": 251,
+        "missed_q0": 165,
+        "missed_q3": 75,
+        "missed_wrong_single": 11
+      }
+    },
+    "active": {
+      "0": {
+        "need": 26,
+        "missed": 15,
+        "missed_q0": 15,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "2": {
+        "need": 1004,
+        "missed": 254,
+        "missed_q0": 235,
+        "missed_q3": 19,
+        "missed_wrong_single": 0
+      },
+      "3": {
+        "need": 589,
+        "missed": 235,
+        "missed_q0": 149,
+        "missed_q3": 75,
+        "missed_wrong_single": 11
+      }
+    },
+    "terrain_level": {
+      "0": {
+        "need": 32,
+        "missed": 12,
+        "missed_q0": 12,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "1": {
+        "need": 70,
+        "missed": 30,
+        "missed_q0": 23,
+        "missed_q3": 2,
+        "missed_wrong_single": 5
+      },
+      "2": {
+        "need": 209,
+        "missed": 54,
+        "missed_q0": 41,
+        "missed_q3": 12,
+        "missed_wrong_single": 1
+      },
+      "3": {
+        "need": 241,
+        "missed": 54,
+        "missed_q0": 38,
+        "missed_q3": 16,
+        "missed_wrong_single": 0
+      },
+      "5": {
+        "need": 614,
+        "missed": 187,
+        "missed_q0": 150,
+        "missed_q3": 32,
+        "missed_wrong_single": 5
+      },
+      "6": {
+        "need": 453,
+        "missed": 167,
+        "missed_q0": 135,
+        "missed_q3": 32,
+        "missed_wrong_single": 0
+      }
+    },
+    "terrain_type": {
+      "1": {
+        "need": 264,
+        "missed": 86,
+        "missed_q0": 68,
+        "missed_q3": 18,
+        "missed_wrong_single": 0
+      },
+      "2": {
+        "need": 181,
+        "missed": 69,
+        "missed_q0": 58,
+        "missed_q3": 10,
+        "missed_wrong_single": 1
+      },
+      "3": {
+        "need": 192,
+        "missed": 58,
+        "missed_q0": 46,
+        "missed_q3": 12,
+        "missed_wrong_single": 0
+      },
+      "6": {
+        "need": 113,
+        "missed": 30,
+        "missed_q0": 25,
+        "missed_q3": 5,
+        "missed_wrong_single": 0
+      },
+      "7": {
+        "need": 34,
+        "missed": 13,
+        "missed_q0": 11,
+        "missed_q3": 2,
+        "missed_wrong_single": 0
+      },
+      "8": {
+        "need": 160,
+        "missed": 54,
+        "missed_q0": 41,
+        "missed_q3": 9,
+        "missed_wrong_single": 4
+      },
+      "9": {
+        "need": 23,
+        "missed": 12,
+        "missed_q0": 12,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "10": {
+        "need": 110,
+        "missed": 44,
+        "missed_q0": 39,
+        "missed_q3": 5,
+        "missed_wrong_single": 0
+      },
+      "11": {
+        "need": 39,
+        "missed": 18,
+        "missed_q0": 11,
+        "missed_q3": 2,
+        "missed_wrong_single": 5
+      },
+      "12": {
+        "need": 26,
+        "missed": 7,
+        "missed_q0": 6,
+        "missed_q3": 1,
+        "missed_wrong_single": 0
+      },
+      "13": {
+        "need": 118,
+        "missed": 20,
+        "missed_q0": 12,
+        "missed_q3": 8,
+        "missed_wrong_single": 0
+      },
+      "15": {
+        "need": 65,
+        "missed": 12,
+        "missed_q0": 6,
+        "missed_q3": 5,
+        "missed_wrong_single": 1
+      },
+      "16": {
+        "need": 32,
+        "missed": 12,
+        "missed_q0": 12,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "17": {
+        "need": 131,
+        "missed": 32,
+        "missed_q0": 22,
+        "missed_q3": 10,
+        "missed_wrong_single": 0
+      },
+      "18": {
+        "need": 69,
+        "missed": 17,
+        "missed_q0": 13,
+        "missed_q3": 4,
+        "missed_wrong_single": 0
+      },
+      "19": {
+        "need": 62,
+        "missed": 20,
+        "missed_q0": 17,
+        "missed_q3": 3,
+        "missed_wrong_single": 0
+      }
+    },
+    "vp_kind": {
+      "0": {
+        "need": 22,
+        "missed": 15,
+        "missed_q0": 15,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "1": {
+        "need": 96,
+        "missed": 26,
+        "missed_q0": 17,
+        "missed_q3": 9,
+        "missed_wrong_single": 0
+      },
+      "2": {
+        "need": 13,
+        "missed": 2,
+        "missed_q0": 2,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "3": {
+        "need": 216,
+        "missed": 99,
+        "missed_q0": 82,
+        "missed_q3": 16,
+        "missed_wrong_single": 1
+      },
+      "4": {
+        "need": 44,
+        "missed": 25,
+        "missed_q0": 25,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "5": {
+        "need": 59,
+        "missed": 40,
+        "missed_q0": 34,
+        "missed_q3": 5,
+        "missed_wrong_single": 1
+      },
+      "6": {
+        "need": 168,
+        "missed": 98,
+        "missed_q0": 92,
+        "missed_q3": 6,
+        "missed_wrong_single": 0
+      },
+      "7": {
+        "need": 1001,
+        "missed": 199,
+        "missed_q0": 132,
+        "missed_q3": 58,
+        "missed_wrong_single": 9
+      }
+    },
+    "lp_kind": {
+      "0": {
+        "need": 970,
+        "missed": 252,
+        "missed_q0": 233,
+        "missed_q3": 19,
+        "missed_wrong_single": 0
+      },
+      "1": {
+        "need": 85,
+        "missed": 42,
+        "missed_q0": 34,
+        "missed_q3": 7,
+        "missed_wrong_single": 1
+      },
+      "2": {
+        "need": 142,
+        "missed": 43,
+        "missed_q0": 39,
+        "missed_q3": 4,
+        "missed_wrong_single": 0
+      },
+      "8": {
+        "need": 55,
+        "missed": 30,
+        "missed_q0": 16,
+        "missed_q3": 14,
+        "missed_wrong_single": 0
+      },
+      "9": {
+        "need": 20,
+        "missed": 19,
+        "missed_q0": 6,
+        "missed_q3": 4,
+        "missed_wrong_single": 9
+      },
+      "10": {
+        "need": 119,
+        "missed": 27,
+        "missed_q0": 21,
+        "missed_q3": 6,
+        "missed_wrong_single": 0
+      },
+      "11": {
+        "need": 95,
+        "missed": 41,
+        "missed_q0": 18,
+        "missed_q3": 23,
+        "missed_wrong_single": 0
+      },
+      "12": {
+        "need": 125,
+        "missed": 44,
+        "missed_q0": 31,
+        "missed_q3": 13,
+        "missed_wrong_single": 0
+      },
+      "13": {
+        "need": 8,
+        "missed": 6,
+        "missed_q0": 1,
+        "missed_q3": 4,
+        "missed_wrong_single": 1
+      }
+    },
+    "severity": {
+      "0": {
+        "need": 69,
+        "missed": 6,
+        "missed_q0": 5,
+        "missed_q3": 1,
+        "missed_wrong_single": 0
+      },
+      "1": {
+        "need": 416,
+        "missed": 116,
+        "missed_q0": 82,
+        "missed_q3": 30,
+        "missed_wrong_single": 4
+      },
+      "2": {
+        "need": 1134,
+        "missed": 382,
+        "missed_q0": 312,
+        "missed_q3": 63,
+        "missed_wrong_single": 7
+      }
+    },
+    "phase": {
+      "-1": {
+        "need": 3,
+        "missed": 1,
+        "missed_q0": 1,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "0": {
+        "need": 1611,
+        "missed": 502,
+        "missed_q0": 397,
+        "missed_q3": 94,
+        "missed_wrong_single": 11
+      },
+      "1": {
+        "need": 5,
+        "missed": 1,
+        "missed_q0": 1,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      }
+    }
+  },
+  "LP_breakdown": {
+    "planned": {
+      "0": {
+        "need": 10,
+        "missed": 10,
+        "missed_q0": 7,
+        "missed_q3": 0,
+        "missed_wrong_single": 3
+      },
+      "1": {
+        "need": 2543,
+        "missed": 203,
+        "missed_q0": 153,
+        "missed_q3": 46,
+        "missed_wrong_single": 4
+      },
+      "2": {
+        "need": 4,
+        "missed": 4,
+        "missed_q0": 2,
+        "missed_q3": 2,
+        "missed_wrong_single": 0
+      },
+      "3": {
+        "need": 2646,
+        "missed": 436,
+        "missed_q0": 239,
+        "missed_q3": 190,
+        "missed_wrong_single": 7
+      }
+    },
+    "active": {
+      "0": {
+        "need": 17,
+        "missed": 17,
+        "missed_q0": 10,
+        "missed_q3": 4,
+        "missed_wrong_single": 3
+      },
+      "1": {
+        "need": 2936,
+        "missed": 248,
+        "missed_q0": 182,
+        "missed_q3": 61,
+        "missed_wrong_single": 5
+      },
+      "3": {
+        "need": 2250,
+        "missed": 388,
+        "missed_q0": 209,
+        "missed_q3": 173,
+        "missed_wrong_single": 6
+      }
+    },
+    "terrain_level": {
+      "0": {
+        "need": 128,
+        "missed": 16,
+        "missed_q0": 13,
+        "missed_q3": 3,
+        "missed_wrong_single": 0
+      },
+      "1": {
+        "need": 226,
+        "missed": 32,
+        "missed_q0": 16,
+        "missed_q3": 16,
+        "missed_wrong_single": 0
+      },
+      "2": {
+        "need": 801,
+        "missed": 93,
+        "missed_q0": 66,
+        "missed_q3": 27,
+        "missed_wrong_single": 0
+      },
+      "3": {
+        "need": 840,
+        "missed": 82,
+        "missed_q0": 39,
+        "missed_q3": 39,
+        "missed_wrong_single": 4
+      },
+      "5": {
+        "need": 1919,
+        "missed": 265,
+        "missed_q0": 169,
+        "missed_q3": 91,
+        "missed_wrong_single": 5
+      },
+      "6": {
+        "need": 1289,
+        "missed": 165,
+        "missed_q0": 98,
+        "missed_q3": 62,
+        "missed_wrong_single": 5
+      }
+    },
+    "terrain_type": {
+      "1": {
+        "need": 801,
+        "missed": 101,
+        "missed_q0": 53,
+        "missed_q3": 47,
+        "missed_wrong_single": 1
+      },
+      "2": {
+        "need": 477,
+        "missed": 52,
+        "missed_q0": 29,
+        "missed_q3": 23,
+        "missed_wrong_single": 0
+      },
+      "3": {
+        "need": 644,
+        "missed": 85,
+        "missed_q0": 46,
+        "missed_q3": 37,
+        "missed_wrong_single": 2
+      },
+      "6": {
+        "need": 285,
+        "missed": 30,
+        "missed_q0": 18,
+        "missed_q3": 12,
+        "missed_wrong_single": 0
+      },
+      "7": {
+        "need": 186,
+        "missed": 34,
+        "missed_q0": 28,
+        "missed_q3": 6,
+        "missed_wrong_single": 0
+      },
+      "8": {
+        "need": 470,
+        "missed": 64,
+        "missed_q0": 46,
+        "missed_q3": 17,
+        "missed_wrong_single": 1
+      },
+      "9": {
+        "need": 136,
+        "missed": 14,
+        "missed_q0": 12,
+        "missed_q3": 2,
+        "missed_wrong_single": 0
+      },
+      "10": {
+        "need": 271,
+        "missed": 21,
+        "missed_q0": 16,
+        "missed_q3": 5,
+        "missed_wrong_single": 0
+      },
+      "11": {
+        "need": 51,
+        "missed": 10,
+        "missed_q0": 0,
+        "missed_q3": 10,
+        "missed_wrong_single": 0
+      },
+      "12": {
+        "need": 125,
+        "missed": 14,
+        "missed_q0": 10,
+        "missed_q3": 4,
+        "missed_wrong_single": 0
+      },
+      "13": {
+        "need": 423,
+        "missed": 29,
+        "missed_q0": 18,
+        "missed_q3": 11,
+        "missed_wrong_single": 0
+      },
+      "15": {
+        "need": 315,
+        "missed": 49,
+        "missed_q0": 41,
+        "missed_q3": 8,
+        "missed_wrong_single": 0
+      },
+      "16": {
+        "need": 128,
+        "missed": 16,
+        "missed_q0": 13,
+        "missed_q3": 3,
+        "missed_wrong_single": 0
+      },
+      "17": {
+        "need": 276,
+        "missed": 40,
+        "missed_q0": 22,
+        "missed_q3": 14,
+        "missed_wrong_single": 4
+      },
+      "18": {
+        "need": 335,
+        "missed": 52,
+        "missed_q0": 30,
+        "missed_q3": 20,
+        "missed_wrong_single": 2
+      },
+      "19": {
+        "need": 280,
+        "missed": 42,
+        "missed_q0": 19,
+        "missed_q3": 19,
+        "missed_wrong_single": 4
+      }
+    },
+    "vp_kind": {
+      "0": {
+        "need": 2553,
+        "missed": 213,
+        "missed_q0": 160,
+        "missed_q3": 46,
+        "missed_wrong_single": 7
+      },
+      "1": {
+        "need": 436,
+        "missed": 85,
+        "missed_q0": 52,
+        "missed_q3": 33,
+        "missed_wrong_single": 0
+      },
+      "2": {
+        "need": 449,
+        "missed": 37,
+        "missed_q0": 16,
+        "missed_q3": 21,
+        "missed_wrong_single": 0
+      },
+      "3": {
+        "need": 382,
+        "missed": 82,
+        "missed_q0": 38,
+        "missed_q3": 43,
+        "missed_wrong_single": 1
+      },
+      "4": {
+        "need": 397,
+        "missed": 43,
+        "missed_q0": 22,
+        "missed_q3": 21,
+        "missed_wrong_single": 0
+      },
+      "5": {
+        "need": 429,
+        "missed": 62,
+        "missed_q0": 42,
+        "missed_q3": 20,
+        "missed_wrong_single": 0
+      },
+      "6": {
+        "need": 299,
+        "missed": 80,
+        "missed_q0": 47,
+        "missed_q3": 33,
+        "missed_wrong_single": 0
+      },
+      "7": {
+        "need": 258,
+        "missed": 51,
+        "missed_q0": 24,
+        "missed_q3": 21,
+        "missed_wrong_single": 6
+      }
+    },
+    "lp_kind": {
+      "0": {
+        "need": 14,
+        "missed": 14,
+        "missed_q0": 9,
+        "missed_q3": 2,
+        "missed_wrong_single": 3
+      },
+      "1": {
+        "need": 55,
+        "missed": 34,
+        "missed_q0": 25,
+        "missed_q3": 9,
+        "missed_wrong_single": 0
+      },
+      "2": {
+        "need": 8,
+        "missed": 7,
+        "missed_q0": 6,
+        "missed_q3": 0,
+        "missed_wrong_single": 1
+      },
+      "8": {
+        "need": 1434,
+        "missed": 228,
+        "missed_q0": 147,
+        "missed_q3": 76,
+        "missed_wrong_single": 5
+      },
+      "9": {
+        "need": 1765,
+        "missed": 174,
+        "missed_q0": 69,
+        "missed_q3": 104,
+        "missed_wrong_single": 1
+      },
+      "10": {
+        "need": 18,
+        "missed": 18,
+        "missed_q0": 14,
+        "missed_q3": 0,
+        "missed_wrong_single": 4
+      },
+      "11": {
+        "need": 12,
+        "missed": 7,
+        "missed_q0": 7,
+        "missed_q3": 0,
+        "missed_wrong_single": 0
+      },
+      "12": {
+        "need": 4,
+        "missed": 4,
+        "missed_q0": 3,
+        "missed_q3": 1,
+        "missed_wrong_single": 0
+      },
+      "13": {
+        "need": 1893,
+        "missed": 167,
+        "missed_q0": 121,
+        "missed_q3": 46,
+        "missed_wrong_single": 0
+      }
+    },
+    "severity": {
+      "0": {
+        "need": 90,
+        "missed": 15,
+        "missed_q0": 5,
+        "missed_q3": 9,
+        "missed_wrong_single": 1
+      },
+      "1": {
+        "need": 991,
+        "missed": 164,
+        "missed_q0": 95,
+        "missed_q3": 64,
+        "missed_wrong_single": 5
+      },
+      "2": {
+        "need": 4122,
+        "missed": 474,
+        "missed_q0": 301,
+        "missed_q3": 165,
+        "missed_wrong_single": 8
+      }
+    },
+    "phase": {
+      "0": {
+        "need": 5196,
+        "missed": 646,
+        "missed_q0": 398,
+        "missed_q3": 234,
+        "missed_wrong_single": 14
+      },
+      "1": {
+        "need": 7,
+        "missed": 7,
+        "missed_q0": 3,
+        "missed_q3": 4,
+        "missed_wrong_single": 0
+      }
+    }
+  }
+}

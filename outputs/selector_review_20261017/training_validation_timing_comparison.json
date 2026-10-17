@@ -1,0 +1,295 @@
+{
+  "training": {
+    "lp_all_failure": {
+      "rows": 78190,
+      "counts": [
+        18550,
+        23324,
+        36316
+      ],
+      "median_seconds": 0.48
+    },
+    "vp_all_failure": {
+      "rows": 55274,
+      "counts": [
+        11371,
+        14963,
+        28940
+      ],
+      "median_seconds": 0.54
+    },
+    "lp_only_failure": {
+      "rows": 52510,
+      "counts": [
+        5694,
+        14804,
+        32012
+      ],
+      "median_seconds": 0.6
+    },
+    "vp_only_failure": {
+      "rows": 29594,
+      "counts": [
+        477,
+        6006,
+        23111
+      ],
+      "median_seconds": 0.72
+    },
+    "both_failure_earlier": {
+      "rows": 25680,
+      "counts": [
+        13876,
+        8635,
+        3169
+      ],
+      "median_seconds": 0.18
+    },
+    "both_failure_later": {
+      "rows": 25680,
+      "counts": [
+        9874,
+        8842,
+        6964
+      ],
+      "median_seconds": 0.28
+    }
+  },
+  "training_sources": {
+    "lp_only_failure": {
+      "base": [
+        3830,
+        9467,
+        19213
+      ],
+      "supplement": [
+        1864,
+        5337,
+        12799
+      ]
+    },
+    "vp_only_failure": {
+      "base": [
+        202,
+        1928,
+        7464
+      ],
+      "supplement": [
+        275,
+        4078,
+        15647
+      ]
+    },
+    "both_failure_later": {
+      "base": [
+        2533,
+        1616,
+        1531
+      ],
+      "supplement": [
+        7341,
+        7226,
+        5433
+      ]
+    }
+  },
+  "training_provenance": "User-provided table, independently reproduced from all four actual training sources with the exact base cleaning filter.",
+  "validation": {
+    "lp_only_failure": {
+      "rows": 10292,
+      "counts": [
+        1220,
+        3099,
+        5973
+      ],
+      "median_seconds": 0.58
+    },
+    "vp_only_failure": {
+      "rows": 3272,
+      "counts": [
+        81,
+        659,
+        2532
+      ],
+      "median_seconds": 0.68
+    },
+    "both_failure_later": {
+      "rows": 1638,
+      "counts": [
+        746,
+        479,
+        413
+      ],
+      "median_seconds": 0.24
+    }
+  },
+  "rescue_by_time_bin": [
+    {
+      "class": "lp_only_failure",
+      "time_bin": "<=0.2s",
+      "all_single_failure_rows": 1220,
+      "rescue_needed": 794,
+      "correct_rescue": 705,
+      "q0_missed": 2,
+      "q3_missed": 87,
+      "other_missed": 0,
+      "q0_miss_rate": 0.0025188916876574307,
+      "correct_rescue_rate": 0.8879093198992444
+    },
+    {
+      "class": "lp_only_failure",
+      "time_bin": ">0.2s and <=0.5s",
+      "all_single_failure_rows": 3099,
+      "rescue_needed": 1814,
+      "correct_rescue": 1667,
+      "q0_missed": 63,
+      "q3_missed": 81,
+      "other_missed": 3,
+      "q0_miss_rate": 0.034729878721058434,
+      "correct_rescue_rate": 0.9189636163175303
+    },
+    {
+      "class": "lp_only_failure",
+      "time_bin": ">0.5s and <=1.0s",
+      "all_single_failure_rows": 5973,
+      "rescue_needed": 2595,
+      "correct_rescue": 2178,
+      "q0_missed": 336,
+      "q3_missed": 70,
+      "other_missed": 11,
+      "q0_miss_rate": 0.12947976878612716,
+      "correct_rescue_rate": 0.8393063583815029
+    },
+    {
+      "class": "vp_only_failure",
+      "time_bin": "<=0.2s",
+      "all_single_failure_rows": 81,
+      "rescue_needed": 59,
+      "correct_rescue": 42,
+      "q0_missed": 9,
+      "q3_missed": 8,
+      "other_missed": 0,
+      "q0_miss_rate": 0.15254237288135594,
+      "correct_rescue_rate": 0.711864406779661
+    },
+    {
+      "class": "vp_only_failure",
+      "time_bin": ">0.2s and <=0.5s",
+      "all_single_failure_rows": 659,
+      "rescue_needed": 512,
+      "correct_rescue": 418,
+      "q0_missed": 62,
+      "q3_missed": 31,
+      "other_missed": 1,
+      "q0_miss_rate": 0.12109375,
+      "correct_rescue_rate": 0.81640625
+    },
+    {
+      "class": "vp_only_failure",
+      "time_bin": ">0.5s and <=1.0s",
+      "all_single_failure_rows": 2532,
+      "rescue_needed": 1048,
+      "correct_rescue": 655,
+      "q0_missed": 328,
+      "q3_missed": 55,
+      "other_missed": 10,
+      "q0_miss_rate": 0.31297709923664124,
+      "correct_rescue_rate": 0.625
+    }
+  ],
+  "rescue_early_late": [
+    {
+      "class": "all",
+      "period": "<=0.5s",
+      "rescue_needed": 3179,
+      "correct_rescue": 2832,
+      "q0_missed": 136,
+      "q3_missed": 207,
+      "other_missed": 4,
+      "q0_miss_rate": 0.0427807486631016,
+      "correct_rescue_rate": 0.8908461780434099
+    },
+    {
+      "class": "all",
+      "period": ">0.5s",
+      "rescue_needed": 3643,
+      "correct_rescue": 2833,
+      "q0_missed": 664,
+      "q3_missed": 125,
+      "other_missed": 21,
+      "q0_miss_rate": 0.18226736206423277,
+      "correct_rescue_rate": 0.7776557782047763
+    },
+    {
+      "class": "lp_only_failure",
+      "period": "<=0.5s",
+      "rescue_needed": 2608,
+      "correct_rescue": 2372,
+      "q0_missed": 65,
+      "q3_missed": 168,
+      "other_missed": 3,
+      "q0_miss_rate": 0.02492331288343558,
+      "correct_rescue_rate": 0.9095092024539877
+    },
+    {
+      "class": "lp_only_failure",
+      "period": ">0.5s",
+      "rescue_needed": 2595,
+      "correct_rescue": 2178,
+      "q0_missed": 336,
+      "q3_missed": 70,
+      "other_missed": 11,
+      "q0_miss_rate": 0.12947976878612716,
+      "correct_rescue_rate": 0.8393063583815029
+    },
+    {
+      "class": "vp_only_failure",
+      "period": "<=0.5s",
+      "rescue_needed": 571,
+      "correct_rescue": 460,
+      "q0_missed": 71,
+      "q3_missed": 39,
+      "other_missed": 1,
+      "q0_miss_rate": 0.1243432574430823,
+      "correct_rescue_rate": 0.8056042031523643
+    },
+    {
+      "class": "vp_only_failure",
+      "period": ">0.5s",
+      "rescue_needed": 1048,
+      "correct_rescue": 655,
+      "q0_missed": 328,
+      "q3_missed": 55,
+      "other_missed": 10,
+      "q0_miss_rate": 0.31297709923664124,
+      "correct_rescue_rate": 0.625
+    }
+  ],
+  "dual_argmax_recall_by_time": [
+    {
+      "time_bin": "<=0.2s",
+      "true_both_failure": 746,
+      "q3_argmax_true_positive": 698,
+      "recall": 0.935656836461126
+    },
+    {
+      "time_bin": ">0.2s and <=0.5s",
+      "true_both_failure": 479,
+      "q3_argmax_true_positive": 310,
+      "recall": 0.6471816283924844
+    },
+    {
+      "time_bin": ">0.5s and <=1.0s",
+      "true_both_failure": 413,
+      "q3_argmax_true_positive": 161,
+      "recall": 0.3898305084745763
+    }
+  ],
+  "scope": "Raw full validation, before runtime gates. Counts are correlated snapshot rows, not independent failure events.",
+  "time_origin": "Candidate snapshot; first safety trigger in the forced branch rollout, dt=.02s.",
+  "bin_labels": [
+    "<=0.2s",
+    ">0.2s and <=0.5s",
+    ">0.5s and <=1.0s"
+  ]
+}

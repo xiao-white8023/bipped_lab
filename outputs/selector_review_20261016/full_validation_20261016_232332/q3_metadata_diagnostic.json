@@ -1,0 +1,5374 @@
+{
+  "q3_threshold": 0.4340755045413971,
+  "overall": {
+    "rows": 204750,
+    "class_counts": [
+      189548,
+      10292,
+      3272,
+      1638
+    ],
+    "double_failure_positive": 1638,
+    "argmax_missed_double_failure": 469,
+    "argmax_double_failure_recall": 0.7136752136752137,
+    "threshold_tp": 1177,
+    "threshold_fn": 461,
+    "threshold_recall": 0.7185592185592186,
+    "negative_rows": 203112,
+    "threshold_fp": 1177,
+    "threshold_false_positive_rate": 0.005794832407735633,
+    "threshold_fp_true_class_counts": [
+      603,
+      437,
+      137,
+      0
+    ],
+    "argmax_missed_true3_predictions": [
+      77,
+      252,
+      140,
+      0
+    ]
+  },
+  "by_fault_source": {
+    "none": {
+      "rows": 45137,
+      "class_counts": [
+        45005,
+        29,
+        44,
+        59
+      ],
+      "double_failure_positive": 59,
+      "argmax_missed_double_failure": 35,
+      "argmax_double_failure_recall": 0.4067796610169492,
+      "threshold_tp": 21,
+      "threshold_fn": 38,
+      "threshold_recall": 0.3559322033898305,
+      "negative_rows": 45078,
+      "threshold_fp": 10,
+      "threshold_false_positive_rate": 0.000221837703536093,
+      "threshold_fp_true_class_counts": [
+        9,
+        0,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        20,
+        0,
+        15,
+        0
+      ]
+    },
+    "lp_only": {
+      "rows": 46680,
+      "class_counts": [
+        41934,
+        4717,
+        10,
+        19
+      ],
+      "double_failure_positive": 19,
+      "argmax_missed_double_failure": 3,
+      "argmax_double_failure_recall": 0.8421052631578947,
+      "threshold_tp": 16,
+      "threshold_fn": 3,
+      "threshold_recall": 0.8421052631578947,
+      "negative_rows": 46661,
+      "threshold_fp": 140,
+      "threshold_false_positive_rate": 0.0030003643299543518,
+      "threshold_fp_true_class_counts": [
+        78,
+        62,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        1,
+        1,
+        0
+      ]
+    },
+    "vp_only": {
+      "rows": 55320,
+      "class_counts": [
+        53423,
+        9,
+        1839,
+        49
+      ],
+      "double_failure_positive": 49,
+      "argmax_missed_double_failure": 18,
+      "argmax_double_failure_recall": 0.6326530612244898,
+      "threshold_tp": 29,
+      "threshold_fn": 20,
+      "threshold_recall": 0.5918367346938775,
+      "negative_rows": 55271,
+      "threshold_fp": 147,
+      "threshold_false_positive_rate": 0.002659622586890051,
+      "threshold_fp_true_class_counts": [
+        116,
+        2,
+        29,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        3,
+        0,
+        15,
+        0
+      ]
+    },
+    "dual": {
+      "rows": 57613,
+      "class_counts": [
+        49186,
+        5537,
+        1379,
+        1511
+      ],
+      "double_failure_positive": 1511,
+      "argmax_missed_double_failure": 413,
+      "argmax_double_failure_recall": 0.7266710787557908,
+      "threshold_tp": 1111,
+      "threshold_fn": 400,
+      "threshold_recall": 0.7352746525479815,
+      "negative_rows": 56102,
+      "threshold_fp": 880,
+      "threshold_false_positive_rate": 0.01568571530426723,
+      "threshold_fp_true_class_counts": [
+        400,
+        373,
+        107,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        53,
+        251,
+        109,
+        0
+      ]
+    }
+  },
+  "by_lp_kind": {
+    "NONE": {
+      "rows": 100457,
+      "class_counts": [
+        98428,
+        38,
+        1883,
+        108
+      ],
+      "double_failure_positive": 108,
+      "argmax_missed_double_failure": 53,
+      "argmax_double_failure_recall": 0.5092592592592593,
+      "threshold_tp": 50,
+      "threshold_fn": 58,
+      "threshold_recall": 0.46296296296296297,
+      "negative_rows": 100349,
+      "threshold_fp": 157,
+      "threshold_false_positive_rate": 0.0015645397562506851,
+      "threshold_fp_true_class_counts": [
+        125,
+        2,
+        30,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        23,
+        0,
+        30,
+        0
+      ]
+    },
+    "FREEZE": {
+      "rows": 15057,
+      "class_counts": [
+        14677,
+        120,
+        171,
+        89
+      ],
+      "double_failure_positive": 89,
+      "argmax_missed_double_failure": 21,
+      "argmax_double_failure_recall": 0.7640449438202247,
+      "threshold_tp": 64,
+      "threshold_fn": 25,
+      "threshold_recall": 0.7191011235955056,
+      "negative_rows": 14968,
+      "threshold_fp": 137,
+      "threshold_false_positive_rate": 0.009152859433458043,
+      "threshold_fp_true_class_counts": [
+        100,
+        25,
+        12,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        14,
+        1,
+        6,
+        0
+      ]
+    },
+    "DELAY": {
+      "rows": 15498,
+      "class_counts": [
+        15096,
+        32,
+        260,
+        110
+      ],
+      "double_failure_positive": 110,
+      "argmax_missed_double_failure": 39,
+      "argmax_double_failure_recall": 0.6454545454545455,
+      "threshold_tp": 71,
+      "threshold_fn": 39,
+      "threshold_recall": 0.6454545454545455,
+      "negative_rows": 15388,
+      "threshold_fp": 21,
+      "threshold_false_positive_rate": 0.0013646997660514686,
+      "threshold_fp_true_class_counts": [
+        11,
+        5,
+        5,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        10,
+        1,
+        28,
+        0
+      ]
+    },
+    "LP_RANDOM_DROPOUT": {
+      "rows": 10677,
+      "class_counts": [
+        7941,
+        2315,
+        158,
+        263
+      ],
+      "double_failure_positive": 263,
+      "argmax_missed_double_failure": 71,
+      "argmax_double_failure_recall": 0.7300380228136882,
+      "threshold_tp": 193,
+      "threshold_fn": 70,
+      "threshold_recall": 0.7338403041825095,
+      "negative_rows": 10414,
+      "threshold_fp": 182,
+      "threshold_false_positive_rate": 0.0174764739773382,
+      "threshold_fp_true_class_counts": [
+        65,
+        96,
+        21,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        9,
+        50,
+        12,
+        0
+      ]
+    },
+    "LP_BLOCK_DROPOUT": {
+      "rows": 9309,
+      "class_counts": [
+        5561,
+        3305,
+        71,
+        372
+      ],
+      "double_failure_positive": 372,
+      "argmax_missed_double_failure": 74,
+      "argmax_double_failure_recall": 0.8010752688172043,
+      "threshold_tp": 306,
+      "threshold_fn": 66,
+      "threshold_recall": 0.8225806451612904,
+      "negative_rows": 8937,
+      "threshold_fp": 248,
+      "threshold_false_positive_rate": 0.027749804184849503,
+      "threshold_fp_true_class_counts": [
+        65,
+        164,
+        19,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        4,
+        61,
+        9,
+        0
+      ]
+    },
+    "LP_HEIGHT_BIAS": {
+      "rows": 14877,
+      "class_counts": [
+        14478,
+        37,
+        287,
+        75
+      ],
+      "double_failure_positive": 75,
+      "argmax_missed_double_failure": 17,
+      "argmax_double_failure_recall": 0.7733333333333333,
+      "threshold_tp": 57,
+      "threshold_fn": 18,
+      "threshold_recall": 0.76,
+      "negative_rows": 14802,
+      "threshold_fp": 71,
+      "threshold_false_positive_rate": 0.004796649101472774,
+      "threshold_fp_true_class_counts": [
+        57,
+        8,
+        6,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        0,
+        16,
+        0
+      ]
+    },
+    "LP_REGISTRATION": {
+      "rows": 13719,
+      "class_counts": [
+        13374,
+        33,
+        179,
+        133
+      ],
+      "double_failure_positive": 133,
+      "argmax_missed_double_failure": 22,
+      "argmax_double_failure_recall": 0.8345864661654135,
+      "threshold_tp": 111,
+      "threshold_fn": 22,
+      "threshold_recall": 0.8345864661654135,
+      "negative_rows": 13586,
+      "threshold_fp": 172,
+      "threshold_false_positive_rate": 0.012660091270425437,
+      "threshold_fp_true_class_counts": [
+        137,
+        9,
+        26,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        11,
+        1,
+        10,
+        0
+      ]
+    },
+    "LP_DRIFT": {
+      "rows": 15588,
+      "class_counts": [
+        15232,
+        12,
+        249,
+        95
+      ],
+      "double_failure_positive": 95,
+      "argmax_missed_double_failure": 30,
+      "argmax_double_failure_recall": 0.6842105263157895,
+      "threshold_tp": 64,
+      "threshold_fn": 31,
+      "threshold_recall": 0.6736842105263158,
+      "negative_rows": 15493,
+      "threshold_fp": 52,
+      "threshold_false_positive_rate": 0.003356354482669593,
+      "threshold_fp_true_class_counts": [
+        35,
+        3,
+        14,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        3,
+        0,
+        27,
+        0
+      ]
+    },
+    "LP_COLLAPSE": {
+      "rows": 9568,
+      "class_counts": [
+        4761,
+        4400,
+        14,
+        393
+      ],
+      "double_failure_positive": 393,
+      "argmax_missed_double_failure": 142,
+      "argmax_double_failure_recall": 0.638676844783715,
+      "threshold_tp": 261,
+      "threshold_fn": 132,
+      "threshold_recall": 0.6641221374045801,
+      "negative_rows": 9175,
+      "threshold_fp": 137,
+      "threshold_false_positive_rate": 0.014931880108991826,
+      "threshold_fp_true_class_counts": [
+        8,
+        125,
+        4,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        2,
+        138,
+        2,
+        0
+      ]
+    }
+  },
+  "by_vp_kind": {
+    "NONE": {
+      "rows": 91817,
+      "class_counts": [
+        86939,
+        4746,
+        54,
+        78
+      ],
+      "double_failure_positive": 78,
+      "argmax_missed_double_failure": 38,
+      "argmax_double_failure_recall": 0.5128205128205128,
+      "threshold_tp": 37,
+      "threshold_fn": 41,
+      "threshold_recall": 0.47435897435897434,
+      "negative_rows": 91739,
+      "threshold_fp": 150,
+      "threshold_false_positive_rate": 0.0016350734147963244,
+      "threshold_fp_true_class_counts": [
+        87,
+        62,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        21,
+        1,
+        16,
+        0
+      ]
+    },
+    "FREEZE": {
+      "rows": 15622,
+      "class_counts": [
+        14476,
+        812,
+        232,
+        102
+      ],
+      "double_failure_positive": 102,
+      "argmax_missed_double_failure": 25,
+      "argmax_double_failure_recall": 0.7549019607843137,
+      "threshold_tp": 80,
+      "threshold_fn": 22,
+      "threshold_recall": 0.7843137254901961,
+      "negative_rows": 15520,
+      "threshold_fp": 174,
+      "threshold_false_positive_rate": 0.011211340206185567,
+      "threshold_fp_true_class_counts": [
+        91,
+        54,
+        29,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        4,
+        17,
+        4,
+        0
+      ]
+    },
+    "DELAY": {
+      "rows": 18677,
+      "class_counts": [
+        17739,
+        823,
+        45,
+        70
+      ],
+      "double_failure_positive": 70,
+      "argmax_missed_double_failure": 30,
+      "argmax_double_failure_recall": 0.5714285714285714,
+      "threshold_tp": 41,
+      "threshold_fn": 29,
+      "threshold_recall": 0.5857142857142857,
+      "negative_rows": 18607,
+      "threshold_fp": 72,
+      "threshold_false_positive_rate": 0.003869511474176385,
+      "threshold_fp_true_class_counts": [
+        44,
+        23,
+        5,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        3,
+        25,
+        2,
+        0
+      ]
+    },
+    "VP_OCCLUSION": {
+      "rows": 14666,
+      "class_counts": [
+        13305,
+        824,
+        343,
+        194
+      ],
+      "double_failure_positive": 194,
+      "argmax_missed_double_failure": 74,
+      "argmax_double_failure_recall": 0.6185567010309279,
+      "threshold_tp": 118,
+      "threshold_fn": 76,
+      "threshold_recall": 0.6082474226804123,
+      "negative_rows": 14472,
+      "threshold_fp": 204,
+      "threshold_false_positive_rate": 0.014096185737976783,
+      "threshold_fp_true_class_counts": [
+        114,
+        69,
+        21,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        17,
+        39,
+        18,
+        0
+      ]
+    },
+    "VP_SCALE": {
+      "rows": 17899,
+      "class_counts": [
+        16834,
+        848,
+        105,
+        112
+      ],
+      "double_failure_positive": 112,
+      "argmax_missed_double_failure": 38,
+      "argmax_double_failure_recall": 0.6607142857142857,
+      "threshold_tp": 74,
+      "threshold_fn": 38,
+      "threshold_recall": 0.6607142857142857,
+      "negative_rows": 17787,
+      "threshold_fp": 79,
+      "threshold_false_positive_rate": 0.004441445999887559,
+      "threshold_fp_true_class_counts": [
+        49,
+        30,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        4,
+        27,
+        7,
+        0
+      ]
+    },
+    "VP_BIAS": {
+      "rows": 16192,
+      "class_counts": [
+        15176,
+        838,
+        72,
+        106
+      ],
+      "double_failure_positive": 106,
+      "argmax_missed_double_failure": 37,
+      "argmax_double_failure_recall": 0.6509433962264151,
+      "threshold_tp": 70,
+      "threshold_fn": 36,
+      "threshold_recall": 0.660377358490566,
+      "negative_rows": 16086,
+      "threshold_fp": 49,
+      "threshold_false_positive_rate": 0.0030461270670147957,
+      "threshold_fp_true_class_counts": [
+        16,
+        29,
+        4,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        4,
+        26,
+        7,
+        0
+      ]
+    },
+    "VP_SHIFT": {
+      "rows": 16704,
+      "class_counts": [
+        15501,
+        769,
+        257,
+        177
+      ],
+      "double_failure_positive": 177,
+      "argmax_missed_double_failure": 50,
+      "argmax_double_failure_recall": 0.7175141242937854,
+      "threshold_tp": 126,
+      "threshold_fn": 51,
+      "threshold_recall": 0.711864406779661,
+      "negative_rows": 16527,
+      "threshold_fp": 247,
+      "threshold_false_positive_rate": 0.01494524112059055,
+      "threshold_fp_true_class_counts": [
+        146,
+        95,
+        6,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        14,
+        31,
+        5,
+        0
+      ]
+    },
+    "VP_COLLAPSE": {
+      "rows": 13173,
+      "class_counts": [
+        9578,
+        632,
+        2164,
+        799
+      ],
+      "double_failure_positive": 799,
+      "argmax_missed_double_failure": 177,
+      "argmax_double_failure_recall": 0.7784730913642053,
+      "threshold_tp": 631,
+      "threshold_fn": 168,
+      "threshold_recall": 0.7897371714643304,
+      "negative_rows": 12374,
+      "threshold_fp": 202,
+      "threshold_false_positive_rate": 0.016324551478907386,
+      "threshold_fp_true_class_counts": [
+        56,
+        75,
+        71,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        10,
+        86,
+        81,
+        0
+      ]
+    }
+  },
+  "by_terrain_type_column": {
+    "1": {
+      "rows": 30827,
+      "class_counts": [
+        28308,
+        1682,
+        611,
+        226
+      ],
+      "double_failure_positive": 226,
+      "argmax_missed_double_failure": 43,
+      "argmax_double_failure_recall": 0.8097345132743363,
+      "threshold_tp": 182,
+      "threshold_fn": 44,
+      "threshold_recall": 0.8053097345132744,
+      "negative_rows": 30601,
+      "threshold_fp": 222,
+      "threshold_false_positive_rate": 0.007254664880232672,
+      "threshold_fp_true_class_counts": [
+        104,
+        88,
+        30,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        9,
+        22,
+        12,
+        0
+      ]
+    },
+    "2": {
+      "rows": 21110,
+      "class_counts": [
+        19585,
+        934,
+        401,
+        190
+      ],
+      "double_failure_positive": 190,
+      "argmax_missed_double_failure": 53,
+      "argmax_double_failure_recall": 0.7210526315789474,
+      "threshold_tp": 141,
+      "threshold_fn": 49,
+      "threshold_recall": 0.7421052631578947,
+      "negative_rows": 20920,
+      "threshold_fp": 71,
+      "threshold_false_positive_rate": 0.0033938814531548757,
+      "threshold_fp_true_class_counts": [
+        27,
+        33,
+        11,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        5,
+        31,
+        17,
+        0
+      ]
+    },
+    "3": {
+      "rows": 23882,
+      "class_counts": [
+        22023,
+        1186,
+        454,
+        219
+      ],
+      "double_failure_positive": 219,
+      "argmax_missed_double_failure": 65,
+      "argmax_double_failure_recall": 0.7031963470319634,
+      "threshold_tp": 158,
+      "threshold_fn": 61,
+      "threshold_recall": 0.7214611872146118,
+      "negative_rows": 23663,
+      "threshold_fp": 124,
+      "threshold_false_positive_rate": 0.005240248489202553,
+      "threshold_fp_true_class_counts": [
+        33,
+        72,
+        19,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        6,
+        39,
+        20,
+        0
+      ]
+    },
+    "6": {
+      "rows": 10904,
+      "class_counts": [
+        10081,
+        620,
+        154,
+        49
+      ],
+      "double_failure_positive": 49,
+      "argmax_missed_double_failure": 7,
+      "argmax_double_failure_recall": 0.8571428571428571,
+      "threshold_tp": 42,
+      "threshold_fn": 7,
+      "threshold_recall": 0.8571428571428571,
+      "negative_rows": 10855,
+      "threshold_fp": 52,
+      "threshold_false_positive_rate": 0.004790419161676647,
+      "threshold_fp_true_class_counts": [
+        21,
+        26,
+        5,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        4,
+        3,
+        0
+      ]
+    },
+    "7": {
+      "rows": 6266,
+      "class_counts": [
+        5794,
+        393,
+        62,
+        17
+      ],
+      "double_failure_positive": 17,
+      "argmax_missed_double_failure": 7,
+      "argmax_double_failure_recall": 0.5882352941176471,
+      "threshold_tp": 11,
+      "threshold_fn": 6,
+      "threshold_recall": 0.6470588235294118,
+      "negative_rows": 6249,
+      "threshold_fp": 18,
+      "threshold_false_positive_rate": 0.0028804608737397984,
+      "threshold_fp_true_class_counts": [
+        9,
+        7,
+        2,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        7,
+        0,
+        0
+      ]
+    },
+    "8": {
+      "rows": 19755,
+      "class_counts": [
+        18365,
+        949,
+        291,
+        150
+      ],
+      "double_failure_positive": 150,
+      "argmax_missed_double_failure": 49,
+      "argmax_double_failure_recall": 0.6733333333333333,
+      "threshold_tp": 105,
+      "threshold_fn": 45,
+      "threshold_recall": 0.7,
+      "negative_rows": 19605,
+      "threshold_fp": 85,
+      "threshold_false_positive_rate": 0.004335628666156593,
+      "threshold_fp_true_class_counts": [
+        35,
+        39,
+        11,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        5,
+        33,
+        11,
+        0
+      ]
+    },
+    "9": {
+      "rows": 4442,
+      "class_counts": [
+        4179,
+        204,
+        48,
+        11
+      ],
+      "double_failure_positive": 11,
+      "argmax_missed_double_failure": 1,
+      "argmax_double_failure_recall": 0.9090909090909091,
+      "threshold_tp": 10,
+      "threshold_fn": 1,
+      "threshold_recall": 0.9090909090909091,
+      "negative_rows": 4431,
+      "threshold_fp": 13,
+      "threshold_false_positive_rate": 0.002933874971789664,
+      "threshold_fp_true_class_counts": [
+        7,
+        6,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        1,
+        0,
+        0
+      ]
+    },
+    "10": {
+      "rows": 10389,
+      "class_counts": [
+        9478,
+        644,
+        205,
+        62
+      ],
+      "double_failure_positive": 62,
+      "argmax_missed_double_failure": 28,
+      "argmax_double_failure_recall": 0.5483870967741935,
+      "threshold_tp": 33,
+      "threshold_fn": 29,
+      "threshold_recall": 0.532258064516129,
+      "negative_rows": 10327,
+      "threshold_fp": 49,
+      "threshold_false_positive_rate": 0.00474484361382783,
+      "threshold_fp_true_class_counts": [
+        33,
+        6,
+        10,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        26,
+        1,
+        0
+      ]
+    },
+    "11": {
+      "rows": 3495,
+      "class_counts": [
+        3260,
+        141,
+        64,
+        30
+      ],
+      "double_failure_positive": 30,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.9333333333333333,
+      "threshold_tp": 28,
+      "threshold_fn": 2,
+      "threshold_recall": 0.9333333333333333,
+      "negative_rows": 3465,
+      "threshold_fp": 19,
+      "threshold_false_positive_rate": 0.005483405483405483,
+      "threshold_fp_true_class_counts": [
+        7,
+        10,
+        2,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    "12": {
+      "rows": 4503,
+      "class_counts": [
+        4171,
+        267,
+        37,
+        28
+      ],
+      "double_failure_positive": 28,
+      "argmax_missed_double_failure": 5,
+      "argmax_double_failure_recall": 0.8214285714285714,
+      "threshold_tp": 23,
+      "threshold_fn": 5,
+      "threshold_recall": 0.8214285714285714,
+      "negative_rows": 4475,
+      "threshold_fp": 16,
+      "threshold_false_positive_rate": 0.003575418994413408,
+      "threshold_fp_true_class_counts": [
+        9,
+        6,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        3,
+        2,
+        0
+      ]
+    },
+    "13": {
+      "rows": 16593,
+      "class_counts": [
+        15469,
+        786,
+        227,
+        111
+      ],
+      "double_failure_positive": 111,
+      "argmax_missed_double_failure": 13,
+      "argmax_double_failure_recall": 0.8828828828828829,
+      "threshold_tp": 98,
+      "threshold_fn": 13,
+      "threshold_recall": 0.8828828828828829,
+      "negative_rows": 16482,
+      "threshold_fp": 37,
+      "threshold_false_positive_rate": 0.002244873195000607,
+      "threshold_fp_true_class_counts": [
+        13,
+        16,
+        8,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        2,
+        11,
+        0
+      ]
+    },
+    "15": {
+      "rows": 12990,
+      "class_counts": [
+        12187,
+        559,
+        155,
+        89
+      ],
+      "double_failure_positive": 89,
+      "argmax_missed_double_failure": 23,
+      "argmax_double_failure_recall": 0.7415730337078652,
+      "threshold_tp": 65,
+      "threshold_fn": 24,
+      "threshold_recall": 0.7303370786516854,
+      "negative_rows": 12901,
+      "threshold_fp": 39,
+      "threshold_false_positive_rate": 0.0030230214712037825,
+      "threshold_fp_true_class_counts": [
+        17,
+        17,
+        5,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        17,
+        6,
+        0
+      ]
+    },
+    "16": {
+      "rows": 4746,
+      "class_counts": [
+        4434,
+        236,
+        64,
+        12
+      ],
+      "double_failure_positive": 12,
+      "argmax_missed_double_failure": 5,
+      "argmax_double_failure_recall": 0.5833333333333334,
+      "threshold_tp": 7,
+      "threshold_fn": 5,
+      "threshold_recall": 0.5833333333333334,
+      "negative_rows": 4734,
+      "threshold_fp": 21,
+      "threshold_false_positive_rate": 0.004435994930291508,
+      "threshold_fp_true_class_counts": [
+        4,
+        16,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        4,
+        1,
+        0,
+        0
+      ]
+    },
+    "17": {
+      "rows": 15060,
+      "class_counts": [
+        14101,
+        592,
+        212,
+        155
+      ],
+      "double_failure_positive": 155,
+      "argmax_missed_double_failure": 43,
+      "argmax_double_failure_recall": 0.7225806451612903,
+      "threshold_tp": 111,
+      "threshold_fn": 44,
+      "threshold_recall": 0.7161290322580646,
+      "negative_rows": 14905,
+      "threshold_fp": 139,
+      "threshold_false_positive_rate": 0.009325729620932572,
+      "threshold_fp_true_class_counts": [
+        100,
+        25,
+        14,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        9,
+        22,
+        12,
+        0
+      ]
+    },
+    "18": {
+      "rows": 11551,
+      "class_counts": [
+        10573,
+        657,
+        157,
+        164
+      ],
+      "double_failure_positive": 164,
+      "argmax_missed_double_failure": 79,
+      "argmax_double_failure_recall": 0.5182926829268293,
+      "threshold_tp": 84,
+      "threshold_fn": 80,
+      "threshold_recall": 0.5121951219512195,
+      "negative_rows": 11387,
+      "threshold_fp": 131,
+      "threshold_false_positive_rate": 0.011504347062439624,
+      "threshold_fp_true_class_counts": [
+        85,
+        38,
+        8,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        20,
+        28,
+        31,
+        0
+      ]
+    },
+    "19": {
+      "rows": 8237,
+      "class_counts": [
+        7540,
+        442,
+        130,
+        125
+      ],
+      "double_failure_positive": 125,
+      "argmax_missed_double_failure": 46,
+      "argmax_double_failure_recall": 0.632,
+      "threshold_tp": 79,
+      "threshold_fn": 46,
+      "threshold_recall": 0.632,
+      "negative_rows": 8112,
+      "threshold_fp": 141,
+      "threshold_false_positive_rate": 0.017381656804733726,
+      "threshold_fp_true_class_counts": [
+        99,
+        32,
+        10,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        18,
+        16,
+        12,
+        0
+      ]
+    }
+  },
+  "by_terrain_level": {
+    "0": {
+      "rows": 4746,
+      "class_counts": [
+        4434,
+        236,
+        64,
+        12
+      ],
+      "double_failure_positive": 12,
+      "argmax_missed_double_failure": 5,
+      "argmax_double_failure_recall": 0.5833333333333334,
+      "threshold_tp": 7,
+      "threshold_fn": 5,
+      "threshold_recall": 0.5833333333333334,
+      "negative_rows": 4734,
+      "threshold_fp": 21,
+      "threshold_false_positive_rate": 0.004435994930291508,
+      "threshold_fp_true_class_counts": [
+        4,
+        16,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        4,
+        1,
+        0,
+        0
+      ]
+    },
+    "1": {
+      "rows": 10208,
+      "class_counts": [
+        9627,
+        413,
+        120,
+        48
+      ],
+      "double_failure_positive": 48,
+      "argmax_missed_double_failure": 3,
+      "argmax_double_failure_recall": 0.9375,
+      "threshold_tp": 45,
+      "threshold_fn": 3,
+      "threshold_recall": 0.9375,
+      "negative_rows": 10160,
+      "threshold_fp": 36,
+      "threshold_false_positive_rate": 0.003543307086614173,
+      "threshold_fp_true_class_counts": [
+        14,
+        20,
+        2,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        1,
+        2,
+        0
+      ]
+    },
+    "2": {
+      "rows": 30641,
+      "class_counts": [
+        28427,
+        1568,
+        469,
+        177
+      ],
+      "double_failure_positive": 177,
+      "argmax_missed_double_failure": 46,
+      "argmax_double_failure_recall": 0.7401129943502824,
+      "threshold_tp": 136,
+      "threshold_fn": 41,
+      "threshold_recall": 0.768361581920904,
+      "negative_rows": 30464,
+      "threshold_fp": 104,
+      "threshold_false_positive_rate": 0.0034138655462184874,
+      "threshold_fp_true_class_counts": [
+        52,
+        40,
+        12,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        40,
+        6,
+        0
+      ]
+    },
+    "3": {
+      "rows": 31385,
+      "class_counts": [
+        28898,
+        1749,
+        455,
+        283
+      ],
+      "double_failure_positive": 283,
+      "argmax_missed_double_failure": 59,
+      "argmax_double_failure_recall": 0.7915194346289752,
+      "threshold_tp": 225,
+      "threshold_fn": 58,
+      "threshold_recall": 0.7950530035335689,
+      "negative_rows": 31102,
+      "threshold_fp": 204,
+      "threshold_false_positive_rate": 0.006559063725805414,
+      "threshold_fp_true_class_counts": [
+        117,
+        64,
+        23,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        10,
+        28,
+        21,
+        0
+      ]
+    },
+    "5": {
+      "rows": 77594,
+      "class_counts": [
+        72240,
+        3578,
+        1159,
+        617
+      ],
+      "double_failure_positive": 617,
+      "argmax_missed_double_failure": 172,
+      "argmax_double_failure_recall": 0.7212317666126418,
+      "threshold_tp": 449,
+      "threshold_fn": 168,
+      "threshold_recall": 0.7277147487844409,
+      "negative_rows": 76977,
+      "threshold_fp": 421,
+      "threshold_false_positive_rate": 0.005469166114553698,
+      "threshold_fp_true_class_counts": [
+        211,
+        166,
+        44,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        28,
+        90,
+        54,
+        0
+      ]
+    },
+    "6": {
+      "rows": 50176,
+      "class_counts": [
+        45922,
+        2748,
+        1005,
+        501
+      ],
+      "double_failure_positive": 501,
+      "argmax_missed_double_failure": 184,
+      "argmax_double_failure_recall": 0.6327345309381237,
+      "threshold_tp": 315,
+      "threshold_fn": 186,
+      "threshold_recall": 0.6287425149700598,
+      "negative_rows": 49675,
+      "threshold_fp": 391,
+      "threshold_false_positive_rate": 0.007871162556618017,
+      "threshold_fp_true_class_counts": [
+        205,
+        131,
+        55,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        35,
+        92,
+        57,
+        0
+      ]
+    }
+  },
+  "by_fault_phase": {
+    "-1": {
+      "rows": 11669,
+      "class_counts": [
+        11633,
+        15,
+        15,
+        6
+      ],
+      "double_failure_positive": 6,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.6666666666666666,
+      "threshold_tp": 4,
+      "threshold_fn": 2,
+      "threshold_recall": 0.6666666666666666,
+      "negative_rows": 11663,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        2,
+        0,
+        0,
+        0
+      ]
+    },
+    "0": {
+      "rows": 174530,
+      "class_counts": [
+        159503,
+        10263,
+        3231,
+        1533
+      ],
+      "double_failure_positive": 1533,
+      "argmax_missed_double_failure": 441,
+      "argmax_double_failure_recall": 0.7123287671232876,
+      "threshold_tp": 1103,
+      "threshold_fn": 430,
+      "threshold_recall": 0.7195042400521853,
+      "negative_rows": 172997,
+      "threshold_fp": 1145,
+      "threshold_false_positive_rate": 0.006618611883443065,
+      "threshold_fp_true_class_counts": [
+        576,
+        433,
+        136,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        70,
+        250,
+        121,
+        0
+      ]
+    },
+    "1": {
+      "rows": 18551,
+      "class_counts": [
+        18412,
+        14,
+        26,
+        99
+      ],
+      "double_failure_positive": 99,
+      "argmax_missed_double_failure": 26,
+      "argmax_double_failure_recall": 0.7373737373737373,
+      "threshold_tp": 70,
+      "threshold_fn": 29,
+      "threshold_recall": 0.7070707070707071,
+      "negative_rows": 18452,
+      "threshold_fp": 32,
+      "threshold_false_positive_rate": 0.0017342293518317797,
+      "threshold_fp_true_class_counts": [
+        27,
+        4,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        5,
+        2,
+        19,
+        0
+      ]
+    }
+  },
+  "by_severity": {
+    "0": {
+      "rows": 11827,
+      "class_counts": [
+        11490,
+        156,
+        123,
+        58
+      ],
+      "double_failure_positive": 58,
+      "argmax_missed_double_failure": 20,
+      "argmax_double_failure_recall": 0.6551724137931034,
+      "threshold_tp": 37,
+      "threshold_fn": 21,
+      "threshold_recall": 0.6379310344827587,
+      "negative_rows": 11769,
+      "threshold_fp": 44,
+      "threshold_false_positive_rate": 0.003738635398079701,
+      "threshold_fp_true_class_counts": [
+        32,
+        9,
+        3,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        4,
+        8,
+        8,
+        0
+      ]
+    },
+    "1": {
+      "rows": 55464,
+      "class_counts": [
+        51860,
+        2263,
+        860,
+        481
+      ],
+      "double_failure_positive": 481,
+      "argmax_missed_double_failure": 139,
+      "argmax_double_failure_recall": 0.7110187110187111,
+      "threshold_tp": 343,
+      "threshold_fn": 138,
+      "threshold_recall": 0.7130977130977131,
+      "negative_rows": 54983,
+      "threshold_fp": 387,
+      "threshold_false_positive_rate": 0.0070385391848389505,
+      "threshold_fp_true_class_counts": [
+        196,
+        139,
+        52,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        26,
+        74,
+        39,
+        0
+      ]
+    },
+    "2": {
+      "rows": 137459,
+      "class_counts": [
+        126198,
+        7873,
+        2289,
+        1099
+      ],
+      "double_failure_positive": 1099,
+      "argmax_missed_double_failure": 310,
+      "argmax_double_failure_recall": 0.7179253867151957,
+      "threshold_tp": 797,
+      "threshold_fn": 302,
+      "threshold_recall": 0.7252047315741583,
+      "negative_rows": 136360,
+      "threshold_fp": 746,
+      "threshold_false_positive_rate": 0.005470812555001467,
+      "threshold_fp_true_class_counts": [
+        375,
+        289,
+        82,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        47,
+        170,
+        93,
+        0
+      ]
+    }
+  },
+  "by_lp_active": {
+    "0": {
+      "rows": 114554,
+      "class_counts": [
+        112350,
+        51,
+        1997,
+        156
+      ],
+      "double_failure_positive": 156,
+      "argmax_missed_double_failure": 61,
+      "argmax_double_failure_recall": 0.6089743589743589,
+      "threshold_tp": 89,
+      "threshold_fn": 67,
+      "threshold_recall": 0.5705128205128205,
+      "negative_rows": 114398,
+      "threshold_fp": 192,
+      "threshold_false_positive_rate": 0.0016783510201227295,
+      "threshold_fp_true_class_counts": [
+        158,
+        4,
+        30,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        25,
+        2,
+        34,
+        0
+      ]
+    },
+    "1": {
+      "rows": 90196,
+      "class_counts": [
+        77198,
+        10241,
+        1275,
+        1482
+      ],
+      "double_failure_positive": 1482,
+      "argmax_missed_double_failure": 408,
+      "argmax_double_failure_recall": 0.7246963562753036,
+      "threshold_tp": 1088,
+      "threshold_fn": 394,
+      "threshold_recall": 0.7341430499325237,
+      "negative_rows": 88714,
+      "threshold_fp": 985,
+      "threshold_false_positive_rate": 0.01110309534008161,
+      "threshold_fp_true_class_counts": [
+        445,
+        433,
+        107,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        52,
+        250,
+        106,
+        0
+      ]
+    }
+  },
+  "by_vp_active": {
+    "0": {
+      "rows": 111631,
+      "class_counts": [
+        105805,
+        5596,
+        74,
+        156
+      ],
+      "double_failure_positive": 156,
+      "argmax_missed_double_failure": 61,
+      "argmax_double_failure_recall": 0.6089743589743589,
+      "threshold_tp": 89,
+      "threshold_fn": 67,
+      "threshold_recall": 0.5705128205128205,
+      "negative_rows": 111475,
+      "threshold_fp": 225,
+      "threshold_false_positive_rate": 0.002018389773491814,
+      "threshold_fp_true_class_counts": [
+        130,
+        93,
+        2,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        25,
+        2,
+        34,
+        0
+      ]
+    },
+    "1": {
+      "rows": 93119,
+      "class_counts": [
+        83743,
+        4696,
+        3198,
+        1482
+      ],
+      "double_failure_positive": 1482,
+      "argmax_missed_double_failure": 408,
+      "argmax_double_failure_recall": 0.7246963562753036,
+      "threshold_tp": 1088,
+      "threshold_fn": 394,
+      "threshold_recall": 0.7341430499325237,
+      "negative_rows": 91637,
+      "threshold_fp": 952,
+      "threshold_false_positive_rate": 0.010388816744328164,
+      "threshold_fp_true_class_counts": [
+        473,
+        344,
+        135,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        52,
+        250,
+        106,
+        0
+      ]
+    }
+  },
+  "by_fault_pair": {
+    "NONE+NONE": {
+      "rows": 45137,
+      "class_counts": [
+        45005,
+        29,
+        44,
+        59
+      ],
+      "double_failure_positive": 59,
+      "argmax_missed_double_failure": 35,
+      "argmax_double_failure_recall": 0.4067796610169492,
+      "threshold_tp": 21,
+      "threshold_fn": 38,
+      "threshold_recall": 0.3559322033898305,
+      "negative_rows": 45078,
+      "threshold_fp": 10,
+      "threshold_false_positive_rate": 0.000221837703536093,
+      "threshold_fp_true_class_counts": [
+        9,
+        0,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        20,
+        0,
+        15,
+        0
+      ]
+    },
+    "NONE+FREEZE": {
+      "rows": 8281,
+      "class_counts": [
+        8139,
+        0,
+        142,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 8281,
+      "threshold_fp": 6,
+      "threshold_false_positive_rate": 0.0007245501750996257,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        6,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "NONE+DELAY": {
+      "rows": 8888,
+      "class_counts": [
+        8842,
+        1,
+        41,
+        4
+      ],
+      "double_failure_positive": 4,
+      "argmax_missed_double_failure": 3,
+      "argmax_double_failure_recall": 0.25,
+      "threshold_tp": 1,
+      "threshold_fn": 3,
+      "threshold_recall": 0.25,
+      "negative_rows": 8884,
+      "threshold_fp": 31,
+      "threshold_false_positive_rate": 0.003489419180549302,
+      "threshold_fp_true_class_counts": [
+        28,
+        0,
+        3,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        0,
+        2,
+        0
+      ]
+    },
+    "NONE+VP_OCCLUSION": {
+      "rows": 6981,
+      "class_counts": [
+        6736,
+        2,
+        224,
+        19
+      ],
+      "double_failure_positive": 19,
+      "argmax_missed_double_failure": 9,
+      "argmax_double_failure_recall": 0.5263157894736842,
+      "threshold_tp": 9,
+      "threshold_fn": 10,
+      "threshold_recall": 0.47368421052631576,
+      "negative_rows": 6962,
+      "threshold_fp": 24,
+      "threshold_false_positive_rate": 0.0034472852628555013,
+      "threshold_fp_true_class_counts": [
+        19,
+        0,
+        5,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        9,
+        0
+      ]
+    },
+    "NONE+VP_SCALE": {
+      "rows": 8850,
+      "class_counts": [
+        8780,
+        2,
+        59,
+        9
+      ],
+      "double_failure_positive": 9,
+      "argmax_missed_double_failure": 3,
+      "argmax_double_failure_recall": 0.6666666666666666,
+      "threshold_tp": 5,
+      "threshold_fn": 4,
+      "threshold_recall": 0.5555555555555556,
+      "negative_rows": 8841,
+      "threshold_fp": 28,
+      "threshold_false_positive_rate": 0.003167062549485352,
+      "threshold_fp_true_class_counts": [
+        28,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        2,
+        0,
+        1,
+        0
+      ]
+    },
+    "NONE+VP_BIAS": {
+      "rows": 7747,
+      "class_counts": [
+        7714,
+        0,
+        33,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 7747,
+      "threshold_fp": 2,
+      "threshold_false_positive_rate": 0.000258164450755131,
+      "threshold_fp_true_class_counts": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "NONE+VP_SHIFT": {
+      "rows": 8648,
+      "class_counts": [
+        8489,
+        2,
+        155,
+        2
+      ],
+      "double_failure_positive": 2,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.0,
+      "threshold_tp": 0,
+      "threshold_fn": 2,
+      "threshold_recall": 0.0,
+      "negative_rows": 8646,
+      "threshold_fp": 9,
+      "threshold_false_positive_rate": 0.001040943789035392,
+      "threshold_fp_true_class_counts": [
+        8,
+        0,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    "NONE+VP_COLLAPSE": {
+      "rows": 5925,
+      "class_counts": [
+        4723,
+        2,
+        1185,
+        15
+      ],
+      "double_failure_positive": 15,
+      "argmax_missed_double_failure": 1,
+      "argmax_double_failure_recall": 0.9333333333333333,
+      "threshold_tp": 14,
+      "threshold_fn": 1,
+      "threshold_recall": 0.9333333333333333,
+      "negative_rows": 5910,
+      "threshold_fp": 47,
+      "threshold_false_positive_rate": 0.007952622673434856,
+      "threshold_fp_true_class_counts": [
+        32,
+        2,
+        13,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        1,
+        0
+      ]
+    },
+    "FREEZE+NONE": {
+      "rows": 7268,
+      "class_counts": [
+        7224,
+        43,
+        1,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 7268,
+      "threshold_fp": 19,
+      "threshold_false_positive_rate": 0.0026141992294991746,
+      "threshold_fp_true_class_counts": [
+        13,
+        6,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "FREEZE+FREEZE": {
+      "rows": 1295,
+      "class_counts": [
+        1261,
+        14,
+        20,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 1295,
+      "threshold_fp": 20,
+      "threshold_false_positive_rate": 0.015444015444015444,
+      "threshold_fp_true_class_counts": [
+        8,
+        5,
+        7,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "FREEZE+DELAY": {
+      "rows": 1185,
+      "class_counts": [
+        1172,
+        7,
+        1,
+        5
+      ],
+      "double_failure_positive": 5,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.6,
+      "threshold_tp": 3,
+      "threshold_fn": 2,
+      "threshold_recall": 0.6,
+      "negative_rows": 1180,
+      "threshold_fp": 3,
+      "threshold_false_positive_rate": 0.002542372881355932,
+      "threshold_fp_true_class_counts": [
+        2,
+        0,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        2,
+        0,
+        0,
+        0
+      ]
+    },
+    "FREEZE+VP_OCCLUSION": {
+      "rows": 1201,
+      "class_counts": [
+        1138,
+        17,
+        32,
+        14
+      ],
+      "double_failure_positive": 14,
+      "argmax_missed_double_failure": 4,
+      "argmax_double_failure_recall": 0.7142857142857143,
+      "threshold_tp": 7,
+      "threshold_fn": 7,
+      "threshold_recall": 0.5,
+      "negative_rows": 1187,
+      "threshold_fp": 52,
+      "threshold_false_positive_rate": 0.04380791912384162,
+      "threshold_fp_true_class_counts": [
+        41,
+        9,
+        2,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        4,
+        0,
+        0,
+        0
+      ]
+    },
+    "FREEZE+VP_SCALE": {
+      "rows": 896,
+      "class_counts": [
+        887,
+        3,
+        6,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 896,
+      "threshold_fp": 8,
+      "threshold_false_positive_rate": 0.008928571428571428,
+      "threshold_fp_true_class_counts": [
+        8,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "FREEZE+VP_BIAS": {
+      "rows": 1172,
+      "class_counts": [
+        1142,
+        20,
+        8,
+        2
+      ],
+      "double_failure_positive": 2,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.0,
+      "threshold_tp": 0,
+      "threshold_fn": 2,
+      "threshold_recall": 0.0,
+      "negative_rows": 1170,
+      "threshold_fp": 12,
+      "threshold_false_positive_rate": 0.010256410256410256,
+      "threshold_fp_true_class_counts": [
+        8,
+        4,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        1,
+        1,
+        0
+      ]
+    },
+    "FREEZE+VP_SHIFT": {
+      "rows": 1041,
+      "class_counts": [
+        970,
+        12,
+        22,
+        37
+      ],
+      "double_failure_positive": 37,
+      "argmax_missed_double_failure": 8,
+      "argmax_double_failure_recall": 0.7837837837837838,
+      "threshold_tp": 28,
+      "threshold_fn": 9,
+      "threshold_recall": 0.7567567567567568,
+      "negative_rows": 1004,
+      "threshold_fp": 16,
+      "threshold_false_positive_rate": 0.01593625498007968,
+      "threshold_fp_true_class_counts": [
+        14,
+        0,
+        2,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        8,
+        0,
+        0,
+        0
+      ]
+    },
+    "FREEZE+VP_COLLAPSE": {
+      "rows": 999,
+      "class_counts": [
+        883,
+        4,
+        81,
+        31
+      ],
+      "double_failure_positive": 31,
+      "argmax_missed_double_failure": 5,
+      "argmax_double_failure_recall": 0.8387096774193549,
+      "threshold_tp": 26,
+      "threshold_fn": 5,
+      "threshold_recall": 0.8387096774193549,
+      "negative_rows": 968,
+      "threshold_fp": 7,
+      "threshold_false_positive_rate": 0.007231404958677686,
+      "threshold_fp_true_class_counts": [
+        6,
+        1,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        5,
+        0
+      ]
+    },
+    "DELAY+NONE": {
+      "rows": 6574,
+      "class_counts": [
+        6547,
+        23,
+        3,
+        1
+      ],
+      "double_failure_positive": 1,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": 1.0,
+      "threshold_tp": 1,
+      "threshold_fn": 0,
+      "threshold_recall": 1.0,
+      "negative_rows": 6573,
+      "threshold_fp": 5,
+      "threshold_false_positive_rate": 0.0007606876616461281,
+      "threshold_fp_true_class_counts": [
+        5,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "DELAY+FREEZE": {
+      "rows": 1139,
+      "class_counts": [
+        1109,
+        0,
+        26,
+        4
+      ],
+      "double_failure_positive": 4,
+      "argmax_missed_double_failure": 1,
+      "argmax_double_failure_recall": 0.75,
+      "threshold_tp": 3,
+      "threshold_fn": 1,
+      "threshold_recall": 0.75,
+      "negative_rows": 1135,
+      "threshold_fp": 3,
+      "threshold_false_positive_rate": 0.0026431718061674008,
+      "threshold_fp_true_class_counts": [
+        2,
+        0,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        1,
+        0
+      ]
+    },
+    "DELAY+DELAY": {
+      "rows": 1598,
+      "class_counts": [
+        1598,
+        0,
+        0,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 1598,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "DELAY+VP_OCCLUSION": {
+      "rows": 1345,
+      "class_counts": [
+        1301,
+        2,
+        25,
+        17
+      ],
+      "double_failure_positive": 17,
+      "argmax_missed_double_failure": 11,
+      "argmax_double_failure_recall": 0.35294117647058826,
+      "threshold_tp": 6,
+      "threshold_fn": 11,
+      "threshold_recall": 0.35294117647058826,
+      "negative_rows": 1328,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        8,
+        0,
+        3,
+        0
+      ]
+    },
+    "DELAY+VP_SCALE": {
+      "rows": 1368,
+      "class_counts": [
+        1345,
+        0,
+        9,
+        14
+      ],
+      "double_failure_positive": 14,
+      "argmax_missed_double_failure": 4,
+      "argmax_double_failure_recall": 0.7142857142857143,
+      "threshold_tp": 10,
+      "threshold_fn": 4,
+      "threshold_recall": 0.7142857142857143,
+      "negative_rows": 1354,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        4,
+        0
+      ]
+    },
+    "DELAY+VP_BIAS": {
+      "rows": 1287,
+      "class_counts": [
+        1277,
+        0,
+        2,
+        8
+      ],
+      "double_failure_positive": 8,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.75,
+      "threshold_tp": 6,
+      "threshold_fn": 2,
+      "threshold_recall": 0.75,
+      "negative_rows": 1279,
+      "threshold_fp": 1,
+      "threshold_false_positive_rate": 0.0007818608287724785,
+      "threshold_fp_true_class_counts": [
+        1,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        0,
+        1,
+        0
+      ]
+    },
+    "DELAY+VP_SHIFT": {
+      "rows": 1247,
+      "class_counts": [
+        1231,
+        6,
+        7,
+        3
+      ],
+      "double_failure_positive": 3,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.3333333333333333,
+      "threshold_tp": 1,
+      "threshold_fn": 2,
+      "threshold_recall": 0.3333333333333333,
+      "negative_rows": 1244,
+      "threshold_fp": 8,
+      "threshold_false_positive_rate": 0.006430868167202572,
+      "threshold_fp_true_class_counts": [
+        3,
+        5,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    "DELAY+VP_COLLAPSE": {
+      "rows": 940,
+      "class_counts": [
+        688,
+        1,
+        188,
+        63
+      ],
+      "double_failure_positive": 63,
+      "argmax_missed_double_failure": 19,
+      "argmax_double_failure_recall": 0.6984126984126984,
+      "threshold_tp": 44,
+      "threshold_fn": 19,
+      "threshold_recall": 0.6984126984126984,
+      "negative_rows": 877,
+      "threshold_fp": 4,
+      "threshold_false_positive_rate": 0.004561003420752566,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        4,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        1,
+        17,
+        0
+      ]
+    },
+    "LP_RANDOM_DROPOUT+NONE": {
+      "rows": 5193,
+      "class_counts": [
+        4136,
+        1057,
+        0,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 5193,
+      "threshold_fp": 29,
+      "threshold_false_positive_rate": 0.005584440593106105,
+      "threshold_fp_true_class_counts": [
+        15,
+        14,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_RANDOM_DROPOUT+FREEZE": {
+      "rows": 659,
+      "class_counts": [
+        400,
+        222,
+        6,
+        31
+      ],
+      "double_failure_positive": 31,
+      "argmax_missed_double_failure": 8,
+      "argmax_double_failure_recall": 0.7419354838709677,
+      "threshold_tp": 23,
+      "threshold_fn": 8,
+      "threshold_recall": 0.7419354838709677,
+      "negative_rows": 628,
+      "threshold_fp": 8,
+      "threshold_false_positive_rate": 0.012738853503184714,
+      "threshold_fp_true_class_counts": [
+        1,
+        5,
+        2,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        4,
+        4,
+        0,
+        0
+      ]
+    },
+    "LP_RANDOM_DROPOUT+DELAY": {
+      "rows": 800,
+      "class_counts": [
+        597,
+        185,
+        1,
+        17
+      ],
+      "double_failure_positive": 17,
+      "argmax_missed_double_failure": 5,
+      "argmax_double_failure_recall": 0.7058823529411765,
+      "threshold_tp": 12,
+      "threshold_fn": 5,
+      "threshold_recall": 0.7058823529411765,
+      "negative_rows": 783,
+      "threshold_fp": 7,
+      "threshold_false_positive_rate": 0.008939974457215836,
+      "threshold_fp_true_class_counts": [
+        0,
+        6,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        5,
+        0,
+        0
+      ]
+    },
+    "LP_RANDOM_DROPOUT+VP_OCCLUSION": {
+      "rows": 578,
+      "class_counts": [
+        311,
+        202,
+        12,
+        53
+      ],
+      "double_failure_positive": 53,
+      "argmax_missed_double_failure": 19,
+      "argmax_double_failure_recall": 0.6415094339622641,
+      "threshold_tp": 35,
+      "threshold_fn": 18,
+      "threshold_recall": 0.660377358490566,
+      "negative_rows": 525,
+      "threshold_fp": 28,
+      "threshold_false_positive_rate": 0.05333333333333334,
+      "threshold_fp_true_class_counts": [
+        4,
+        20,
+        4,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        3,
+        16,
+        0,
+        0
+      ]
+    },
+    "LP_RANDOM_DROPOUT+VP_SCALE": {
+      "rows": 1002,
+      "class_counts": [
+        834,
+        148,
+        1,
+        19
+      ],
+      "double_failure_positive": 19,
+      "argmax_missed_double_failure": 7,
+      "argmax_double_failure_recall": 0.631578947368421,
+      "threshold_tp": 12,
+      "threshold_fn": 7,
+      "threshold_recall": 0.631578947368421,
+      "negative_rows": 983,
+      "threshold_fp": 14,
+      "threshold_false_positive_rate": 0.014242115971515769,
+      "threshold_fp_true_class_counts": [
+        1,
+        13,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        7,
+        0,
+        0
+      ]
+    },
+    "LP_RANDOM_DROPOUT+VP_BIAS": {
+      "rows": 990,
+      "class_counts": [
+        817,
+        159,
+        0,
+        14
+      ],
+      "double_failure_positive": 14,
+      "argmax_missed_double_failure": 6,
+      "argmax_double_failure_recall": 0.5714285714285714,
+      "threshold_tp": 8,
+      "threshold_fn": 6,
+      "threshold_recall": 0.5714285714285714,
+      "negative_rows": 976,
+      "threshold_fp": 4,
+      "threshold_false_positive_rate": 0.004098360655737705,
+      "threshold_fp_true_class_counts": [
+        0,
+        4,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        6,
+        0,
+        0
+      ]
+    },
+    "LP_RANDOM_DROPOUT+VP_SHIFT": {
+      "rows": 704,
+      "class_counts": [
+        482,
+        180,
+        11,
+        31
+      ],
+      "double_failure_positive": 31,
+      "argmax_missed_double_failure": 5,
+      "argmax_double_failure_recall": 0.8387096774193549,
+      "threshold_tp": 26,
+      "threshold_fn": 5,
+      "threshold_recall": 0.8387096774193549,
+      "negative_rows": 673,
+      "threshold_fp": 68,
+      "threshold_false_positive_rate": 0.10104011887072809,
+      "threshold_fp_true_class_counts": [
+        41,
+        27,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        2,
+        3,
+        0,
+        0
+      ]
+    },
+    "LP_RANDOM_DROPOUT+VP_COLLAPSE": {
+      "rows": 751,
+      "class_counts": [
+        364,
+        162,
+        127,
+        98
+      ],
+      "double_failure_positive": 98,
+      "argmax_missed_double_failure": 21,
+      "argmax_double_failure_recall": 0.7857142857142857,
+      "threshold_tp": 77,
+      "threshold_fn": 21,
+      "threshold_recall": 0.7857142857142857,
+      "negative_rows": 653,
+      "threshold_fp": 24,
+      "threshold_false_positive_rate": 0.036753445635528334,
+      "threshold_fp_true_class_counts": [
+        3,
+        7,
+        14,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        9,
+        12,
+        0
+      ]
+    },
+    "LP_BLOCK_DROPOUT+NONE": {
+      "rows": 3836,
+      "class_counts": [
+        2465,
+        1355,
+        1,
+        15
+      ],
+      "double_failure_positive": 15,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.8666666666666667,
+      "threshold_tp": 13,
+      "threshold_fn": 2,
+      "threshold_recall": 0.8666666666666667,
+      "negative_rows": 3821,
+      "threshold_fp": 37,
+      "threshold_false_positive_rate": 0.009683328971473436,
+      "threshold_fp_true_class_counts": [
+        3,
+        34,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        1,
+        1,
+        0
+      ]
+    },
+    "LP_BLOCK_DROPOUT+FREEZE": {
+      "rows": 657,
+      "class_counts": [
+        375,
+        242,
+        8,
+        32
+      ],
+      "double_failure_positive": 32,
+      "argmax_missed_double_failure": 3,
+      "argmax_double_failure_recall": 0.90625,
+      "threshold_tp": 30,
+      "threshold_fn": 2,
+      "threshold_recall": 0.9375,
+      "negative_rows": 625,
+      "threshold_fp": 33,
+      "threshold_false_positive_rate": 0.0528,
+      "threshold_fp_true_class_counts": [
+        12,
+        15,
+        6,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        3,
+        0,
+        0
+      ]
+    },
+    "LP_BLOCK_DROPOUT+DELAY": {
+      "rows": 1004,
+      "class_counts": [
+        632,
+        349,
+        0,
+        23
+      ],
+      "double_failure_positive": 23,
+      "argmax_missed_double_failure": 9,
+      "argmax_double_failure_recall": 0.6086956521739131,
+      "threshold_tp": 15,
+      "threshold_fn": 8,
+      "threshold_recall": 0.6521739130434783,
+      "negative_rows": 981,
+      "threshold_fp": 11,
+      "threshold_false_positive_rate": 0.011213047910295617,
+      "threshold_fp_true_class_counts": [
+        2,
+        9,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        9,
+        0,
+        0
+      ]
+    },
+    "LP_BLOCK_DROPOUT+VP_OCCLUSION": {
+      "rows": 781,
+      "class_counts": [
+        464,
+        288,
+        3,
+        26
+      ],
+      "double_failure_positive": 26,
+      "argmax_missed_double_failure": 7,
+      "argmax_double_failure_recall": 0.7307692307692307,
+      "threshold_tp": 19,
+      "threshold_fn": 7,
+      "threshold_recall": 0.7307692307692307,
+      "negative_rows": 755,
+      "threshold_fp": 66,
+      "threshold_false_positive_rate": 0.08741721854304636,
+      "threshold_fp_true_class_counts": [
+        34,
+        29,
+        3,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        6,
+        0,
+        0
+      ]
+    },
+    "LP_BLOCK_DROPOUT+VP_SCALE": {
+      "rows": 839,
+      "class_counts": [
+        594,
+        223,
+        3,
+        19
+      ],
+      "double_failure_positive": 19,
+      "argmax_missed_double_failure": 4,
+      "argmax_double_failure_recall": 0.7894736842105263,
+      "threshold_tp": 15,
+      "threshold_fn": 4,
+      "threshold_recall": 0.7894736842105263,
+      "negative_rows": 820,
+      "threshold_fp": 9,
+      "threshold_false_positive_rate": 0.01097560975609756,
+      "threshold_fp_true_class_counts": [
+        1,
+        8,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        4,
+        0,
+        0
+      ]
+    },
+    "LP_BLOCK_DROPOUT+VP_BIAS": {
+      "rows": 907,
+      "class_counts": [
+        503,
+        360,
+        4,
+        40
+      ],
+      "double_failure_positive": 40,
+      "argmax_missed_double_failure": 15,
+      "argmax_double_failure_recall": 0.625,
+      "threshold_tp": 26,
+      "threshold_fn": 14,
+      "threshold_recall": 0.65,
+      "negative_rows": 867,
+      "threshold_fp": 12,
+      "threshold_false_positive_rate": 0.01384083044982699,
+      "threshold_fp_true_class_counts": [
+        0,
+        12,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        2,
+        13,
+        0,
+        0
+      ]
+    },
+    "LP_BLOCK_DROPOUT+VP_SHIFT": {
+      "rows": 565,
+      "class_counts": [
+        285,
+        240,
+        4,
+        36
+      ],
+      "double_failure_positive": 36,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.9444444444444444,
+      "threshold_tp": 35,
+      "threshold_fn": 1,
+      "threshold_recall": 0.9722222222222222,
+      "negative_rows": 529,
+      "threshold_fp": 34,
+      "threshold_false_positive_rate": 0.06427221172022685,
+      "threshold_fp_true_class_counts": [
+        5,
+        28,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        2,
+        0,
+        0
+      ]
+    },
+    "LP_BLOCK_DROPOUT+VP_COLLAPSE": {
+      "rows": 720,
+      "class_counts": [
+        243,
+        248,
+        48,
+        181
+      ],
+      "double_failure_positive": 181,
+      "argmax_missed_double_failure": 32,
+      "argmax_double_failure_recall": 0.8232044198895028,
+      "threshold_tp": 153,
+      "threshold_fn": 28,
+      "threshold_recall": 0.8453038674033149,
+      "negative_rows": 539,
+      "threshold_fp": 46,
+      "threshold_false_positive_rate": 0.08534322820037106,
+      "threshold_fp_true_class_counts": [
+        8,
+        29,
+        9,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        23,
+        8,
+        0
+      ]
+    },
+    "LP_HEIGHT_BIAS+NONE": {
+      "rows": 6439,
+      "class_counts": [
+        6429,
+        9,
+        1,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 6439,
+      "threshold_fp": 23,
+      "threshold_false_positive_rate": 0.003571983227209194,
+      "threshold_fp_true_class_counts": [
+        23,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_HEIGHT_BIAS+FREEZE": {
+      "rows": 948,
+      "class_counts": [
+        926,
+        0,
+        13,
+        9
+      ],
+      "double_failure_positive": 9,
+      "argmax_missed_double_failure": 3,
+      "argmax_double_failure_recall": 0.6666666666666666,
+      "threshold_tp": 6,
+      "threshold_fn": 3,
+      "threshold_recall": 0.6666666666666666,
+      "negative_rows": 939,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        3,
+        0
+      ]
+    },
+    "LP_HEIGHT_BIAS+DELAY": {
+      "rows": 1511,
+      "class_counts": [
+        1511,
+        0,
+        0,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 1511,
+      "threshold_fp": 1,
+      "threshold_false_positive_rate": 0.0006618133686300463,
+      "threshold_fp_true_class_counts": [
+        1,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_HEIGHT_BIAS+VP_OCCLUSION": {
+      "rows": 736,
+      "class_counts": [
+        726,
+        2,
+        4,
+        4
+      ],
+      "double_failure_positive": 4,
+      "argmax_missed_double_failure": 1,
+      "argmax_double_failure_recall": 0.75,
+      "threshold_tp": 2,
+      "threshold_fn": 2,
+      "threshold_recall": 0.5,
+      "negative_rows": 732,
+      "threshold_fp": 3,
+      "threshold_false_positive_rate": 0.004098360655737705,
+      "threshold_fp_true_class_counts": [
+        3,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_HEIGHT_BIAS+VP_SCALE": {
+      "rows": 1322,
+      "class_counts": [
+        1294,
+        3,
+        16,
+        9
+      ],
+      "double_failure_positive": 9,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.7777777777777778,
+      "threshold_tp": 7,
+      "threshold_fn": 2,
+      "threshold_recall": 0.7777777777777778,
+      "negative_rows": 1313,
+      "threshold_fp": 3,
+      "threshold_false_positive_rate": 0.002284843869002285,
+      "threshold_fp_true_class_counts": [
+        3,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    "LP_HEIGHT_BIAS+VP_BIAS": {
+      "rows": 1378,
+      "class_counts": [
+        1366,
+        3,
+        3,
+        6
+      ],
+      "double_failure_positive": 6,
+      "argmax_missed_double_failure": 5,
+      "argmax_double_failure_recall": 0.16666666666666666,
+      "threshold_tp": 1,
+      "threshold_fn": 5,
+      "threshold_recall": 0.16666666666666666,
+      "negative_rows": 1372,
+      "threshold_fp": 3,
+      "threshold_false_positive_rate": 0.002186588921282799,
+      "threshold_fp_true_class_counts": [
+        3,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        5,
+        0
+      ]
+    },
+    "LP_HEIGHT_BIAS+VP_SHIFT": {
+      "rows": 1412,
+      "class_counts": [
+        1392,
+        9,
+        11,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 1412,
+      "threshold_fp": 25,
+      "threshold_false_positive_rate": 0.017705382436260624,
+      "threshold_fp_true_class_counts": [
+        19,
+        6,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_HEIGHT_BIAS+VP_COLLAPSE": {
+      "rows": 1131,
+      "class_counts": [
+        834,
+        11,
+        239,
+        47
+      ],
+      "double_failure_positive": 47,
+      "argmax_missed_double_failure": 6,
+      "argmax_double_failure_recall": 0.8723404255319149,
+      "threshold_tp": 41,
+      "threshold_fn": 6,
+      "threshold_recall": 0.8723404255319149,
+      "negative_rows": 1084,
+      "threshold_fp": 13,
+      "threshold_false_positive_rate": 0.011992619926199263,
+      "threshold_fp_true_class_counts": [
+        5,
+        2,
+        6,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        6,
+        0
+      ]
+    },
+    "LP_REGISTRATION+NONE": {
+      "rows": 5921,
+      "class_counts": [
+        5904,
+        16,
+        0,
+        1
+      ],
+      "double_failure_positive": 1,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": 1.0,
+      "threshold_tp": 1,
+      "threshold_fn": 0,
+      "threshold_recall": 1.0,
+      "negative_rows": 5920,
+      "threshold_fp": 9,
+      "threshold_false_positive_rate": 0.0015202702702702704,
+      "threshold_fp_true_class_counts": [
+        8,
+        1,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_REGISTRATION+FREEZE": {
+      "rows": 947,
+      "class_counts": [
+        939,
+        4,
+        4,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 947,
+      "threshold_fp": 69,
+      "threshold_false_positive_rate": 0.07286166842661035,
+      "threshold_fp_true_class_counts": [
+        61,
+        4,
+        4,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_REGISTRATION+DELAY": {
+      "rows": 1461,
+      "class_counts": [
+        1460,
+        0,
+        0,
+        1
+      ],
+      "double_failure_positive": 1,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": 1.0,
+      "threshold_tp": 1,
+      "threshold_fn": 0,
+      "threshold_recall": 1.0,
+      "negative_rows": 1460,
+      "threshold_fp": 4,
+      "threshold_false_positive_rate": 0.0027397260273972603,
+      "threshold_fp_true_class_counts": [
+        4,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_REGISTRATION+VP_OCCLUSION": {
+      "rows": 1166,
+      "class_counts": [
+        1116,
+        2,
+        31,
+        17
+      ],
+      "double_failure_positive": 17,
+      "argmax_missed_double_failure": 4,
+      "argmax_double_failure_recall": 0.7647058823529411,
+      "threshold_tp": 13,
+      "threshold_fn": 4,
+      "threshold_recall": 0.7647058823529411,
+      "negative_rows": 1149,
+      "threshold_fp": 15,
+      "threshold_false_positive_rate": 0.013054830287206266,
+      "threshold_fp_true_class_counts": [
+        12,
+        0,
+        3,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        4,
+        0
+      ]
+    },
+    "LP_REGISTRATION+VP_SCALE": {
+      "rows": 1041,
+      "class_counts": [
+        1030,
+        1,
+        6,
+        4
+      ],
+      "double_failure_positive": 4,
+      "argmax_missed_double_failure": 1,
+      "argmax_double_failure_recall": 0.75,
+      "threshold_tp": 3,
+      "threshold_fn": 1,
+      "threshold_recall": 0.75,
+      "negative_rows": 1037,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_REGISTRATION+VP_BIAS": {
+      "rows": 975,
+      "class_counts": [
+        943,
+        2,
+        9,
+        21
+      ],
+      "double_failure_positive": 21,
+      "argmax_missed_double_failure": 1,
+      "argmax_double_failure_recall": 0.9523809523809523,
+      "threshold_tp": 20,
+      "threshold_fn": 1,
+      "threshold_recall": 0.9523809523809523,
+      "negative_rows": 954,
+      "threshold_fp": 8,
+      "threshold_false_positive_rate": 0.008385744234800839,
+      "threshold_fp_true_class_counts": [
+        3,
+        2,
+        3,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_REGISTRATION+VP_SHIFT": {
+      "rows": 1146,
+      "class_counts": [
+        1108,
+        5,
+        21,
+        12
+      ],
+      "double_failure_positive": 12,
+      "argmax_missed_double_failure": 3,
+      "argmax_double_failure_recall": 0.75,
+      "threshold_tp": 9,
+      "threshold_fn": 3,
+      "threshold_recall": 0.75,
+      "negative_rows": 1134,
+      "threshold_fp": 51,
+      "threshold_false_positive_rate": 0.04497354497354497,
+      "threshold_fp_true_class_counts": [
+        48,
+        2,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        3,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_REGISTRATION+VP_COLLAPSE": {
+      "rows": 1062,
+      "class_counts": [
+        874,
+        3,
+        108,
+        77
+      ],
+      "double_failure_positive": 77,
+      "argmax_missed_double_failure": 13,
+      "argmax_double_failure_recall": 0.8311688311688312,
+      "threshold_tp": 64,
+      "threshold_fn": 13,
+      "threshold_recall": 0.8311688311688312,
+      "negative_rows": 985,
+      "threshold_fp": 16,
+      "threshold_false_positive_rate": 0.016243654822335026,
+      "threshold_fp_true_class_counts": [
+        1,
+        0,
+        15,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        6,
+        1,
+        6,
+        0
+      ]
+    },
+    "LP_DRIFT+NONE": {
+      "rows": 6828,
+      "class_counts": [
+        6821,
+        3,
+        3,
+        1
+      ],
+      "double_failure_positive": 1,
+      "argmax_missed_double_failure": 1,
+      "argmax_double_failure_recall": 0.0,
+      "threshold_tp": 0,
+      "threshold_fn": 1,
+      "threshold_recall": 0.0,
+      "negative_rows": 6827,
+      "threshold_fp": 11,
+      "threshold_false_positive_rate": 0.0016112494507104144,
+      "threshold_fp_true_class_counts": [
+        11,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_DRIFT+FREEZE": {
+      "rows": 1055,
+      "class_counts": [
+        1042,
+        0,
+        12,
+        1
+      ],
+      "double_failure_positive": 1,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": 1.0,
+      "threshold_tp": 1,
+      "threshold_fn": 0,
+      "threshold_recall": 1.0,
+      "negative_rows": 1054,
+      "threshold_fp": 7,
+      "threshold_false_positive_rate": 0.006641366223908918,
+      "threshold_fp_true_class_counts": [
+        4,
+        0,
+        3,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_DRIFT+DELAY": {
+      "rows": 1642,
+      "class_counts": [
+        1640,
+        0,
+        2,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 1642,
+      "threshold_fp": 6,
+      "threshold_false_positive_rate": 0.0036540803897685747,
+      "threshold_fp_true_class_counts": [
+        6,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_DRIFT+VP_OCCLUSION": {
+      "rows": 1220,
+      "class_counts": [
+        1199,
+        1,
+        11,
+        9
+      ],
+      "double_failure_positive": 9,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.7777777777777778,
+      "threshold_tp": 7,
+      "threshold_fn": 2,
+      "threshold_recall": 0.7777777777777778,
+      "negative_rows": 1211,
+      "threshold_fp": 4,
+      "threshold_false_positive_rate": 0.0033030553261767133,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        4,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        2,
+        0
+      ]
+    },
+    "LP_DRIFT+VP_SCALE": {
+      "rows": 1401,
+      "class_counts": [
+        1392,
+        4,
+        4,
+        1
+      ],
+      "double_failure_positive": 1,
+      "argmax_missed_double_failure": 1,
+      "argmax_double_failure_recall": 0.0,
+      "threshold_tp": 0,
+      "threshold_fn": 1,
+      "threshold_recall": 0.0,
+      "negative_rows": 1400,
+      "threshold_fp": 8,
+      "threshold_false_positive_rate": 0.005714285714285714,
+      "threshold_fp_true_class_counts": [
+        7,
+        1,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_DRIFT+VP_BIAS": {
+      "rows": 1128,
+      "class_counts": [
+        1111,
+        1,
+        13,
+        3
+      ],
+      "double_failure_positive": 3,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": 1.0,
+      "threshold_tp": 3,
+      "threshold_fn": 0,
+      "threshold_recall": 1.0,
+      "negative_rows": 1125,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_DRIFT+VP_SHIFT": {
+      "rows": 1307,
+      "class_counts": [
+        1262,
+        3,
+        26,
+        16
+      ],
+      "double_failure_positive": 16,
+      "argmax_missed_double_failure": 2,
+      "argmax_double_failure_recall": 0.875,
+      "threshold_tp": 13,
+      "threshold_fn": 3,
+      "threshold_recall": 0.8125,
+      "negative_rows": 1291,
+      "threshold_fp": 10,
+      "threshold_false_positive_rate": 0.0077459333849728895,
+      "threshold_fp_true_class_counts": [
+        7,
+        2,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        0,
+        1,
+        0
+      ]
+    },
+    "LP_DRIFT+VP_COLLAPSE": {
+      "rows": 1007,
+      "class_counts": [
+        765,
+        0,
+        178,
+        64
+      ],
+      "double_failure_positive": 64,
+      "argmax_missed_double_failure": 24,
+      "argmax_double_failure_recall": 0.625,
+      "threshold_tp": 40,
+      "threshold_fn": 24,
+      "threshold_recall": 0.625,
+      "negative_rows": 943,
+      "threshold_fp": 6,
+      "threshold_false_positive_rate": 0.006362672322375398,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        6,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        24,
+        0
+      ]
+    },
+    "LP_COLLAPSE+NONE": {
+      "rows": 4621,
+      "class_counts": [
+        2408,
+        2211,
+        1,
+        1
+      ],
+      "double_failure_positive": 1,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": 1.0,
+      "threshold_tp": 1,
+      "threshold_fn": 0,
+      "threshold_recall": 1.0,
+      "negative_rows": 4620,
+      "threshold_fp": 7,
+      "threshold_false_positive_rate": 0.0015151515151515152,
+      "threshold_fp_true_class_counts": [
+        0,
+        7,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "LP_COLLAPSE+FREEZE": {
+      "rows": 641,
+      "class_counts": [
+        285,
+        330,
+        1,
+        25
+      ],
+      "double_failure_positive": 25,
+      "argmax_missed_double_failure": 10,
+      "argmax_double_failure_recall": 0.6,
+      "threshold_tp": 17,
+      "threshold_fn": 8,
+      "threshold_recall": 0.68,
+      "negative_rows": 616,
+      "threshold_fp": 28,
+      "threshold_false_positive_rate": 0.045454545454545456,
+      "threshold_fp_true_class_counts": [
+        3,
+        25,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        10,
+        0,
+        0
+      ]
+    },
+    "LP_COLLAPSE+DELAY": {
+      "rows": 588,
+      "class_counts": [
+        287,
+        281,
+        0,
+        20
+      ],
+      "double_failure_positive": 20,
+      "argmax_missed_double_failure": 11,
+      "argmax_double_failure_recall": 0.45,
+      "threshold_tp": 9,
+      "threshold_fn": 11,
+      "threshold_recall": 0.45,
+      "negative_rows": 568,
+      "threshold_fp": 9,
+      "threshold_false_positive_rate": 0.01584507042253521,
+      "threshold_fp_true_class_counts": [
+        1,
+        8,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        11,
+        0,
+        0
+      ]
+    },
+    "LP_COLLAPSE+VP_OCCLUSION": {
+      "rows": 658,
+      "class_counts": [
+        314,
+        308,
+        1,
+        35
+      ],
+      "double_failure_positive": 35,
+      "argmax_missed_double_failure": 17,
+      "argmax_double_failure_recall": 0.5142857142857142,
+      "threshold_tp": 20,
+      "threshold_fn": 15,
+      "threshold_recall": 0.5714285714285714,
+      "negative_rows": 623,
+      "threshold_fp": 12,
+      "threshold_false_positive_rate": 0.019261637239165328,
+      "threshold_fp_true_class_counts": [
+        1,
+        11,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        17,
+        0,
+        0
+      ]
+    },
+    "LP_COLLAPSE+VP_SCALE": {
+      "rows": 1180,
+      "class_counts": [
+        678,
+        464,
+        1,
+        37
+      ],
+      "double_failure_positive": 37,
+      "argmax_missed_double_failure": 16,
+      "argmax_double_failure_recall": 0.5675675675675675,
+      "threshold_tp": 22,
+      "threshold_fn": 15,
+      "threshold_recall": 0.5945945945945946,
+      "negative_rows": 1143,
+      "threshold_fp": 9,
+      "threshold_false_positive_rate": 0.007874015748031496,
+      "threshold_fp_true_class_counts": [
+        1,
+        8,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        16,
+        0,
+        0
+      ]
+    },
+    "LP_COLLAPSE+VP_BIAS": {
+      "rows": 608,
+      "class_counts": [
+        303,
+        293,
+        0,
+        12
+      ],
+      "double_failure_positive": 12,
+      "argmax_missed_double_failure": 6,
+      "argmax_double_failure_recall": 0.5,
+      "threshold_tp": 6,
+      "threshold_fn": 6,
+      "threshold_recall": 0.5,
+      "negative_rows": 596,
+      "threshold_fp": 7,
+      "threshold_false_positive_rate": 0.01174496644295302,
+      "threshold_fp_true_class_counts": [
+        0,
+        7,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        6,
+        0,
+        0
+      ]
+    },
+    "LP_COLLAPSE+VP_SHIFT": {
+      "rows": 634,
+      "class_counts": [
+        282,
+        312,
+        0,
+        40
+      ],
+      "double_failure_positive": 40,
+      "argmax_missed_double_failure": 26,
+      "argmax_double_failure_recall": 0.35,
+      "threshold_tp": 14,
+      "threshold_fn": 26,
+      "threshold_recall": 0.35,
+      "negative_rows": 594,
+      "threshold_fp": 26,
+      "threshold_false_positive_rate": 0.04377104377104377,
+      "threshold_fp_true_class_counts": [
+        1,
+        25,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        26,
+        0,
+        0
+      ]
+    },
+    "LP_COLLAPSE+VP_COLLAPSE": {
+      "rows": 638,
+      "class_counts": [
+        204,
+        201,
+        10,
+        223
+      ],
+      "double_failure_positive": 223,
+      "argmax_missed_double_failure": 56,
+      "argmax_double_failure_recall": 0.7488789237668162,
+      "threshold_tp": 172,
+      "threshold_fn": 51,
+      "threshold_recall": 0.7713004484304933,
+      "negative_rows": 415,
+      "threshold_fp": 39,
+      "threshold_false_positive_rate": 0.09397590361445783,
+      "threshold_fp_true_class_counts": [
+        1,
+        34,
+        4,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        2,
+        52,
+        2,
+        0
+      ]
+    }
+  },
+  "by_active_fault_source": {
+    "none": {
+      "rows": 62710,
+      "class_counts": [
+        62429,
+        51,
+        74,
+        156
+      ],
+      "double_failure_positive": 156,
+      "argmax_missed_double_failure": 61,
+      "argmax_double_failure_recall": 0.6089743589743589,
+      "threshold_tp": 89,
+      "threshold_fn": 67,
+      "threshold_recall": 0.5705128205128205,
+      "negative_rows": 62554,
+      "threshold_fp": 40,
+      "threshold_false_positive_rate": 0.000639447517345014,
+      "threshold_fp_true_class_counts": [
+        34,
+        4,
+        2,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        25,
+        2,
+        34,
+        0
+      ]
+    },
+    "lp_only": {
+      "rows": 48921,
+      "class_counts": [
+        43376,
+        5545,
+        0,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 48921,
+      "threshold_fp": 185,
+      "threshold_false_positive_rate": 0.003781607080803745,
+      "threshold_fp_true_class_counts": [
+        96,
+        89,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "vp_only": {
+      "rows": 51844,
+      "class_counts": [
+        49921,
+        0,
+        1923,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 51844,
+      "threshold_fp": 152,
+      "threshold_false_positive_rate": 0.00293187254069902,
+      "threshold_fp_true_class_counts": [
+        124,
+        0,
+        28,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "dual": {
+      "rows": 41275,
+      "class_counts": [
+        33822,
+        4696,
+        1275,
+        1482
+      ],
+      "double_failure_positive": 1482,
+      "argmax_missed_double_failure": 408,
+      "argmax_double_failure_recall": 0.7246963562753036,
+      "threshold_tp": 1088,
+      "threshold_fn": 394,
+      "threshold_recall": 0.7341430499325237,
+      "negative_rows": 39793,
+      "threshold_fp": 800,
+      "threshold_false_positive_rate": 0.02010403839871334,
+      "threshold_fp_true_class_counts": [
+        349,
+        344,
+        107,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        52,
+        250,
+        106,
+        0
+      ]
+    }
+  },
+  "error_event_concentration": {
+    "event_count": 6800,
+    "fp_event_count": 388,
+    "fn_event_count": 203,
+    "top10_fp_sum": 242,
+    "top10_fn_sum": 68
+  },
+  "top_fp_events": [
+    {
+      "event_identity": [
+        497,
+        0,
+        1
+      ],
+      "group_ids": [
+        "terrain_seed42:type19:level5"
+      ],
+      "fault_pairs": [
+        [
+          11,
+          1
+        ]
+      ],
+      "rows": 64,
+      "class_counts": [
+        59,
+        4,
+        1,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 64,
+      "threshold_fp": 41,
+      "threshold_false_positive_rate": 0.640625,
+      "threshold_fp_true_class_counts": [
+        36,
+        4,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        497,
+        0,
+        3
+      ],
+      "group_ids": [
+        "terrain_seed42:type19:level5"
+      ],
+      "fault_pairs": [
+        [
+          0,
+          7
+        ]
+      ],
+      "rows": 37,
+      "class_counts": [
+        30,
+        2,
+        1,
+        4
+      ],
+      "double_failure_positive": 4,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": 1.0,
+      "threshold_tp": 4,
+      "threshold_fn": 0,
+      "threshold_recall": 1.0,
+      "negative_rows": 33,
+      "threshold_fp": 33,
+      "threshold_false_positive_rate": 1.0,
+      "threshold_fp_true_class_counts": [
+        30,
+        2,
+        1,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        1296,
+        1,
+        1
+      ],
+      "group_ids": [
+        "terrain_seed42:type17:level3"
+      ],
+      "fault_pairs": [
+        [
+          0,
+          2
+        ]
+      ],
+      "rows": 46,
+      "class_counts": [
+        43,
+        0,
+        3,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 46,
+      "threshold_fp": 31,
+      "threshold_false_positive_rate": 0.6739130434782609,
+      "threshold_fp_true_class_counts": [
+        28,
+        0,
+        3,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        174,
+        4,
+        2
+      ],
+      "group_ids": [
+        "terrain_seed42:type18:level6"
+      ],
+      "fault_pairs": [
+        [
+          11,
+          1
+        ]
+      ],
+      "rows": 38,
+      "class_counts": [
+        35,
+        0,
+        3,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 38,
+      "threshold_fp": 21,
+      "threshold_false_positive_rate": 0.5526315789473685,
+      "threshold_fp_true_class_counts": [
+        18,
+        0,
+        3,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        497,
+        0,
+        2
+      ],
+      "group_ids": [
+        "terrain_seed42:type19:level5"
+      ],
+      "fault_pairs": [
+        [
+          0,
+          4
+        ]
+      ],
+      "rows": 21,
+      "class_counts": [
+        21,
+        0,
+        0,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 21,
+      "threshold_fp": 21,
+      "threshold_false_positive_rate": 1.0,
+      "threshold_fp_true_class_counts": [
+        21,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        2168,
+        3,
+        1
+      ],
+      "group_ids": [
+        "terrain_seed42:type18:level6"
+      ],
+      "fault_pairs": [
+        [
+          1,
+          3
+        ]
+      ],
+      "rows": 30,
+      "class_counts": [
+        26,
+        4,
+        0,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 30,
+      "threshold_fp": 21,
+      "threshold_false_positive_rate": 0.7,
+      "threshold_fp_true_class_counts": [
+        17,
+        4,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        3684,
+        6,
+        1
+      ],
+      "group_ids": [
+        "terrain_seed42:type8:level5"
+      ],
+      "fault_pairs": [
+        [
+          9,
+          7
+        ]
+      ],
+      "rows": 35,
+      "class_counts": [
+        3,
+        25,
+        2,
+        5
+      ],
+      "double_failure_positive": 5,
+      "argmax_missed_double_failure": 1,
+      "argmax_double_failure_recall": 0.8,
+      "threshold_tp": 4,
+      "threshold_fn": 1,
+      "threshold_recall": 0.8,
+      "negative_rows": 30,
+      "threshold_fp": 20,
+      "threshold_false_positive_rate": 0.6666666666666666,
+      "threshold_fp_true_class_counts": [
+        1,
+        17,
+        2,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        807,
+        4,
+        3
+      ],
+      "group_ids": [
+        "terrain_seed42:type8:level5"
+      ],
+      "fault_pairs": [
+        [
+          11,
+          6
+        ]
+      ],
+      "rows": 43,
+      "class_counts": [
+        41,
+        2,
+        0,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 43,
+      "threshold_fp": 19,
+      "threshold_false_positive_rate": 0.4418604651162791,
+      "threshold_fp_true_class_counts": [
+        18,
+        1,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        2157,
+        4,
+        2
+      ],
+      "group_ids": [
+        "terrain_seed42:type1:level6"
+      ],
+      "fault_pairs": [
+        [
+          8,
+          6
+        ]
+      ],
+      "rows": 19,
+      "class_counts": [
+        19,
+        0,
+        0,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 19,
+      "threshold_fp": 18,
+      "threshold_false_positive_rate": 0.9473684210526315,
+      "threshold_fp_true_class_counts": [
+        18,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        1669,
+        1,
+        1
+      ],
+      "group_ids": [
+        "terrain_seed42:type1:level6"
+      ],
+      "fault_pairs": [
+        [
+          10,
+          6
+        ]
+      ],
+      "rows": 44,
+      "class_counts": [
+        44,
+        0,
+        0,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 44,
+      "threshold_fp": 17,
+      "threshold_false_positive_rate": 0.38636363636363635,
+      "threshold_fp_true_class_counts": [
+        17,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        1296,
+        1,
+        4
+      ],
+      "group_ids": [
+        "terrain_seed42:type17:level3"
+      ],
+      "fault_pairs": [
+        [
+          10,
+          0
+        ]
+      ],
+      "rows": 15,
+      "class_counts": [
+        15,
+        0,
+        0,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 15,
+      "threshold_fp": 15,
+      "threshold_false_positive_rate": 1.0,
+      "threshold_fp_true_class_counts": [
+        15,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        1685,
+        2,
+        3
+      ],
+      "group_ids": [
+        "terrain_seed42:type1:level3"
+      ],
+      "fault_pairs": [
+        [
+          9,
+          3
+        ]
+      ],
+      "rows": 20,
+      "class_counts": [
+        6,
+        5,
+        3,
+        6
+      ],
+      "double_failure_positive": 6,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": 1.0,
+      "threshold_tp": 6,
+      "threshold_fn": 0,
+      "threshold_recall": 1.0,
+      "negative_rows": 14,
+      "threshold_fp": 14,
+      "threshold_false_positive_rate": 1.0,
+      "threshold_fp_true_class_counts": [
+        6,
+        5,
+        3,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        3507,
+        1,
+        3
+      ],
+      "group_ids": [
+        "terrain_seed42:type16:level0"
+      ],
+      "fault_pairs": [
+        [
+          13,
+          1
+        ]
+      ],
+      "rows": 43,
+      "class_counts": [
+        19,
+        23,
+        1,
+        0
+      ],
+      "double_failure_positive": 0,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": null,
+      "threshold_tp": 0,
+      "threshold_fn": 0,
+      "threshold_recall": null,
+      "negative_rows": 43,
+      "threshold_fp": 14,
+      "threshold_false_positive_rate": 0.32558139534883723,
+      "threshold_fp_true_class_counts": [
+        1,
+        13,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        3667,
+        0,
+        3
+      ],
+      "group_ids": [
+        "terrain_seed42:type1:level6"
+      ],
+      "fault_pairs": [
+        [
+          9,
+          3
+        ]
+      ],
+      "rows": 21,
+      "class_counts": [
+        0,
+        19,
+        0,
+        2
+      ],
+      "double_failure_positive": 2,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": 1.0,
+      "threshold_tp": 2,
+      "threshold_fn": 0,
+      "threshold_recall": 1.0,
+      "negative_rows": 19,
+      "threshold_fp": 14,
+      "threshold_false_positive_rate": 0.7368421052631579,
+      "threshold_fp_true_class_counts": [
+        0,
+        14,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        1084,
+        6,
+        2
+      ],
+      "group_ids": [
+        "terrain_seed42:type3:level6"
+      ],
+      "fault_pairs": [
+        [
+          13,
+          7
+        ]
+      ],
+      "rows": 31,
+      "class_counts": [
+        8,
+        17,
+        0,
+        6
+      ],
+      "double_failure_positive": 6,
+      "argmax_missed_double_failure": 0,
+      "argmax_double_failure_recall": 1.0,
+      "threshold_tp": 6,
+      "threshold_fn": 0,
+      "threshold_recall": 1.0,
+      "negative_rows": 25,
+      "threshold_fp": 14,
+      "threshold_false_positive_rate": 0.56,
+      "threshold_fp_true_class_counts": [
+        0,
+        14,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "top_fn_events": [
+    {
+      "event_identity": [
+        1555,
+        4,
+        2
+      ],
+      "group_ids": [
+        "terrain_seed42:type10:level6"
+      ],
+      "fault_pairs": [
+        [
+          13,
+          6
+        ]
+      ],
+      "rows": 30,
+      "class_counts": [
+        12,
+        7,
+        0,
+        11
+      ],
+      "double_failure_positive": 11,
+      "argmax_missed_double_failure": 8,
+      "argmax_double_failure_recall": 0.2727272727272727,
+      "threshold_tp": 3,
+      "threshold_fn": 8,
+      "threshold_recall": 0.2727272727272727,
+      "negative_rows": 19,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        8,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        36,
+        2,
+        2
+      ],
+      "group_ids": [
+        "terrain_seed42:type18:level6"
+      ],
+      "fault_pairs": [
+        [
+          13,
+          6
+        ]
+      ],
+      "rows": 21,
+      "class_counts": [
+        1,
+        11,
+        0,
+        9
+      ],
+      "double_failure_positive": 9,
+      "argmax_missed_double_failure": 8,
+      "argmax_double_failure_recall": 0.1111111111111111,
+      "threshold_tp": 1,
+      "threshold_fn": 8,
+      "threshold_recall": 0.1111111111111111,
+      "negative_rows": 12,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        8,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        1664,
+        5,
+        2
+      ],
+      "group_ids": [
+        "terrain_seed42:type19:level5"
+      ],
+      "fault_pairs": [
+        [
+          11,
+          7
+        ]
+      ],
+      "rows": 25,
+      "class_counts": [
+        14,
+        2,
+        1,
+        8
+      ],
+      "double_failure_positive": 8,
+      "argmax_missed_double_failure": 7,
+      "argmax_double_failure_recall": 0.125,
+      "threshold_tp": 1,
+      "threshold_fn": 7,
+      "threshold_recall": 0.125,
+      "negative_rows": 17,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        6,
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        2919,
+        0,
+        2
+      ],
+      "group_ids": [
+        "terrain_seed42:type3:level6"
+      ],
+      "fault_pairs": [
+        [
+          8,
+          7
+        ]
+      ],
+      "rows": 13,
+      "class_counts": [
+        3,
+        3,
+        0,
+        7
+      ],
+      "double_failure_positive": 7,
+      "argmax_missed_double_failure": 7,
+      "argmax_double_failure_recall": 0.0,
+      "threshold_tp": 0,
+      "threshold_fn": 7,
+      "threshold_recall": 0.0,
+      "negative_rows": 6,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        7,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        3504,
+        1,
+        1
+      ],
+      "group_ids": [
+        "terrain_seed42:type15:level5"
+      ],
+      "fault_pairs": [
+        [
+          8,
+          7
+        ]
+      ],
+      "rows": 29,
+      "class_counts": [
+        0,
+        22,
+        0,
+        7
+      ],
+      "double_failure_positive": 7,
+      "argmax_missed_double_failure": 7,
+      "argmax_double_failure_recall": 0.0,
+      "threshold_tp": 0,
+      "threshold_fn": 7,
+      "threshold_recall": 0.0,
+      "negative_rows": 22,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        7,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        2535,
+        2,
+        3
+      ],
+      "group_ids": [
+        "terrain_seed42:type18:level6"
+      ],
+      "fault_pairs": [
+        [
+          9,
+          7
+        ]
+      ],
+      "rows": 18,
+      "class_counts": [
+        1,
+        4,
+        0,
+        13
+      ],
+      "double_failure_positive": 13,
+      "argmax_missed_double_failure": 8,
+      "argmax_double_failure_recall": 0.38461538461538464,
+      "threshold_tp": 6,
+      "threshold_fn": 7,
+      "threshold_recall": 0.46153846153846156,
+      "negative_rows": 5,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        8,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        821,
+        3,
+        4
+      ],
+      "group_ids": [
+        "terrain_seed42:type3:level6"
+      ],
+      "fault_pairs": [
+        [
+          13,
+          7
+        ]
+      ],
+      "rows": 11,
+      "class_counts": [
+        0,
+        0,
+        1,
+        10
+      ],
+      "double_failure_positive": 10,
+      "argmax_missed_double_failure": 6,
+      "argmax_double_failure_recall": 0.4,
+      "threshold_tp": 4,
+      "threshold_fn": 6,
+      "threshold_recall": 0.4,
+      "negative_rows": 1,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        2,
+        4,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        3761,
+        3,
+        3
+      ],
+      "group_ids": [
+        "terrain_seed42:type1:level6"
+      ],
+      "fault_pairs": [
+        [
+          1,
+          3
+        ]
+      ],
+      "rows": 20,
+      "class_counts": [
+        5,
+        0,
+        4,
+        11
+      ],
+      "double_failure_positive": 11,
+      "argmax_missed_double_failure": 4,
+      "argmax_double_failure_recall": 0.6363636363636364,
+      "threshold_tp": 5,
+      "threshold_fn": 6,
+      "threshold_recall": 0.45454545454545453,
+      "negative_rows": 9,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        4,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        4021,
+        3,
+        3
+      ],
+      "group_ids": [
+        "terrain_seed42:type8:level5"
+      ],
+      "fault_pairs": [
+        [
+          8,
+          3
+        ]
+      ],
+      "rows": 16,
+      "class_counts": [
+        2,
+        5,
+        0,
+        9
+      ],
+      "double_failure_positive": 9,
+      "argmax_missed_double_failure": 6,
+      "argmax_double_failure_recall": 0.3333333333333333,
+      "threshold_tp": 3,
+      "threshold_fn": 6,
+      "threshold_recall": 0.3333333333333333,
+      "negative_rows": 7,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        6,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        1275,
+        4,
+        3
+      ],
+      "group_ids": [
+        "terrain_seed42:type17:level3"
+      ],
+      "fault_pairs": [
+        [
+          13,
+          7
+        ]
+      ],
+      "rows": 23,
+      "class_counts": [
+        3,
+        7,
+        0,
+        13
+      ],
+      "double_failure_positive": 13,
+      "argmax_missed_double_failure": 6,
+      "argmax_double_failure_recall": 0.5384615384615384,
+      "threshold_tp": 7,
+      "threshold_fn": 6,
+      "threshold_recall": 0.5384615384615384,
+      "negative_rows": 10,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        6,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        638,
+        3,
+        2
+      ],
+      "group_ids": [
+        "terrain_seed42:type10:level6"
+      ],
+      "fault_pairs": [
+        [
+          13,
+          1
+        ]
+      ],
+      "rows": 17,
+      "class_counts": [
+        0,
+        8,
+        0,
+        9
+      ],
+      "double_failure_positive": 9,
+      "argmax_missed_double_failure": 6,
+      "argmax_double_failure_recall": 0.3333333333333333,
+      "threshold_tp": 3,
+      "threshold_fn": 6,
+      "threshold_recall": 0.3333333333333333,
+      "negative_rows": 8,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        6,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        485,
+        5,
+        1
+      ],
+      "group_ids": [
+        "terrain_seed42:type18:level6"
+      ],
+      "fault_pairs": [
+        [
+          2,
+          3
+        ]
+      ],
+      "rows": 12,
+      "class_counts": [
+        4,
+        0,
+        0,
+        8
+      ],
+      "double_failure_positive": 8,
+      "argmax_missed_double_failure": 6,
+      "argmax_double_failure_recall": 0.25,
+      "threshold_tp": 2,
+      "threshold_fn": 6,
+      "threshold_recall": 0.25,
+      "negative_rows": 4,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        6,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        36,
+        4,
+        1
+      ],
+      "group_ids": [
+        "terrain_seed42:type18:level6"
+      ],
+      "fault_pairs": [
+        [
+          9,
+          2
+        ]
+      ],
+      "rows": 21,
+      "class_counts": [
+        3,
+        13,
+        0,
+        5
+      ],
+      "double_failure_positive": 5,
+      "argmax_missed_double_failure": 5,
+      "argmax_double_failure_recall": 0.0,
+      "threshold_tp": 0,
+      "threshold_fn": 5,
+      "threshold_recall": 0.0,
+      "negative_rows": 16,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        5,
+        0,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        908,
+        0,
+        2
+      ],
+      "group_ids": [
+        "terrain_seed42:type8:level5"
+      ],
+      "fault_pairs": [
+        [
+          0,
+          0
+        ]
+      ],
+      "rows": 57,
+      "class_counts": [
+        48,
+        2,
+        2,
+        5
+      ],
+      "double_failure_positive": 5,
+      "argmax_missed_double_failure": 5,
+      "argmax_double_failure_recall": 0.0,
+      "threshold_tp": 0,
+      "threshold_fn": 5,
+      "threshold_recall": 0.0,
+      "negative_rows": 52,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        3,
+        0,
+        2,
+        0
+      ]
+    },
+    {
+      "event_identity": [
+        2319,
+        0,
+        1
+      ],
+      "group_ids": [
+        "terrain_seed42:type18:level6"
+      ],
+      "fault_pairs": [
+        [
+          0,
+          0
+        ]
+      ],
+      "rows": 29,
+      "class_counts": [
+        20,
+        2,
+        0,
+        7
+      ],
+      "double_failure_positive": 7,
+      "argmax_missed_double_failure": 4,
+      "argmax_double_failure_recall": 0.42857142857142855,
+      "threshold_tp": 2,
+      "threshold_fn": 5,
+      "threshold_recall": 0.2857142857142857,
+      "negative_rows": 22,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": 0.0,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        0,
+        0,
+        4,
+        0
+      ]
+    }
+  ],
+  "by_later_branch_first_failure_time": {
+    "1_to_10_steps": {
+      "rows": 746,
+      "class_counts": [
+        0,
+        0,
+        0,
+        746
+      ],
+      "double_failure_positive": 746,
+      "argmax_missed_double_failure": 48,
+      "argmax_double_failure_recall": 0.935656836461126,
+      "threshold_tp": 694,
+      "threshold_fn": 52,
+      "threshold_recall": 0.9302949061662198,
+      "negative_rows": 0,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": null,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        10,
+        16,
+        22,
+        0
+      ]
+    },
+    "11_to_25_steps": {
+      "rows": 479,
+      "class_counts": [
+        0,
+        0,
+        0,
+        479
+      ],
+      "double_failure_positive": 479,
+      "argmax_missed_double_failure": 169,
+      "argmax_double_failure_recall": 0.6471816283924844,
+      "threshold_tp": 316,
+      "threshold_fn": 163,
+      "threshold_recall": 0.6597077244258872,
+      "negative_rows": 0,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": null,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        20,
+        87,
+        62,
+        0
+      ]
+    },
+    "26_to_50_steps": {
+      "rows": 413,
+      "class_counts": [
+        0,
+        0,
+        0,
+        413
+      ],
+      "double_failure_positive": 413,
+      "argmax_missed_double_failure": 252,
+      "argmax_double_failure_recall": 0.3898305084745763,
+      "threshold_tp": 167,
+      "threshold_fn": 246,
+      "threshold_recall": 0.4043583535108959,
+      "negative_rows": 0,
+      "threshold_fp": 0,
+      "threshold_false_positive_rate": null,
+      "threshold_fp_true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "argmax_missed_true3_predictions": [
+        47,
+        149,
+        56,
+        0
+      ]
+    }
+  },
+  "first_failure_step_medians": {
+    "all_true3": {
+      "rows": 1638,
+      "lp_vp": [
+        8.0,
+        11.0
+      ],
+      "later_branch": 12.0
+    },
+    "argmax_missed_true3": {
+      "rows": 469,
+      "lp_vp": [
+        17.0,
+        25.0
+      ],
+      "later_branch": 28.0
+    },
+    "argmax_detected_true3": {
+      "rows": 1169,
+      "lp_vp": [
+        5.0,
+        7.0
+      ],
+      "later_branch": 8.0
+    }
+  }
+}

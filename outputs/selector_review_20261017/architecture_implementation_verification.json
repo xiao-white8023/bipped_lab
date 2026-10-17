@@ -1,0 +1,45 @@
+{
+  "validation_timing_bins_reproduced": 12,
+  "validation_rows": 204750,
+  "real_training_shard": "outputs/g1_renet_selector_v4_1s_normal_20261012_170014/dataset/train/shard_00026.pt",
+  "real_rows_one_step": 256,
+  "loss": 1.6396080255508423,
+  "updated_components": {
+    "common_encoder": 8,
+    "lp_encoder": 8,
+    "vp_encoder": 8,
+    "lp_attention": 3,
+    "vp_attention": 3,
+    "head": 8,
+    "lp_gru_layer_0": 4,
+    "vp_gru_layer_0": 4
+  },
+  "architecture": {
+    "name": "branch_gru",
+    "history_frames": 5,
+    "explicit_history_span_s": 0.4,
+    "parameters": 615940,
+    "gru_layers_per_stream": 1,
+    "temporal_streams": 2,
+    "readout": "last_state_plus_attention_over_all_frames_plus_current_frame",
+    "common_input_dim": 87,
+    "branch_input_dim": 98,
+    "output": "four_joint_logits_with_exact_LP_VP_marginals"
+  },
+  "scope": "One CPU optimizer step on a real training batch; not a full training or performance evaluation.",
+  "new_tests": {
+    "passed": 24,
+    "failed": 0,
+    "command": "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest rsl_rl/tests/test_selector_joint_architectures.py -q"
+  },
+  "existing_label_and_directed_tests": {
+    "passed": 59,
+    "failed": 18,
+    "baseline_failed_same_tests": 18,
+    "causes": [
+      "outdated short_horizon_steps/long_horizon_steps constructor arguments",
+      "collector mock missing query_health"
+    ],
+    "label_and_collector_sources_changed": false
+  }
+}

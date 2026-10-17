@@ -1,0 +1,582 @@
+{
+  "base": {
+    "samples": 204750,
+    "class_counts": [
+      189548,
+      10292,
+      3272,
+      1638
+    ],
+    "rescue": 6822,
+    "harmful_opportunities": 6742,
+    "single": 13564,
+    "rescue_current_lp": 5203,
+    "rescue_current_vp": 1619
+  },
+  "profiles": {
+    "raw": {
+      "rules": {
+        "argmax": {
+          "request": 9317,
+          "both_safe_request": 3386,
+          "both_safe_rate": 0.017863549074640724,
+          "both_fail_request": 238,
+          "both_fail_rate": 0.1452991452991453,
+          "correct_rescue": 5665,
+          "rescue_rate": 0.8304016417472881,
+          "missed_rescue": 1157,
+          "harmful": 28,
+          "dangerous": 1185,
+          "dangerous_rate": 0.08736360955470363,
+          "lp_to_vp_rescued": 4550,
+          "vp_to_lp_rescued": 1115
+        },
+        "min_risk_delta_gt_0": {
+          "request": 95924,
+          "both_safe_request": 88049,
+          "both_safe_rate": 0.46452086015151833,
+          "both_fail_request": 1015,
+          "both_fail_rate": 0.6196581196581197,
+          "correct_rescue": 6711,
+          "rescue_rate": 0.9837291116974495,
+          "missed_rescue": 111,
+          "harmful": 149,
+          "dangerous": 260,
+          "dangerous_rate": 0.019168386906517253,
+          "lp_to_vp_rescued": 5149,
+          "vp_to_lp_rescued": 1562
+        },
+        "argmax_and_delta_gt_0.01": {
+          "request": 9317,
+          "both_safe_request": 3386,
+          "both_safe_rate": 0.017863549074640724,
+          "both_fail_request": 238,
+          "both_fail_rate": 0.1452991452991453,
+          "correct_rescue": 5665,
+          "rescue_rate": 0.8304016417472881,
+          "missed_rescue": 1157,
+          "harmful": 28,
+          "dangerous": 1185,
+          "dangerous_rate": 0.08736360955470363,
+          "lp_to_vp_rescued": 4550,
+          "vp_to_lp_rescued": 1115
+        },
+        "all_delta_gt_0.01": {
+          "request": 26573,
+          "both_safe_request": 19015,
+          "both_safe_rate": 0.10031759765336484,
+          "both_fail_request": 769,
+          "both_fail_rate": 0.4694749694749695,
+          "correct_rescue": 6670,
+          "rescue_rate": 0.9777191439460569,
+          "missed_rescue": 152,
+          "harmful": 119,
+          "dangerous": 271,
+          "dangerous_rate": 0.01997935712179298,
+          "lp_to_vp_rescued": 5127,
+          "vp_to_lp_rescued": 1543
+        },
+        "all_delta_gt_0.05": {
+          "request": 18392,
+          "both_safe_request": 11170,
+          "both_safe_rate": 0.0589296642539093,
+          "both_fail_request": 572,
+          "both_fail_rate": 0.3492063492063492,
+          "correct_rescue": 6560,
+          "rescue_rate": 0.9615948402228086,
+          "missed_rescue": 262,
+          "harmful": 90,
+          "dangerous": 352,
+          "dangerous_rate": 0.025951046888823357,
+          "lp_to_vp_rescued": 5085,
+          "vp_to_lp_rescued": 1475
+        },
+        "all_delta_gt_0.1": {
+          "request": 15704,
+          "both_safe_request": 8701,
+          "both_safe_rate": 0.04590393989912845,
+          "both_fail_request": 478,
+          "both_fail_rate": 0.29181929181929184,
+          "correct_rescue": 6452,
+          "rescue_rate": 0.9457637056581648,
+          "missed_rescue": 370,
+          "harmful": 73,
+          "dangerous": 443,
+          "dangerous_rate": 0.032659982306104396,
+          "lp_to_vp_rescued": 5034,
+          "vp_to_lp_rescued": 1418
+        }
+      },
+      "missed_rescue_by_argmax_class": {
+        "0": 800,
+        "1": 11,
+        "2": 14,
+        "3": 332
+      },
+      "q0_argmax_missed_rescue_delta": {
+        "0": 735,
+        "0.01": 704,
+        "0.05": 627,
+        "0.1": 558,
+        "0.2": 433
+      },
+      "q0_argmax_delta": {
+        "0.01": {
+          "all": 16107,
+          "true_safe": 15323,
+          "true_dual": 31,
+          "true_rescue": 704,
+          "true_harmful": 49
+        },
+        "0.05": {
+          "all": 8264,
+          "true_safe": 7581,
+          "true_dual": 26,
+          "true_rescue": 627,
+          "true_harmful": 30
+        },
+        "0.1": {
+          "all": 5758,
+          "true_safe": 5160,
+          "true_dual": 20,
+          "true_rescue": 558,
+          "true_harmful": 20
+        }
+      },
+      "raw_vs_argmax_checks": {
+        "precomputed_rescue_match": true,
+        "precomputed_wrong_match": true
+      },
+      "fixed_half_counts": [
+        102272,
+        102478
+      ],
+      "q0_delta_examples": [
+        {
+          "row": 137644,
+          "sample_id": 4200985181,
+          "current_branch": 1,
+          "labels": [
+            1,
+            0
+          ],
+          "q": [
+            0.5010356903076172,
+            0.49830541014671326,
+            0.00015933056420180947,
+            0.0004994975170120597
+          ],
+          "delta": 0.49814607958251145
+        },
+        {
+          "row": 147193,
+          "sample_id": 4201099991,
+          "current_branch": 1,
+          "labels": [
+            1,
+            0
+          ],
+          "q": [
+            0.5018719434738159,
+            0.4978708326816559,
+            8.145820174831897e-05,
+            0.00017574326193425804
+          ],
+          "delta": 0.49778937447990756
+        },
+        {
+          "row": 89343,
+          "sample_id": 4200569521,
+          "current_branch": 1,
+          "labels": [
+            1,
+            0
+          ],
+          "q": [
+            0.5020611882209778,
+            0.4973756968975067,
+            0.00014969619223847985,
+            0.0004133985785301775
+          ],
+          "delta": 0.49722600070526823
+        }
+      ]
+    },
+    "temperature": {
+      "rules": {
+        "argmax": {
+          "request": 9317,
+          "both_safe_request": 3386,
+          "both_safe_rate": 0.017863549074640724,
+          "both_fail_request": 238,
+          "both_fail_rate": 0.1452991452991453,
+          "correct_rescue": 5665,
+          "rescue_rate": 0.8304016417472881,
+          "missed_rescue": 1157,
+          "harmful": 28,
+          "dangerous": 1185,
+          "dangerous_rate": 0.08736360955470363,
+          "lp_to_vp_rescued": 4550,
+          "vp_to_lp_rescued": 1115
+        },
+        "min_risk_delta_gt_0": {
+          "request": 95924,
+          "both_safe_request": 88049,
+          "both_safe_rate": 0.46452086015151833,
+          "both_fail_request": 1015,
+          "both_fail_rate": 0.6196581196581197,
+          "correct_rescue": 6711,
+          "rescue_rate": 0.9837291116974495,
+          "missed_rescue": 111,
+          "harmful": 149,
+          "dangerous": 260,
+          "dangerous_rate": 0.019168386906517253,
+          "lp_to_vp_rescued": 5149,
+          "vp_to_lp_rescued": 1562
+        },
+        "argmax_and_delta_gt_0.01": {
+          "request": 9317,
+          "both_safe_request": 3386,
+          "both_safe_rate": 0.017863549074640724,
+          "both_fail_request": 238,
+          "both_fail_rate": 0.1452991452991453,
+          "correct_rescue": 5665,
+          "rescue_rate": 0.8304016417472881,
+          "missed_rescue": 1157,
+          "harmful": 28,
+          "dangerous": 1185,
+          "dangerous_rate": 0.08736360955470363,
+          "lp_to_vp_rescued": 4550,
+          "vp_to_lp_rescued": 1115
+        },
+        "all_delta_gt_0.01": {
+          "request": 28870,
+          "both_safe_request": 21251,
+          "both_safe_rate": 0.11211408192120202,
+          "both_fail_request": 814,
+          "both_fail_rate": 0.49694749694749696,
+          "correct_rescue": 6681,
+          "rescue_rate": 0.9793315743183817,
+          "missed_rescue": 141,
+          "harmful": 124,
+          "dangerous": 265,
+          "dangerous_rate": 0.019537009731642584,
+          "lp_to_vp_rescued": 5134,
+          "vp_to_lp_rescued": 1547
+        },
+        "all_delta_gt_0.05": {
+          "request": 19193,
+          "both_safe_request": 11926,
+          "both_safe_rate": 0.06291809990081668,
+          "both_fail_request": 600,
+          "both_fail_rate": 0.3663003663003663,
+          "correct_rescue": 6576,
+          "rescue_rate": 0.9639401934916447,
+          "missed_rescue": 246,
+          "harmful": 91,
+          "dangerous": 337,
+          "dangerous_rate": 0.024845178413447362,
+          "lp_to_vp_rescued": 5088,
+          "vp_to_lp_rescued": 1488
+        },
+        "all_delta_gt_0.1": {
+          "request": 16226,
+          "both_safe_request": 9170,
+          "both_safe_rate": 0.04837824719859877,
+          "both_fail_request": 503,
+          "both_fail_rate": 0.3070818070818071,
+          "correct_rescue": 6480,
+          "rescue_rate": 0.9498680738786279,
+          "missed_rescue": 342,
+          "harmful": 73,
+          "dangerous": 415,
+          "dangerous_rate": 0.030595694485402537,
+          "lp_to_vp_rescued": 5044,
+          "vp_to_lp_rescued": 1436
+        }
+      },
+      "missed_rescue_by_argmax_class": {
+        "0": 800,
+        "1": 11,
+        "2": 14,
+        "3": 332
+      },
+      "q0_argmax_missed_rescue_delta": {
+        "0": 735,
+        "0.01": 711,
+        "0.05": 640,
+        "0.1": 580,
+        "0.2": 448
+      },
+      "q0_argmax_delta": {
+        "0.01": {
+          "all": 18346,
+          "true_safe": 17551,
+          "true_dual": 31,
+          "true_rescue": 711,
+          "true_harmful": 53
+        },
+        "0.05": {
+          "all": 9031,
+          "true_safe": 8334,
+          "true_dual": 26,
+          "true_rescue": 640,
+          "true_harmful": 31
+        },
+        "0.1": {
+          "all": 6243,
+          "true_safe": 5622,
+          "true_dual": 21,
+          "true_rescue": 580,
+          "true_harmful": 20
+        }
+      },
+      "raw_vs_argmax_checks": {
+        "precomputed_rescue_match": true,
+        "precomputed_wrong_match": true
+      },
+      "fixed_half_counts": [
+        102272,
+        102478
+      ],
+      "q0_delta_examples": [
+        {
+          "row": 137644,
+          "sample_id": 4200985181,
+          "current_branch": 1,
+          "labels": [
+            1,
+            0
+          ],
+          "q": [
+            0.500705361366272,
+            0.4981769919395447,
+            0.00028790251235477626,
+            0.000829819415230304
+          ],
+          "delta": 0.4978890894271899
+        },
+        {
+          "row": 147193,
+          "sample_id": 4201099991,
+          "current_branch": 1,
+          "labels": [
+            1,
+            0
+          ],
+          "q": [
+            0.5016180276870728,
+            0.4979119598865509,
+            0.00015467846242245287,
+            0.0003153647412545979
+          ],
+          "delta": 0.49775728142412845
+        },
+        {
+          "row": 89343,
+          "sample_id": 4200569521,
+          "current_branch": 1,
+          "labels": [
+            1,
+            0
+          ],
+          "q": [
+            0.5016854405403137,
+            0.4973463714122772,
+            0.00027175407740287483,
+            0.0006964482017792761
+          ],
+          "delta": 0.49707461733487435
+        }
+      ]
+    },
+    "temperature_bias": {
+      "rules": {
+        "argmax": {
+          "request": 6169,
+          "both_safe_request": 1186,
+          "both_safe_rate": 0.006256990313799143,
+          "both_fail_request": 270,
+          "both_fail_rate": 0.16483516483516483,
+          "correct_rescue": 4698,
+          "rescue_rate": 0.6886543535620053,
+          "missed_rescue": 2124,
+          "harmful": 15,
+          "dangerous": 2139,
+          "dangerous_rate": 0.15769684458861694,
+          "lp_to_vp_rescued": 3993,
+          "vp_to_lp_rescued": 705
+        },
+        "min_risk_delta_gt_0": {
+          "request": 94683,
+          "both_safe_request": 86851,
+          "both_safe_rate": 0.45820056133538734,
+          "both_fail_request": 970,
+          "both_fail_rate": 0.5921855921855922,
+          "correct_rescue": 6710,
+          "rescue_rate": 0.9835825271181472,
+          "missed_rescue": 112,
+          "harmful": 152,
+          "dangerous": 264,
+          "dangerous_rate": 0.019463285166617515,
+          "lp_to_vp_rescued": 5160,
+          "vp_to_lp_rescued": 1550
+        },
+        "argmax_and_delta_gt_0.01": {
+          "request": 6169,
+          "both_safe_request": 1186,
+          "both_safe_rate": 0.006256990313799143,
+          "both_fail_request": 270,
+          "both_fail_rate": 0.16483516483516483,
+          "correct_rescue": 4698,
+          "rescue_rate": 0.6886543535620053,
+          "missed_rescue": 2124,
+          "harmful": 15,
+          "dangerous": 2139,
+          "dangerous_rate": 0.15769684458861694,
+          "lp_to_vp_rescued": 3993,
+          "vp_to_lp_rescued": 705
+        },
+        "all_delta_gt_0.01": {
+          "request": 21756,
+          "both_safe_request": 14128,
+          "both_safe_rate": 0.07453521007871357,
+          "both_fail_request": 879,
+          "both_fail_rate": 0.5366300366300366,
+          "correct_rescue": 6642,
+          "rescue_rate": 0.9736147757255936,
+          "missed_rescue": 180,
+          "harmful": 107,
+          "dangerous": 287,
+          "dangerous_rate": 0.021158950162194042,
+          "lp_to_vp_rescued": 5141,
+          "vp_to_lp_rescued": 1501
+        },
+        "all_delta_gt_0.05": {
+          "request": 14795,
+          "both_safe_request": 7546,
+          "both_safe_rate": 0.03981049654968662,
+          "both_fail_request": 723,
+          "both_fail_rate": 0.4413919413919414,
+          "correct_rescue": 6449,
+          "rescue_rate": 0.945323951920258,
+          "missed_rescue": 373,
+          "harmful": 77,
+          "dangerous": 450,
+          "dangerous_rate": 0.033176054261279855,
+          "lp_to_vp_rescued": 5093,
+          "vp_to_lp_rescued": 1356
+        },
+        "all_delta_gt_0.1": {
+          "request": 12414,
+          "both_safe_request": 5456,
+          "both_safe_rate": 0.02878426572688712,
+          "both_fail_request": 615,
+          "both_fail_rate": 0.37545787545787546,
+          "correct_rescue": 6276,
+          "rescue_rate": 0.9199648197009674,
+          "missed_rescue": 546,
+          "harmful": 67,
+          "dangerous": 613,
+          "dangerous_rate": 0.04519315836036567,
+          "lp_to_vp_rescued": 5026,
+          "vp_to_lp_rescued": 1250
+        }
+      },
+      "missed_rescue_by_argmax_class": {
+        "0": 1974,
+        "1": 12,
+        "2": 2,
+        "3": 136
+      },
+      "q0_argmax_missed_rescue_delta": {
+        "0": 1887,
+        "0.01": 1822,
+        "0.05": 1640,
+        "0.1": 1485,
+        "0.2": 1166
+      },
+      "q0_argmax_delta": {
+        "0.01": {
+          "all": 14843,
+          "true_safe": 12831,
+          "true_dual": 118,
+          "true_rescue": 1822,
+          "true_harmful": 72
+        },
+        "0.05": {
+          "all": 8073,
+          "true_safe": 6293,
+          "true_dual": 95,
+          "true_rescue": 1640,
+          "true_harmful": 45
+        },
+        "0.1": {
+          "all": 5829,
+          "true_safe": 4227,
+          "true_dual": 82,
+          "true_rescue": 1485,
+          "true_harmful": 35
+        }
+      },
+      "raw_vs_argmax_checks": {
+        "precomputed_rescue_match": true,
+        "precomputed_wrong_match": true
+      },
+      "fixed_half_counts": [
+        102272,
+        102478
+      ],
+      "q0_delta_examples": [
+        {
+          "row": 187027,
+          "sample_id": 4201905413,
+          "current_branch": 1,
+          "labels": [
+            1,
+            0
+          ],
+          "q": [
+            0.49978604912757874,
+            0.4992327392101288,
+            0.00037241546669974923,
+            0.0006088056834414601
+          ],
+          "delta": 0.49886032374342903
+        },
+        {
+          "row": 157984,
+          "sample_id": 4201236994,
+          "current_branch": 1,
+          "labels": [
+            1,
+            0
+          ],
+          "q": [
+            0.5008241534233093,
+            0.4984627664089203,
+            0.00020693312399089336,
+            0.0005061550764366984
+          ],
+          "delta": 0.4982558332849294
+        },
+        {
+          "row": 186092,
+          "sample_id": 4201824335,
+          "current_branch": 1,
+          "labels": [
+            1,
+            0
+          ],
+          "q": [
+            0.4990997910499573,
+            0.4984593093395233,
+            0.000608638278208673,
+            0.0018322975374758244
+          ],
+          "delta": 0.49785067106131464
+        }
+      ]
+    }
+  }
+}

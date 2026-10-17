@@ -1,0 +1,329 @@
+{
+  "rows": 204750,
+  "class_counts": [
+    189548,
+    10292,
+    3272,
+    1638
+  ],
+  "current_counts": [
+    101503,
+    103247
+  ],
+  "profiles": {
+    "raw": {
+      "confusion": [
+        [
+          181477,
+          4610,
+          2809,
+          652
+        ],
+        [
+          1186,
+          8667,
+          27,
+          412
+        ],
+        [
+          882,
+          26,
+          2221,
+          143
+        ],
+        [
+          77,
+          252,
+          140,
+          1169
+        ]
+      ],
+      "class_argmax_counts": [
+        183622,
+        13555,
+        5197,
+        2376
+      ],
+      "correct_rescue": 5665,
+      "needed_rescue": 6822,
+      "missed_rescue": 1157,
+      "harmful_switch": 28,
+      "single_failure_wrong": 1185,
+      "single_failure_count": 13564,
+      "both_safe_switch": 3386,
+      "both_safe_count": 189548,
+      "both_failure_switch": 238,
+      "both_failure_count": 1638,
+      "both_failure_warning_tp": 1169,
+      "warning_count": 2376,
+      "directions": {
+        "current_VP": {
+          "needed_rescue": 1619,
+          "correct_rescue": 1115,
+          "missed_rescue": 504,
+          "missed_as_safe": 399,
+          "missed_as_both_failure": 94,
+          "missed_as_wrong_single": 11,
+          "safe_current_single_cases": 5089,
+          "harmful_switch": 13,
+          "both_safe_switch": 1588,
+          "both_failure_switch": 99
+        },
+        "current_LP": {
+          "needed_rescue": 5203,
+          "correct_rescue": 4550,
+          "missed_rescue": 653,
+          "missed_as_safe": 401,
+          "missed_as_both_failure": 238,
+          "missed_as_wrong_single": 14,
+          "safe_current_single_cases": 1653,
+          "harmful_switch": 15,
+          "both_safe_switch": 1798,
+          "both_failure_switch": 139
+        }
+      }
+    },
+    "temperature": {
+      "confusion": [
+        [
+          181477,
+          4610,
+          2809,
+          652
+        ],
+        [
+          1186,
+          8667,
+          27,
+          412
+        ],
+        [
+          882,
+          26,
+          2221,
+          143
+        ],
+        [
+          77,
+          252,
+          140,
+          1169
+        ]
+      ],
+      "class_argmax_counts": [
+        183622,
+        13555,
+        5197,
+        2376
+      ],
+      "correct_rescue": 5665,
+      "needed_rescue": 6822,
+      "missed_rescue": 1157,
+      "harmful_switch": 28,
+      "single_failure_wrong": 1185,
+      "single_failure_count": 13564,
+      "both_safe_switch": 3386,
+      "both_safe_count": 189548,
+      "both_failure_switch": 238,
+      "both_failure_count": 1638,
+      "both_failure_warning_tp": 1169,
+      "warning_count": 2376,
+      "directions": {
+        "current_VP": {
+          "needed_rescue": 1619,
+          "correct_rescue": 1115,
+          "missed_rescue": 504,
+          "missed_as_safe": 399,
+          "missed_as_both_failure": 94,
+          "missed_as_wrong_single": 11,
+          "safe_current_single_cases": 5089,
+          "harmful_switch": 13,
+          "both_safe_switch": 1588,
+          "both_failure_switch": 99
+        },
+        "current_LP": {
+          "needed_rescue": 5203,
+          "correct_rescue": 4550,
+          "missed_rescue": 653,
+          "missed_as_safe": 401,
+          "missed_as_both_failure": 238,
+          "missed_as_wrong_single": 14,
+          "safe_current_single_cases": 1653,
+          "harmful_switch": 15,
+          "both_safe_switch": 1798,
+          "both_failure_switch": 139
+        }
+      }
+    },
+    "temperature_bias": {
+      "confusion": [
+        [
+          186815,
+          1836,
+          603,
+          294
+        ],
+        [
+          3024,
+          7118,
+          9,
+          141
+        ],
+        [
+          1872,
+          20,
+          1313,
+          67
+        ],
+        [
+          237,
+          341,
+          90,
+          970
+        ]
+      ],
+      "class_argmax_counts": [
+        191948,
+        9315,
+        2015,
+        1472
+      ],
+      "correct_rescue": 4698,
+      "needed_rescue": 6822,
+      "missed_rescue": 2124,
+      "harmful_switch": 15,
+      "single_failure_wrong": 2139,
+      "single_failure_count": 13564,
+      "both_safe_switch": 1186,
+      "both_safe_count": 189548,
+      "both_failure_switch": 270,
+      "both_failure_count": 1638,
+      "both_failure_warning_tp": 970,
+      "warning_count": 1472,
+      "directions": {
+        "current_VP": {
+          "needed_rescue": 1619,
+          "correct_rescue": 705,
+          "missed_rescue": 914,
+          "missed_as_safe": 851,
+          "missed_as_both_failure": 51,
+          "missed_as_wrong_single": 12,
+          "safe_current_single_cases": 5089,
+          "harmful_switch": 7,
+          "both_safe_switch": 371,
+          "both_failure_switch": 76
+        },
+        "current_LP": {
+          "needed_rescue": 5203,
+          "correct_rescue": 3993,
+          "missed_rescue": 1210,
+          "missed_as_safe": 1123,
+          "missed_as_both_failure": 85,
+          "missed_as_wrong_single": 2,
+          "safe_current_single_cases": 1653,
+          "harmful_switch": 8,
+          "both_safe_switch": 815,
+          "both_failure_switch": 194
+        }
+      }
+    }
+  },
+  "paired": {
+    "temperature": {
+      "transition": [
+        [
+          183622,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          13555,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          5197,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          2376
+        ]
+      ],
+      "class_changed": 0,
+      "desired_changed": 0,
+      "lost": 0,
+      "gained": 0,
+      "harmful_added": 0,
+      "harmful_removed": 0,
+      "by_branch": {
+        "VP": {
+          "lost": 0,
+          "gained": 0,
+          "harmful_added": 0,
+          "harmful_removed": 0
+        },
+        "LP": {
+          "lost": 0,
+          "gained": 0,
+          "harmful_added": 0,
+          "harmful_removed": 0
+        }
+      }
+    },
+    "temperature_bias": {
+      "transition": [
+        [
+          183622,
+          0,
+          0,
+          0
+        ],
+        [
+          4602,
+          8953,
+          0,
+          0
+        ],
+        [
+          3235,
+          1,
+          1961,
+          0
+        ],
+        [
+          489,
+          361,
+          54,
+          1472
+        ]
+      ],
+      "class_changed": 8742,
+      "desired_changed": 3690,
+      "lost": 1117,
+      "gained": 150,
+      "harmful_added": 7,
+      "harmful_removed": 20,
+      "by_branch": {
+        "VP": {
+          "lost": 426,
+          "gained": 16,
+          "harmful_added": 3,
+          "harmful_removed": 9
+        },
+        "LP": {
+          "lost": 691,
+          "gained": 134,
+          "harmful_added": 4,
+          "harmful_removed": 11
+        }
+      }
+    }
+  }
+}

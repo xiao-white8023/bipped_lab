@@ -1,0 +1,116 @@
+{
+  "all": {
+    "n": 204750,
+    "class_counts": [
+      189548,
+      10292,
+      3272,
+      1638
+    ],
+    "initial_unsafe": 370,
+    "q3_argmax_tp": 1169,
+    "dual_positive": 1638,
+    "q3_argmax_recall": 0.7136752136752137,
+    "q3_threshold_tp": 1177,
+    "q3_threshold_fp": 1177,
+    "rescue_needed": 6822,
+    "rescued": 5665,
+    "q0_missed_rescue": 800,
+    "q3_missed_rescue": 332
+  },
+  "initial_safe": {
+    "n": 204380,
+    "class_counts": [
+      189471,
+      10289,
+      3271,
+      1349
+    ],
+    "initial_unsafe": 0,
+    "q3_argmax_tp": 889,
+    "dual_positive": 1349,
+    "q3_argmax_recall": 0.6590066716085989,
+    "q3_threshold_tp": 898,
+    "q3_threshold_fp": 1175,
+    "rescue_needed": 6819,
+    "rescued": 5663,
+    "q0_missed_rescue": 800,
+    "q3_missed_rescue": 331
+  },
+  "initial_unsafe": {
+    "n": 370,
+    "class_counts": [
+      77,
+      3,
+      1,
+      289
+    ],
+    "initial_unsafe": 370,
+    "q3_argmax_tp": 280,
+    "dual_positive": 289,
+    "q3_argmax_recall": 0.9688581314878892,
+    "q3_threshold_tp": 279,
+    "q3_threshold_fp": 2,
+    "rescue_needed": 3,
+    "rescued": 2,
+    "q0_missed_rescue": 0,
+    "q3_missed_rescue": 1
+  },
+  "invalid": {
+    "n": 0,
+    "class_counts": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "initial_unsafe": 0,
+    "q3_argmax_tp": 0,
+    "dual_positive": 0,
+    "q3_argmax_recall": null,
+    "q3_threshold_tp": 0,
+    "q3_threshold_fp": 0,
+    "rescue_needed": 0,
+    "rescued": 0,
+    "q0_missed_rescue": 0,
+    "q3_missed_rescue": 0
+  },
+  "dual_later_le_0.2s": {
+    "n": 746,
+    "class_counts": [
+      0,
+      0,
+      0,
+      746
+    ],
+    "initial_unsafe": 289,
+    "q3_argmax_tp": 698,
+    "dual_positive": 746,
+    "q3_argmax_recall": 0.935656836461126,
+    "q3_threshold_tp": 694,
+    "q3_threshold_fp": 0,
+    "rescue_needed": 0,
+    "rescued": 0,
+    "q0_missed_rescue": 0,
+    "q3_missed_rescue": 0
+  },
+  "dual_later_0.52_to_1s": {
+    "n": 413,
+    "class_counts": [
+      0,
+      0,
+      0,
+      413
+    ],
+    "initial_unsafe": 0,
+    "q3_argmax_tp": 161,
+    "dual_positive": 413,
+    "q3_argmax_recall": 0.3898305084745763,
+    "q3_threshold_tp": 167,
+    "q3_threshold_fp": 0,
+    "rescue_needed": 0,
+    "rescued": 0,
+    "q0_missed_rescue": 0,
+    "q3_missed_rescue": 0
+  }
+}

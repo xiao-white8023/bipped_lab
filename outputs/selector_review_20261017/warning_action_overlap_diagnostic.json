@@ -1,0 +1,27 @@
+{
+  "raw_warning_veto_counterfactual": [
+    {
+      "q3_threshold": 0.5863848924636841,
+      "existing_requests_with_warning": 0,
+      "true_class_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "correct_rescues_vetoed": 0
+    },
+    {
+      "q3_threshold": 0.4340755045413971,
+      "existing_requests_with_warning": 54,
+      "true_class_counts": [
+        8,
+        30,
+        7,
+        9
+      ],
+      "correct_rescues_vetoed": 36
+    }
+  ],
+  "note": "Validation-only diagnostics at already recorded thresholds; no new threshold search."
+}

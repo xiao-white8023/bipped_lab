@@ -71,8 +71,8 @@ class DepthTrainCfg:
 @configclass
 class Reward:
     # 论文脚体积点边缘惩罚：函数返回非负代价，RewardManager统一乘负权重和dt。
-    # -4.0来自InstinctLab官方任务；不新增足底支撑奖励。
-    foot_edge_penalty = RewTerm(func=foot_edge_penalty, weight=-4.0)
+    # -2.0来自InstinctLab官方任务；不新增足底支撑奖励。
+    foot_edge_penalty = RewTerm(func=foot_edge_penalty, weight=-2.0)
 
     # 跟踪速度奖励
     track_lin_vel_xy_exp = RewTerm(func=mdp.track_lin_vel_xy_yaw_frame_exp, weight=3.0, params={"std": 0.5})
@@ -95,19 +95,7 @@ class Reward:
     undesired_contacts = RewTerm(
         func=mdp.undesired_contacts,
         weight=-2.0,
-        params={
-            "sensor_cfg": SceneEntityCfg(
-                "contact_sensor",
-                body_names=[
-                    # G1 的小腿刚体：原来的非 ankle 正则也已包含这两项。
-                    "left_knee_link",
-                    "right_knee_link",
-                    # 其余非脚踝刚体；排除 knee，避免重复匹配/重复计罚。
-                    "(?!.*(?:ankle|knee).*).*",
-                ],
-            ),
-            "threshold": 1.0,
-        },
+        params={"sensor_cfg": SceneEntityCfg("contact_sensor", body_names="(?!.*ankle.*).*"), "threshold": 1.0},
     )
 
     fly = RewTerm(
@@ -223,7 +211,7 @@ class G1DEPTHENVCFG:
         enabled=True,  # 总开关；False且不显示几何时，不构建边缘索引。
         geometry=EdgeGeometryCfg(
             angle_threshold_deg=70.0,  # 官方锐边二面角阈值，单位：度。
-            cylinder_radius=0.05,  # 官方parkour任务的边缘圆柱半径，单位：米。
+            cylinder_radius=0.03, # 0.05  # 官方parkour任务的边缘圆柱半径，单位：米。
             adjacent_angle_threshold_deg=30.0,  # 官方贪心拼接方向阈值。
             fit_distance_threshold=0.05,  # 官方实现实际使用的拟合最大偏离，单位：米。
             min_points=2,  # 官方任务最少拼接点数。
@@ -346,8 +334,6 @@ class G1DEPTHENVCFG:
 
     reward=Reward()
     depth_training=DepthTrainCfg()
-
-
 
     robot: RobotCfg = RobotCfg(
         # 深度策略保留10帧本体历史和2帧深度历史。

@@ -1,0 +1,313 @@
+{
+  "scope": {
+    "model": "OLD LOCAL V5, NOT the server model with 15.55%/49.39%/68.80% results",
+    "split": "validation",
+    "rows": 206462,
+    "test_accessed": false,
+    "threshold_search": false,
+    "weights_updated": false,
+    "limitations": [
+      "Validation was already used for calibration, model selection, and decision fitting; this is not independent generalization evidence.",
+      "Cached independent risks and joint probabilities are used; inference is not repeated.",
+      "Requests are evaluated before runtime dwell/confirmation/blending and physical closed-loop outcomes.",
+      "Both sensors are marked available, matching the offline probability-rule diagnostic.",
+      "Argmax and fixed 0.01 gain are predetermined diagnostic comparisons, not accepted deployment rules.",
+      "Failure labels indicate 1-second fixed-branch counterfactual outcomes, not all future switching sequences."
+    ]
+  },
+  "inputs": {
+    "cache": "/home/cjh/TienKung-Lab/outputs/g1_renet_selector_v5_outcomes_20261013_211324/models/validation_predictions.pt",
+    "cache_sha256": "648680ebee4a19b84f0cb8a2b916a39ccdc2bb37d9ee353624ff1a4e005e243d",
+    "cache_fields": [
+      "labels",
+      "current_mask",
+      "calibrated_risks",
+      "candidates/outcome_seed_42_snapshot_1.pt/probabilities"
+    ],
+    "selected_model": "/home/cjh/TienKung-Lab/outputs/g1_renet_selector_v5_outcomes_20261013_211324/models/outcome_seed_42_snapshot_1.pt",
+    "selected_model_sha256": "f5dc8b227b5fee82d3ee7d8f6bd31eb727fe65bb9943b6a1caf07b89e066dd90",
+    "decision_artifact": "/home/cjh/TienKung-Lab/outputs/g1_renet_selector_v5_outcomes_20261013_211324/models/candidate_selector_checkpoint.pt",
+    "decision_artifact_sha256": "f5dc8b227b5fee82d3ee7d8f6bd31eb727fe65bb9943b6a1caf07b89e066dd90",
+    "p_order": [
+      "LP_failure_1s",
+      "VP_failure_1s"
+    ],
+    "q_order": [
+      "both_safe",
+      "lp_only_failure",
+      "vp_only_failure",
+      "both_failure"
+    ],
+    "mask_mapping": {
+      "0": "VP",
+      "1": "LP"
+    },
+    "class_counts": [
+      189548,
+      10391,
+      3317,
+      3206
+    ],
+    "selection_rule": {
+      "version": 3,
+      "mode": "learned_outcomes",
+      "both_safe_probability_threshold": 1.0,
+      "both_failure_flag_threshold": 0.23829098045825958,
+      "both_failure_hold_threshold": 0.95,
+      "lp_to_vp_min_rescue_probability": 0.001,
+      "vp_to_lp_min_rescue_probability": 0.0,
+      "lp_to_vp_margin": 0.08618933707475662,
+      "vp_to_lp_margin": 0.10000000149011612
+    }
+  },
+  "p_vs_q_marginals": {
+    "LP": {
+      "mean_absolute_difference": 0.008181455545127392,
+      "p95_absolute_difference": 0.05168094113469124,
+      "fraction_absolute_difference_gt_0_1": 0.021277522668242455,
+      "independent_risk_p": {
+        "auroc": 0.986981612834289,
+        "ece_15_equal_width_bins": 0.0025483653880655766,
+        "brier": 0.02151133120059967,
+        "mean_predicted": 0.06585878133773804,
+        "observed_rate": 0.06585715711116791
+      },
+      "joint_q_marginal": {
+        "auroc": 0.9872593725406278,
+        "ece_15_equal_width_bins": 0.0019823366310447454,
+        "brier": 0.021237799897789955,
+        "mean_predicted": 0.06585729122161865,
+        "observed_rate": 0.06585715711116791
+      }
+    },
+    "VP": {
+      "mean_absolute_difference": 0.006218149326741695,
+      "p95_absolute_difference": 0.0365360826253891,
+      "fraction_absolute_difference_gt_0_1": 0.016898993402719498,
+      "independent_risk_p": {
+        "auroc": 0.9830057691587962,
+        "ece_15_equal_width_bins": 0.0018856381066143513,
+        "brier": 0.013607083819806576,
+        "mean_predicted": 0.031595539301633835,
+        "observed_rate": 0.03159419074654579
+      },
+      "joint_q_marginal": {
+        "auroc": 0.9831322510900701,
+        "ece_15_equal_width_bins": 0.0018023650627583265,
+        "brier": 0.013435832224786282,
+        "mean_predicted": 0.03159424290060997,
+        "observed_rate": 0.03159419074654579
+      }
+    }
+  },
+  "actions": {
+    "existing_rule": {
+      "requests": 48155,
+      "both_safe_requests": {
+        "count": 39513,
+        "denominator": 189548,
+        "rate": 0.20845907105324246
+      },
+      "both_failure_requests": {
+        "count": 1755,
+        "denominator": 3206,
+        "rate": 0.5474111041796631
+      },
+      "correct_rescue": {
+        "count": 6678,
+        "denominator": 6857,
+        "rate": 0.9738952894851977
+      },
+      "missed_rescue": {
+        "count": 179,
+        "denominator": 6857,
+        "rate": 0.02610471051480239
+      },
+      "harmful_switch": {
+        "count": 209,
+        "denominator": 6851,
+        "rate": 0.030506495402131076
+      },
+      "dangerous_choice_on_single_failure": {
+        "count": 388,
+        "denominator": 13708,
+        "rate": 0.028304639626495477
+      }
+    },
+    "argmax_class_action": {
+      "requests": 6326,
+      "both_safe_requests": {
+        "count": 1267,
+        "denominator": 189548,
+        "rate": 0.00668432270453922
+      },
+      "both_failure_requests": {
+        "count": 446,
+        "denominator": 3206,
+        "rate": 0.13911416094822207
+      },
+      "correct_rescue": {
+        "count": 4599,
+        "denominator": 6857,
+        "rate": 0.670701472947353
+      },
+      "missed_rescue": {
+        "count": 2258,
+        "denominator": 6857,
+        "rate": 0.32929852705264695
+      },
+      "harmful_switch": {
+        "count": 14,
+        "denominator": 6851,
+        "rate": 0.0020434972996642826
+      },
+      "dangerous_choice_on_single_failure": {
+        "count": 2272,
+        "denominator": 13708,
+        "rate": 0.16574263203968487
+      }
+    },
+    "existing_rule_and_fixed_gain_gt_0_01": {
+      "requests": 19250,
+      "both_safe_requests": {
+        "count": 10759,
+        "denominator": 189548,
+        "rate": 0.05676134804904299
+      },
+      "both_failure_requests": {
+        "count": 1695,
+        "denominator": 3206,
+        "rate": 0.5286961946350592
+      },
+      "correct_rescue": {
+        "count": 6611,
+        "denominator": 6857,
+        "rate": 0.9641242525885956
+      },
+      "missed_rescue": {
+        "count": 246,
+        "denominator": 6857,
+        "rate": 0.0358757474114044
+      },
+      "harmful_switch": {
+        "count": 185,
+        "denominator": 6851,
+        "rate": 0.027003357174135163
+      },
+      "dangerous_choice_on_single_failure": {
+        "count": 431,
+        "denominator": 13708,
+        "rate": 0.031441494018091626
+      }
+    }
+  },
+  "argmax_confusion_true_rows_predicted_columns": [
+    [
+      186562,
+      2103,
+      553,
+      330
+    ],
+    [
+      3029,
+      7078,
+      8,
+      276
+    ],
+    [
+      1520,
+      19,
+      1528,
+      250
+    ],
+    [
+      406,
+      516,
+      81,
+      2203
+    ]
+  ],
+  "single_failure_direction": {
+    "rows": 13708,
+    "wrong_p_direction": 390,
+    "wrong_q_direction": 398,
+    "conditional_q1_over_q1_plus_q2_auroc": 0.9955133827199723
+  },
+  "single_failure_event_mass_g_q1_plus_q2": {
+    "auroc": 0.9751549695966331,
+    "ece_15_equal_width_bins": 0.001561376848258078,
+    "brier": 0.028949564322829247,
+    "mean_predicted": 0.06639467924833298,
+    "observed_rate": 0.06639478355646133
+  },
+  "direction_decomposition": {
+    "g": "q1 + q2 = probability exactly one branch fails",
+    "d": "q1 / (q1 + q2) = conditional direction given exactly one branch fails",
+    "current_log_ratio": "log(q1/q2) = logit(d), which removes g (except numerical clamping)",
+    "absolute_gain_lp_to_vp": "q1 - q2 = g * (2*d - 1)"
+  },
+  "existing_request_diagnostics": {
+    "all_requests_q_argmax_class_counts": [
+      40119,
+      5250,
+      1076,
+      1710
+    ],
+    "both_safe_requests_q_argmax_class_counts": [
+      38022,
+      962,
+      305,
+      224
+    ],
+    "both_failure_requests_q_argmax_class_counts": [
+      208,
+      374,
+      72,
+      1101
+    ],
+    "both_safe_requested_gain_quantiles": {
+      "0.0": 1.007541868602857e-06,
+      "0.1": 3.3632190024945885e-05,
+      "0.5": 0.0013244085712358356,
+      "0.9": 0.15559659898281097,
+      "1.0": 0.9549847841262817
+    },
+    "both_safe_requests_gain_lt_0_01": 28754,
+    "both_safe_requests_gain_lt_0_01_fraction": 0.7277098676384988,
+    "fixed_gain_gt_0_01_additional_rescues_blocked": 67,
+    "fixed_gain_gt_0_01_warning_unchanged": true
+  },
+  "joint_probability_diagnostics": {
+    "q0": {
+      "auroc": 0.98119549209627,
+      "ece_15_equal_width_bins": 0.001920530921779573,
+      "brier": 0.027820445597171783,
+      "mean_predicted": 0.9180769324302673,
+      "observed_rate": 0.9180769324302673
+    },
+    "q3": {
+      "auroc": 0.9914123674808675,
+      "ece_15_equal_width_bins": 0.0009721275418996811,
+      "brier": 0.006260415073484182,
+      "mean_predicted": 0.01552842278033495,
+      "observed_rate": 0.015528281219303608
+    },
+    "product_of_independent_marginals": {
+      "auroc": 0.9908943335130402,
+      "ece_15_equal_width_bins": 0.002710520289838314,
+      "brier": 0.006592378485947847,
+      "mean_predicted": 0.01281775999814272,
+      "observed_rate": 0.015528281219303608
+    },
+    "q3_exceeds_p_frechet_upper_by_gt_0_05": 2269,
+    "q3_below_p_frechet_lower_by_gt_0_05": 930,
+    "q0_hold_count": 0,
+    "warning_at_existing_fixed_threshold": {
+      "threshold": 0.23829098045825958,
+      "flagged": 4150,
+      "true_positive": 2565,
+      "recall": 0.8000623830318153,
+      "precision": 0.6180722891566265
+    }
+  }
+}

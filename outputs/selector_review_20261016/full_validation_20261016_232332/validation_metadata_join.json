@@ -1,0 +1,170 @@
+{
+  "original_manifest_sha256": "93396f13e87f71f57e07dda7174e5838191662039b53ea931f7fbb8a2ae9fc22",
+  "source_validation_rows": 206462,
+  "joined_rows": 204750,
+  "labels_match_all": true,
+  "current_branch_match_all": true,
+  "sample_ids_unique": true,
+  "exact_clean_filter_sample_id_set_match": true,
+  "original_rows_not_in_cleaned_predictions": 1712,
+  "output": "/tmp/selector_validation_metadata_join.npz",
+  "fault_source_codes": {
+    "0": "none",
+    "1": "lp_only",
+    "2": "vp_only",
+    "3": "dual"
+  },
+  "fault_metadata_order": [
+    "lp_kind",
+    "vp_kind",
+    "severity",
+    "phase",
+    "remaining_frames",
+    "duration_frames",
+    "lp_active",
+    "vp_active"
+  ],
+  "execution_metadata_order": [
+    "mode",
+    "dwell_s",
+    "remaining_blend_steps"
+  ],
+  "fields": {
+    "scenario_seed": {
+      "shape": [
+        204750
+      ],
+      "dtype": "int64"
+    },
+    "labels": {
+      "shape": [
+        204750,
+        2
+      ],
+      "dtype": "uint8"
+    },
+    "fault_metadata": {
+      "shape": [
+        204750,
+        8
+      ],
+      "dtype": "int16"
+    },
+    "terrain_level": {
+      "shape": [
+        204750
+      ],
+      "dtype": "int8"
+    },
+    "terrain_type": {
+      "shape": [
+        204750
+      ],
+      "dtype": "int16"
+    },
+    "execution_metadata": {
+      "shape": [
+        204750,
+        3
+      ],
+      "dtype": "float32"
+    },
+    "future_metrics": {
+      "shape": [
+        204750,
+        2,
+        10
+      ],
+      "dtype": "float16"
+    },
+    "candidate_time": {
+      "shape": [
+        204750
+      ],
+      "dtype": "float64"
+    },
+    "feature_end_time": {
+      "shape": [
+        204750
+      ],
+      "dtype": "float64"
+    },
+    "event_identity": {
+      "shape": [
+        204750,
+        3
+      ],
+      "dtype": "int64"
+    },
+    "fault_parameters": {
+      "shape": [
+        204750,
+        21
+      ],
+      "dtype": "float32"
+    },
+    "first_failure_flags": {
+      "shape": [
+        204750,
+        2
+      ],
+      "dtype": "uint8"
+    },
+    "first_failure_cause_stable": {
+      "shape": [
+        204750,
+        2
+      ],
+      "dtype": "bool"
+    },
+    "candidate_safety": {
+      "shape": [
+        204750,
+        4
+      ],
+      "dtype": "float32"
+    },
+    "original_current_branch": {
+      "shape": [
+        204750
+      ],
+      "dtype": "uint8"
+    },
+    "original_shard_index": {
+      "shape": [
+        204750
+      ],
+      "dtype": "int32"
+    },
+    "original_row_in_shard": {
+      "shape": [
+        204750
+      ],
+      "dtype": "int32"
+    },
+    "group_ids": {
+      "shape": [
+        204750
+      ],
+      "dtype": "<U28"
+    },
+    "fault_source": {
+      "shape": [
+        204750
+      ],
+      "dtype": "uint8"
+    },
+    "active_fault_source": {
+      "shape": [
+        204750
+      ],
+      "dtype": "uint8"
+    },
+    "sample_id": {
+      "shape": [
+        204750
+      ],
+      "dtype": "int64"
+    }
+  }
+}

@@ -1,0 +1,155 @@
+{
+  "first_failure_bits_match_labels": true,
+  "first_failure_flags": {
+    "all": [
+      {
+        "positive": 11930,
+        "first_flag_histogram": {
+          "3": 10471,
+          "4": 287,
+          "7": 61,
+          "8": 930,
+          "11": 62,
+          "12": 101,
+          "15": 18
+        },
+        "replay_cause_stable": 11737,
+        "non_timeout_termination_within_horizon": 11662,
+        "failure_without_non_timeout_termination": 268,
+        "first_failure_step_quantiles": [
+          6.0,
+          26.0,
+          45.0
+        ]
+      },
+      {
+        "positive": 4910,
+        "first_flag_histogram": {
+          "3": 687,
+          "4": 787,
+          "7": 32,
+          "8": 3125,
+          "11": 71,
+          "12": 174,
+          "15": 34
+        },
+        "replay_cause_stable": 4709,
+        "non_timeout_termination_within_horizon": 3752,
+        "failure_without_non_timeout_termination": 1158,
+        "first_failure_step_quantiles": [
+          4.0,
+          30.0,
+          45.0
+        ]
+      }
+    ],
+    "dual_detected": [
+      {
+        "positive": 1169,
+        "first_flag_histogram": {
+          "3": 521,
+          "4": 149,
+          "7": 22,
+          "8": 351,
+          "11": 23,
+          "12": 85,
+          "15": 18
+        },
+        "replay_cause_stable": 1159,
+        "non_timeout_termination_within_horizon": 1133,
+        "failure_without_non_timeout_termination": 36,
+        "first_failure_step_quantiles": [
+          1.0,
+          5.0,
+          21.0
+        ]
+      },
+      {
+        "positive": 1169,
+        "first_flag_histogram": {
+          "3": 188,
+          "4": 284,
+          "7": 8,
+          "8": 551,
+          "11": 24,
+          "12": 86,
+          "15": 28
+        },
+        "replay_cause_stable": 1159,
+        "non_timeout_termination_within_horizon": 1064,
+        "failure_without_non_timeout_termination": 105,
+        "first_failure_step_quantiles": [
+          1.0,
+          7.0,
+          27.0
+        ]
+      }
+    ],
+    "dual_missed": [
+      {
+        "positive": 469,
+        "first_flag_histogram": {
+          "3": 319,
+          "4": 27,
+          "7": 4,
+          "8": 114,
+          "11": 4,
+          "12": 1
+        },
+        "replay_cause_stable": 454,
+        "non_timeout_termination_within_horizon": 427,
+        "failure_without_non_timeout_termination": 42,
+        "first_failure_step_quantiles": [
+          5.0,
+          17.0,
+          38.0
+        ]
+      },
+      {
+        "positive": 469,
+        "first_flag_histogram": {
+          "3": 93,
+          "4": 78,
+          "7": 5,
+          "8": 269,
+          "11": 8,
+          "12": 16
+        },
+        "replay_cause_stable": 450,
+        "non_timeout_termination_within_horizon": 355,
+        "failure_without_non_timeout_termination": 114,
+        "first_failure_step_quantiles": [
+          9.0,
+          25.0,
+          44.0
+        ]
+      }
+    ]
+  },
+  "initial_state_cohorts": {
+    "initial_safe": {
+      "rows": 204380,
+      "class_counts": [
+        189471,
+        10289,
+        3271,
+        1349
+      ],
+      "dual_argmax_tp": 889,
+      "dual_argmax_recall": 0.6590066716085989,
+      "max_q3_recall_at_precision_50": 0.6041512231282431
+    },
+    "initial_unsafe": {
+      "rows": 370,
+      "class_counts": [
+        77,
+        3,
+        1,
+        289
+      ],
+      "dual_argmax_tp": 280,
+      "dual_argmax_recall": 0.9688581314878892,
+      "max_q3_recall_at_precision_50": 1.0
+    }
+  }
+}

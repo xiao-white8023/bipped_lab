@@ -1,0 +1,7 @@
+class,time_bin,all_single_failure_rows,rescue_needed,correct_rescue,q0_missed,q3_missed,other_missed,q0_miss_rate,correct_rescue_rate
+lp_only_failure,<=0.2s,1220,794,705,2,87,0,0.0025188916876574307,0.8879093198992444
+lp_only_failure,>0.2s and <=0.5s,3099,1814,1667,63,81,3,0.034729878721058434,0.9189636163175303
+lp_only_failure,>0.5s and <=1.0s,5973,2595,2178,336,70,11,0.12947976878612716,0.8393063583815029
+vp_only_failure,<=0.2s,81,59,42,9,8,0,0.15254237288135594,0.711864406779661
+vp_only_failure,>0.2s and <=0.5s,659,512,418,62,31,1,0.12109375,0.81640625
+vp_only_failure,>0.5s and <=1.0s,2532,1048,655,328,55,10,0.31297709923664124,0.625

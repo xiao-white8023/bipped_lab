@@ -1,0 +1,52 @@
+{
+  "artifact_version": 7,
+  "default_architecture": "branch_gru",
+  "default_probability_mode": "raw",
+  "files": [
+    {
+      "path": "legged_lab/selector/joint_model.py",
+      "sha256": "8afef9d1faa97df1370f47f7a93f6a89fb5714bbb9dcba4df1620dcf58ec8c35",
+      "original_local_sha256": "74f2ecee490e4e6f87bcb0b6ab7080187a714c60f73e777257f1690313a4188d"
+    },
+    {
+      "path": "legged_lab/selector/joint_training.py",
+      "sha256": "ed7be54e25f4098c941161eadcb2b20331e80e0fe4c5aee24861917f46c1f2bb",
+      "original_local_sha256": "6e33894974c2c0de414f4d46b60e750367b2a788bd9efe8357300a0c65c58267"
+    },
+    {
+      "path": "legged_lab/selector/joint_timing.py",
+      "sha256": "27f3748d26d7bda853165918798a828bc0a8c3d09707f62ef991af082c7f8fa6",
+      "original_local_sha256": null
+    },
+    {
+      "path": "legged_lab/selector/run_selector_joint_training.sh",
+      "sha256": "09873eaaf8b8da0b721894a489bcada5b842da59da50e27c39d7e91b093e2073",
+      "original_local_sha256": "129d55cce3181ba752dc37d8fd2b33d3a73e35f7dd0fc553d62495f94ffd6888"
+    },
+    {
+      "path": "legged_lab/scripts/train_selector_joint.py",
+      "sha256": "5001c816948cd0d243a6a4be74a40336bce8ddb7a38af8f9e69b0b84e83a37b8",
+      "original_local_sha256": "794d058b872b0aea0b44b804c94ea1d08954d966f7d3d52c4670bf9bfdb3d653"
+    },
+    {
+      "path": "legged_lab/scripts/eval_selector_joint.py",
+      "sha256": "e2ad2e999fd82ec9e53639688b5d78ca89807aa3ec69af699a08db78ec2f7e95",
+      "original_local_sha256": "c6fc8404a838ca48aaf977011689d56170ba54b8922278564e2222c6dfab54dc"
+    },
+    {
+      "path": "legged_lab/scripts/export_selector_joint_validation_predictions.py",
+      "sha256": "888172c32075fd317380b68fa3102d50c47850622581bbf5fa364c532267006c",
+      "original_local_sha256": "ed662e0c9c7f10581b86d0d8d751e31f4072c68fd1b946e4e7513b16ce74e524"
+    },
+    {
+      "path": "legged_lab/selector/JOINT_ARCHITECTURES.md",
+      "sha256": "8494158608fdb6b5d8d108330bf307da4bbb8a41dd9c132481c10ef757222da9",
+      "original_local_sha256": null
+    },
+    {
+      "path": "rsl_rl/tests/test_selector_joint_architectures.py",
+      "sha256": "c942744fa31114ca778cb548385ef2757114e20a35bc3e7affae1da33212cf3f",
+      "original_local_sha256": null
+    }
+  ]
+}

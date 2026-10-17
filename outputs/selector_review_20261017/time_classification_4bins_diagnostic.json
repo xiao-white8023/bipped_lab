@@ -1,0 +1,316 @@
+{
+  "probability_mode": "raw",
+  "rows": 204750,
+  "validation": [
+    {
+      "class": 1,
+      "time_bin": "<=0.2s",
+      "rows": 1220,
+      "predicted_counts_q0_q1_q2_q3": [
+        20,
+        1085,
+        2,
+        113
+      ],
+      "class_true_positive": 1085,
+      "class_recall": 0.889344262295082,
+      "safe_branch_selected": 1129,
+      "safe_branch_selection_rate": 0.9254098360655738,
+      "rescue_needed": 794,
+      "correct_rescue": 705,
+      "rescue_rate": 0.8879093198992444
+    },
+    {
+      "class": 1,
+      "time_bin": ">0.2s and <=0.5s",
+      "rows": 3099,
+      "predicted_counts_q0_q1_q2_q3": [
+        149,
+        2788,
+        6,
+        156
+      ],
+      "class_true_positive": 2788,
+      "class_recall": 0.8996450467892869,
+      "safe_branch_selected": 2949,
+      "safe_branch_selection_rate": 0.9515972894482091,
+      "rescue_needed": 1814,
+      "correct_rescue": 1667,
+      "rescue_rate": 0.9189636163175303
+    },
+    {
+      "class": 1,
+      "time_bin": ">0.5s and <=0.7s",
+      "rows": 2376,
+      "predicted_counts_q0_q1_q2_q3": [
+        230,
+        2056,
+        6,
+        84
+      ],
+      "class_true_positive": 2056,
+      "class_recall": 0.8653198653198653,
+      "safe_branch_selected": 2241,
+      "safe_branch_selection_rate": 0.9431818181818182,
+      "rescue_needed": 1180,
+      "correct_rescue": 1048,
+      "rescue_rate": 0.888135593220339
+    },
+    {
+      "class": 1,
+      "time_bin": ">0.7s and <=1.0s",
+      "rows": 3597,
+      "predicted_counts_q0_q1_q2_q3": [
+        787,
+        2738,
+        13,
+        59
+      ],
+      "class_true_positive": 2738,
+      "class_recall": 0.7611898804559355,
+      "safe_branch_selected": 3307,
+      "safe_branch_selection_rate": 0.9193772588268001,
+      "rescue_needed": 1415,
+      "correct_rescue": 1130,
+      "rescue_rate": 0.7985865724381626
+    },
+    {
+      "class": 2,
+      "time_bin": "<=0.2s",
+      "rows": 81,
+      "predicted_counts_q0_q1_q2_q3": [
+        24,
+        1,
+        47,
+        9
+      ],
+      "class_true_positive": 47,
+      "class_recall": 0.5802469135802469,
+      "safe_branch_selected": 63,
+      "safe_branch_selection_rate": 0.7777777777777778,
+      "rescue_needed": 59,
+      "correct_rescue": 42,
+      "rescue_rate": 0.711864406779661
+    },
+    {
+      "class": 2,
+      "time_bin": ">0.2s and <=0.5s",
+      "rows": 659,
+      "predicted_counts_q0_q1_q2_q3": [
+        106,
+        3,
+        503,
+        47
+      ],
+      "class_true_positive": 503,
+      "class_recall": 0.7632776934749621,
+      "safe_branch_selected": 563,
+      "safe_branch_selection_rate": 0.8543247344461306,
+      "rescue_needed": 512,
+      "correct_rescue": 418,
+      "rescue_rate": 0.81640625
+    },
+    {
+      "class": 2,
+      "time_bin": ">0.5s and <=0.7s",
+      "rows": 1037,
+      "predicted_counts_q0_q1_q2_q3": [
+        197,
+        5,
+        800,
+        35
+      ],
+      "class_true_positive": 800,
+      "class_recall": 0.7714561234329798,
+      "safe_branch_selected": 906,
+      "safe_branch_selection_rate": 0.8736740597878495,
+      "rescue_needed": 458,
+      "correct_rescue": 328,
+      "rescue_rate": 0.7161572052401747
+    },
+    {
+      "class": 2,
+      "time_bin": ">0.7s and <=1.0s",
+      "rows": 1495,
+      "predicted_counts_q0_q1_q2_q3": [
+        555,
+        17,
+        871,
+        52
+      ],
+      "class_true_positive": 871,
+      "class_recall": 0.5826086956521739,
+      "safe_branch_selected": 1221,
+      "safe_branch_selection_rate": 0.8167224080267559,
+      "rescue_needed": 590,
+      "correct_rescue": 327,
+      "rescue_rate": 0.5542372881355933
+    },
+    {
+      "class": 3,
+      "time_bin": "<=0.2s",
+      "rows": 746,
+      "predicted_counts_q0_q1_q2_q3": [
+        10,
+        16,
+        22,
+        698
+      ],
+      "class_true_positive": 698,
+      "class_recall": 0.935656836461126
+    },
+    {
+      "class": 3,
+      "time_bin": ">0.2s and <=0.5s",
+      "rows": 479,
+      "predicted_counts_q0_q1_q2_q3": [
+        20,
+        87,
+        62,
+        310
+      ],
+      "class_true_positive": 310,
+      "class_recall": 0.6471816283924844
+    },
+    {
+      "class": 3,
+      "time_bin": ">0.5s and <=0.7s",
+      "rows": 188,
+      "predicted_counts_q0_q1_q2_q3": [
+        17,
+        58,
+        24,
+        89
+      ],
+      "class_true_positive": 89,
+      "class_recall": 0.4734042553191489
+    },
+    {
+      "class": 3,
+      "time_bin": ">0.7s and <=1.0s",
+      "rows": 225,
+      "predicted_counts_q0_q1_q2_q3": [
+        30,
+        91,
+        32,
+        72
+      ],
+      "class_true_positive": 72,
+      "class_recall": 0.32
+    }
+  ],
+  "user_supplied_tables": {
+    "validation": {
+      "1": [
+        [
+          1085,
+          2788,
+          2056,
+          2738
+        ],
+        [
+          1220,
+          3099,
+          2376,
+          3597
+        ]
+      ],
+      "2": [
+        [
+          47,
+          503,
+          800,
+          871
+        ],
+        [
+          81,
+          659,
+          1037,
+          1495
+        ]
+      ],
+      "3": [
+        [
+          698,
+          310,
+          89,
+          72
+        ],
+        [
+          746,
+          479,
+          188,
+          225
+        ]
+      ]
+    },
+    "test": {
+      "1": [
+        [
+          907,
+          2279,
+          1737,
+          2231
+        ],
+        [
+          1008,
+          2527,
+          1970,
+          2800
+        ]
+      ],
+      "2": [
+        [
+          37,
+          421,
+          634,
+          748
+        ],
+        [
+          51,
+          539,
+          784,
+          1274
+        ]
+      ],
+      "3": [
+        [
+          644,
+          292,
+          123,
+          89
+        ],
+        [
+          699,
+          436,
+          220,
+          241
+        ]
+      ]
+    }
+  },
+  "validation_all_bins_verified": true,
+  "test_bin_counts_verification": "User supplied; aggregate counts match the saved raw test confusion matrix. No per-row test predictions available.",
+  "dual_predicted_single_timing_probe": {
+    "all_dual_predicted_single": {
+      "rows": 392,
+      "predicts_earlier_failing_branch": 273,
+      "predicts_later_failing_branch": 86,
+      "same_time": 33,
+      "earlier_failure_median_seconds": 0.28,
+      "later_failure_median_seconds": 0.52,
+      "time_gap_median_seconds": 0.18
+    },
+    "later_gt_0_7_dual_predicted_single": {
+      "rows": 123,
+      "predicts_earlier_failing_branch": 97,
+      "predicts_later_failing_branch": 25,
+      "same_time": 1,
+      "earlier_failure_median_seconds": 0.54,
+      "later_failure_median_seconds": 0.84,
+      "time_gap_median_seconds": 0.3
+    }
+  },
+  "time_semantics": "First safety trigger in each forced-policy rollout, dt=.02s; two times are counterfactual trajectories, not sequential real sensor failures.",
+  "runtime_gates_evaluated": false
+}

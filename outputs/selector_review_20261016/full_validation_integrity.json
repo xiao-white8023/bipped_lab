@@ -1,0 +1,41 @@
+{
+  "all_checks_passed": true,
+  "rows": 204750,
+  "unique_ids": 204750,
+  "class_counts": [
+    189548,
+    10292,
+    3272,
+    1638
+  ],
+  "source_checksums": {
+    "joint_training_report.json": "ed1a9e3235adcfeb234b92565ab8d7881bd9baf1d189d1dafbbf7d3259906f73",
+    "validation_predictions.json": "f16d72dfc1923890be1e1d8ab3a339310ed52f221559497384b5fd676c87269a",
+    "validation_predictions.npz": "985c69c4c2d32f11010f6d76f119b635f74d886565c82da4b95ab1dddf46f986",
+    "validation_predictions_analysis.json": "d7c3153d8e44755fd98cff7af382266e1e182630ed7fc787c63783ddba996d76"
+  },
+  "checkpoint_sha256": "961d421cb363186e0bd2e50cb7e00d396a6120cd793d1a8b7463634653931b8a",
+  "reported_trained_state_sha256": "25a9bd25f69e17b029d1f5c1f3b43fd7b77555b9f59128ede7fe37746497bd82",
+  "primary_probability_mode": "raw",
+  "profiles": {
+    "raw": {
+      "max_probability_reconstruction_error": 1.4800603609366192e-07,
+      "all_row_masks_match": true,
+      "correct_rescue": 5665,
+      "missed_rescue": 1157
+    },
+    "temperature": {
+      "max_probability_reconstruction_error": 1.496333836836783e-07,
+      "all_row_masks_match": true,
+      "correct_rescue": 5665,
+      "missed_rescue": 1157
+    },
+    "temperature_bias": {
+      "max_probability_reconstruction_error": 1.7441422384134597e-07,
+      "all_row_masks_match": true,
+      "correct_rescue": 4698,
+      "missed_rescue": 2124
+    }
+  },
+  "scope": "validation predictions only; no model, threshold or test selection"
+}
