@@ -1,0 +1,1305 @@
+{
+  "provenance": {
+    "new_report": {
+      "path": "/home/cjh/.codex/attachments/2104ad84-8466-419b-8bf4-2869d2faa921/已粘贴的文本.txt",
+      "sha256": "6779cbc9643b8324f98a0dfbaef521e5e27007e02a1fa4891de900a184014f5f"
+    },
+    "old_report": {
+      "path": "/home/cjh/桌面/joint_training_report.json",
+      "sha256": "ed1a9e3235adcfeb234b92565ab8d7881bd9baf1d189d1dafbbf7d3259906f73"
+    },
+    "old_validation_predictions": {
+      "path": "/home/cjh/桌面/validation_predictions.npz",
+      "sha256": "985c69c4c2d32f11010f6d76f119b635f74d886565c82da4b95ab1dddf46f986"
+    },
+    "old_validation_metadata": {
+      "path": "/home/cjh/TienKung-Lab/outputs/selector_review_20261016/full_validation_20261016_232332/validation_metadata_join.npz",
+      "sha256": "94d58eb0bd281c33c57c4a571071027e4786ded62cf8690439c18c95dee98dc5"
+    },
+    "old_timing_diagnostic": {
+      "path": "/home/cjh/TienKung-Lab/outputs/selector_review_20261017/time_classification_4bins_diagnostic.json",
+      "sha256": "432b49d0c089a5a16c16756d6eadfdab6880e5dac5a52225d748f09be922dcb0"
+    }
+  },
+  "checks": {
+    "same_training_sources": true,
+    "same_loss": true,
+    "same_sampler": true,
+    "same_metrics_code_between_runs": true,
+    "raw_modes_compared": true,
+    "matrices_request_tables_and_time_totals_verified": true
+  },
+  "source_code_comparison": {
+    "legged_lab/scripts/train_selector_joint.py": {
+      "old_server_equals_new_server": false,
+      "new_server_equals_local": true
+    },
+    "legged_lab/selector/joint_model.py": {
+      "old_server_equals_new_server": false,
+      "new_server_equals_local": true
+    },
+    "legged_lab/selector/joint_data.py": {
+      "old_server_equals_new_server": true,
+      "new_server_equals_local": true
+    },
+    "legged_lab/selector/joint_training.py": {
+      "old_server_equals_new_server": false,
+      "new_server_equals_local": true
+    },
+    "legged_lab/selector/joint_timing.py": {
+      "old_server_equals_new_server": false,
+      "new_server_equals_local": true
+    },
+    "legged_lab/selector/outcomes.py": {
+      "old_server_equals_new_server": true,
+      "new_server_equals_local": true
+    },
+    "legged_lab/selector/metrics.py": {
+      "old_server_equals_new_server": true,
+      "new_server_equals_local": false
+    }
+  },
+  "architecture": {
+    "name": "branch_gru",
+    "history_frames": 5,
+    "explicit_history_span_s": 0.4,
+    "parameters": 615940,
+    "gru_layers_per_stream": 1,
+    "temporal_streams": 2,
+    "readout": "last_state_plus_attention_over_all_frames_plus_current_frame",
+    "common_input_dim": 87,
+    "branch_input_dim": 98,
+    "output": "four_joint_logits_with_exact_LP_VP_marginals"
+  },
+  "selected": {
+    "seed": 42,
+    "best_epoch": 3,
+    "epochs_run": 18,
+    "validation_objective": 0.25072652101516724,
+    "initialization": "random",
+    "initial_checkpoint": null,
+    "initial_state_sha256": "24537b2f39eb569eae552896f3049b3a2730b4a26b4a0d64c202dcb6922a6cd3",
+    "trained_state_sha256": "cd40477e40ebb21b453afb462615bc4df5f91c3b66ebad655d15ded387c3540e",
+    "updated_components": {
+      "common_encoder": 8,
+      "lp_encoder": 8,
+      "vp_encoder": 8,
+      "lp_attention": 3,
+      "vp_attention": 3,
+      "head": 8,
+      "lp_gru_layer_0": 4,
+      "vp_gru_layer_0": 4
+    },
+    "all_network_parameters_trainable": true,
+    "architecture": {
+      "name": "branch_gru",
+      "history_frames": 5,
+      "explicit_history_span_s": 0.4,
+      "parameters": 615940,
+      "gru_layers_per_stream": 1,
+      "temporal_streams": 2,
+      "readout": "last_state_plus_attention_over_all_frames_plus_current_frame",
+      "common_input_dim": 87,
+      "branch_input_dim": 98,
+      "output": "four_joint_logits_with_exact_LP_VP_marginals"
+    }
+  },
+  "all_candidates": [
+    {
+      "seed": 42,
+      "best_epoch": 3,
+      "epochs_run": 18,
+      "validation_objective": 0.25072652101516724,
+      "initialization": "random",
+      "initial_checkpoint": null,
+      "initial_state_sha256": "24537b2f39eb569eae552896f3049b3a2730b4a26b4a0d64c202dcb6922a6cd3",
+      "trained_state_sha256": "cd40477e40ebb21b453afb462615bc4df5f91c3b66ebad655d15ded387c3540e",
+      "updated_components": {
+        "common_encoder": 8,
+        "lp_encoder": 8,
+        "vp_encoder": 8,
+        "lp_attention": 3,
+        "vp_attention": 3,
+        "head": 8,
+        "lp_gru_layer_0": 4,
+        "vp_gru_layer_0": 4
+      },
+      "all_network_parameters_trainable": true,
+      "architecture": {
+        "name": "branch_gru",
+        "history_frames": 5,
+        "explicit_history_span_s": 0.4,
+        "parameters": 615940,
+        "gru_layers_per_stream": 1,
+        "temporal_streams": 2,
+        "readout": "last_state_plus_attention_over_all_frames_plus_current_frame",
+        "common_input_dim": 87,
+        "branch_input_dim": 98,
+        "output": "four_joint_logits_with_exact_LP_VP_marginals"
+      }
+    },
+    {
+      "seed": 43,
+      "best_epoch": 8,
+      "epochs_run": 23,
+      "validation_objective": 0.2550692856311798,
+      "initialization": "random",
+      "initial_checkpoint": null,
+      "initial_state_sha256": "6eda94a6936e5376b9cb64445e1e21ef6f6904ed88dac2e4959b50748829ae23",
+      "trained_state_sha256": "8d718f14275a37eab6913e85bead49bb6ab6c76d55df9033cb5d26c08d4f4fa1",
+      "updated_components": {
+        "common_encoder": 8,
+        "lp_encoder": 8,
+        "vp_encoder": 8,
+        "lp_attention": 3,
+        "vp_attention": 3,
+        "head": 8,
+        "lp_gru_layer_0": 4,
+        "vp_gru_layer_0": 4
+      },
+      "all_network_parameters_trainable": true,
+      "architecture": {
+        "name": "branch_gru",
+        "history_frames": 5,
+        "explicit_history_span_s": 0.4,
+        "parameters": 615940,
+        "gru_layers_per_stream": 1,
+        "temporal_streams": 2,
+        "readout": "last_state_plus_attention_over_all_frames_plus_current_frame",
+        "common_input_dim": 87,
+        "branch_input_dim": 98,
+        "output": "four_joint_logits_with_exact_LP_VP_marginals"
+      }
+    },
+    {
+      "seed": 44,
+      "best_epoch": 6,
+      "epochs_run": 21,
+      "validation_objective": 0.2508620321750641,
+      "initialization": "random",
+      "initial_checkpoint": null,
+      "initial_state_sha256": "6bfdf4478db9073f1e6cc8062a471db5f8873b945eca8417016ebb09f128471d",
+      "trained_state_sha256": "55941e2aa4d3a65ca82ec6ac0e681c204eaaa6ae9492761cc9fc9ff1198bc4b7",
+      "updated_components": {
+        "common_encoder": 8,
+        "lp_encoder": 8,
+        "vp_encoder": 8,
+        "lp_attention": 3,
+        "vp_attention": 3,
+        "head": 8,
+        "lp_gru_layer_0": 4,
+        "vp_gru_layer_0": 4
+      },
+      "all_network_parameters_trainable": true,
+      "architecture": {
+        "name": "branch_gru",
+        "history_frames": 5,
+        "explicit_history_span_s": 0.4,
+        "parameters": 615940,
+        "gru_layers_per_stream": 1,
+        "temporal_streams": 2,
+        "readout": "last_state_plus_attention_over_all_frames_plus_current_frame",
+        "common_input_dim": 87,
+        "branch_input_dim": 98,
+        "output": "four_joint_logits_with_exact_LP_VP_marginals"
+      }
+    }
+  ],
+  "aggregate_comparison": [
+    {
+      "split": "train",
+      "metric": "outcome/accuracy",
+      "label": "总体分类准确率",
+      "old": 0.9514101147651672,
+      "new": 0.945550799369812,
+      "delta": -0.005859315395355225
+    },
+    {
+      "split": "train",
+      "metric": "outcome/log_loss",
+      "label": "未加权四分类NLL",
+      "old": 0.12241186201572418,
+      "new": 0.13733400404453278,
+      "delta": 0.014922142028808594
+    },
+    {
+      "split": "train",
+      "metric": "switch/correct_rescue_count",
+      "label": "正确救援数",
+      "old": 41944,
+      "new": 39476,
+      "delta": -2468
+    },
+    {
+      "split": "train",
+      "metric": "switch/correct_rescue_rate",
+      "label": "正确救援率",
+      "old": 0.8907009832027352,
+      "new": 0.8382918179694634,
+      "delta": -0.05240916523327177
+    },
+    {
+      "split": "train",
+      "metric": "switch/missed_rescue_count",
+      "label": "漏救数",
+      "old": 5147,
+      "new": 7615,
+      "delta": 2468
+    },
+    {
+      "split": "train",
+      "metric": "selection/dangerous_branch_count",
+      "label": "单失败时选坏支路数",
+      "old": 5246,
+      "new": 7698,
+      "delta": 2452
+    },
+    {
+      "split": "train",
+      "metric": "selection/dangerous_branch_rate",
+      "label": "单失败时选坏支路率",
+      "old": 0.06389457273701647,
+      "new": 0.09375913475591932,
+      "delta": 0.02986456201890285
+    },
+    {
+      "split": "train",
+      "metric": "switch/harmful_switch_count",
+      "label": "从安全支路切坏的次数",
+      "old": 99,
+      "new": 83,
+      "delta": -16
+    },
+    {
+      "split": "train",
+      "metric": "switch/both_safe_switch_rate",
+      "label": "双安全切换请求率",
+      "old": 0.015509660009916038,
+      "new": 0.014428649224191884,
+      "delta": -0.0010810107857241544
+    },
+    {
+      "split": "train",
+      "metric": "switch/both_failure_switch_rate",
+      "label": "双失败切换请求率",
+      "old": 0.0699766355140187,
+      "new": 0.07916666666666666,
+      "delta": 0.009190031152647965
+    },
+    {
+      "split": "train",
+      "metric": "selection/both_failure_flag_recall",
+      "label": "双失败识别召回",
+      "old": 0.8852803738317757,
+      "new": 0.8625778816199376,
+      "delta": -0.022702492211838066
+    },
+    {
+      "split": "train",
+      "metric": "selection/both_unreliable_flag_precision",
+      "label": "双失败识别精确率",
+      "old": 0.8694355208811382,
+      "new": 0.8217465499332245,
+      "delta": -0.04768897094791369
+    },
+    {
+      "split": "train",
+      "metric": "selection/lp_only_failure_wrong_rate",
+      "label": "仅LP失败选坏支路率",
+      "old": 0.055379927632831845,
+      "new": 0.07457627118644068,
+      "delta": 0.019196343553608837
+    },
+    {
+      "split": "train",
+      "metric": "selection/vp_only_failure_wrong_rate",
+      "label": "仅VP失败选坏支路率",
+      "old": 0.0790025005068595,
+      "new": 0.12779617490031764,
+      "delta": 0.048793674393458136
+    },
+    {
+      "split": "train",
+      "metric": "switch/request_count",
+      "label": "切换请求总数",
+      "old": 53381,
+      "new": 50468,
+      "delta": -2913
+    },
+    {
+      "split": "validation",
+      "metric": "outcome/accuracy",
+      "label": "总体分类准确率",
+      "old": 0.9452210068702698,
+      "new": 0.9474334716796875,
+      "delta": 0.0022124648094177246
+    },
+    {
+      "split": "validation",
+      "metric": "outcome/log_loss",
+      "label": "未加权四分类NLL",
+      "old": 0.13933952152729034,
+      "new": 0.1354115605354309,
+      "delta": -0.003927960991859436
+    },
+    {
+      "split": "validation",
+      "metric": "switch/correct_rescue_count",
+      "label": "正确救援数",
+      "old": 5665,
+      "new": 5534,
+      "delta": -131
+    },
+    {
+      "split": "validation",
+      "metric": "switch/correct_rescue_rate",
+      "label": "正确救援率",
+      "old": 0.8304016417472881,
+      "new": 0.8111990618586925,
+      "delta": -0.01920257988859564
+    },
+    {
+      "split": "validation",
+      "metric": "switch/missed_rescue_count",
+      "label": "漏救数",
+      "old": 1157,
+      "new": 1288,
+      "delta": 131
+    },
+    {
+      "split": "validation",
+      "metric": "selection/dangerous_branch_count",
+      "label": "单失败时选坏支路数",
+      "old": 1185,
+      "new": 1320,
+      "delta": 135
+    },
+    {
+      "split": "validation",
+      "metric": "selection/dangerous_branch_rate",
+      "label": "单失败时选坏支路率",
+      "old": 0.08736360955470363,
+      "new": 0.09731642583308758,
+      "delta": 0.009952816278383958
+    },
+    {
+      "split": "validation",
+      "metric": "switch/harmful_switch_count",
+      "label": "从安全支路切坏的次数",
+      "old": 28,
+      "new": 32,
+      "delta": 4
+    },
+    {
+      "split": "validation",
+      "metric": "switch/both_safe_switch_rate",
+      "label": "双安全切换请求率",
+      "old": 0.017863549074640724,
+      "new": 0.015035769303817503,
+      "delta": -0.0028277797708232202
+    },
+    {
+      "split": "validation",
+      "metric": "switch/both_failure_switch_rate",
+      "label": "双失败切换请求率",
+      "old": 0.1452991452991453,
+      "new": 0.13736263736263737,
+      "delta": -0.007936507936507936
+    },
+    {
+      "split": "validation",
+      "metric": "selection/both_failure_flag_recall",
+      "label": "双失败识别召回",
+      "old": 0.7136752136752137,
+      "new": 0.7258852258852259,
+      "delta": 0.012210012210012167
+    },
+    {
+      "split": "validation",
+      "metric": "selection/both_unreliable_flag_precision",
+      "label": "双失败识别精确率",
+      "old": 0.492003367003367,
+      "new": 0.4752198241406875,
+      "delta": -0.016783542862679524
+    },
+    {
+      "split": "validation",
+      "metric": "selection/lp_only_failure_wrong_rate",
+      "label": "仅LP失败选坏支路率",
+      "old": 0.06471045472211426,
+      "new": 0.07345511076564322,
+      "delta": 0.008744656043528962
+    },
+    {
+      "split": "validation",
+      "metric": "selection/vp_only_failure_wrong_rate",
+      "label": "仅VP失败选坏支路率",
+      "old": 0.15861858190709047,
+      "new": 0.17237163814180928,
+      "delta": 0.013753056234718813
+    },
+    {
+      "split": "validation",
+      "metric": "switch/request_count",
+      "label": "切换请求总数",
+      "old": 9317,
+      "new": 8641,
+      "delta": -676
+    },
+    {
+      "split": "test",
+      "metric": "outcome/accuracy",
+      "label": "总体分类准确率",
+      "old": 0.9462862014770508,
+      "new": 0.9497441649436951,
+      "delta": 0.003457963466644287
+    },
+    {
+      "split": "test",
+      "metric": "outcome/log_loss",
+      "label": "未加权四分类NLL",
+      "old": 0.13363595306873322,
+      "new": 0.12583428621292114,
+      "delta": -0.007801666855812073
+    },
+    {
+      "split": "test",
+      "metric": "switch/correct_rescue_count",
+      "label": "正确救援数",
+      "old": 4612,
+      "new": 4463,
+      "delta": -149
+    },
+    {
+      "split": "test",
+      "metric": "switch/correct_rescue_rate",
+      "label": "正确救援率",
+      "old": 0.8344490682106025,
+      "new": 0.8074905011760448,
+      "delta": -0.02695856703455768
+    },
+    {
+      "split": "test",
+      "metric": "switch/missed_rescue_count",
+      "label": "漏救数",
+      "old": 915,
+      "new": 1064,
+      "delta": 149
+    },
+    {
+      "split": "test",
+      "metric": "selection/dangerous_branch_count",
+      "label": "单失败时选坏支路数",
+      "old": 956,
+      "new": 1108,
+      "delta": 152
+    },
+    {
+      "split": "test",
+      "metric": "selection/dangerous_branch_rate",
+      "label": "单失败时选坏支路率",
+      "old": 0.0872820231899936,
+      "new": 0.10115949968045285,
+      "delta": 0.013877476490459242
+    },
+    {
+      "split": "test",
+      "metric": "switch/harmful_switch_count",
+      "label": "从安全支路切坏的次数",
+      "old": 41,
+      "new": 44,
+      "delta": 3
+    },
+    {
+      "split": "test",
+      "metric": "switch/both_safe_switch_rate",
+      "label": "双安全切换请求率",
+      "old": 0.019410671489090103,
+      "new": 0.016313223911043808,
+      "delta": -0.0030974475780462946
+    },
+    {
+      "split": "test",
+      "metric": "switch/both_failure_switch_rate",
+      "label": "双失败切换请求率",
+      "old": 0.12406015037593984,
+      "new": 0.12907268170426064,
+      "delta": 0.005012531328320802
+    },
+    {
+      "split": "test",
+      "metric": "selection/both_failure_flag_recall",
+      "label": "双失败识别召回",
+      "old": 0.7192982456140351,
+      "new": 0.7274436090225563,
+      "delta": 0.008145363408521233
+    },
+    {
+      "split": "test",
+      "metric": "selection/both_unreliable_flag_precision",
+      "label": "双失败识别精确率",
+      "old": 0.5688800792864221,
+      "new": 0.5625,
+      "delta": -0.006380079286422147
+    },
+    {
+      "split": "test",
+      "metric": "selection/lp_only_failure_wrong_rate",
+      "label": "仅LP失败选坏支路率",
+      "old": 0.07031908488862132,
+      "new": 0.08019265502709211,
+      "delta": 0.009873570138470789
+    },
+    {
+      "split": "test",
+      "metric": "selection/vp_only_failure_wrong_rate",
+      "label": "仅VP失败选坏支路率",
+      "old": 0.1404833836858006,
+      "new": 0.16691842900302115,
+      "delta": 0.026435045317220546
+    },
+    {
+      "split": "test",
+      "metric": "switch/request_count",
+      "label": "切换请求总数",
+      "old": 7953,
+      "new": 7320,
+      "delta": -633
+    },
+    {
+      "split": "original_test",
+      "metric": "outcome/accuracy",
+      "label": "总体分类准确率",
+      "old": 0.9431005120277405,
+      "new": 0.9462891221046448,
+      "delta": 0.003188610076904297
+    },
+    {
+      "split": "original_test",
+      "metric": "outcome/log_loss",
+      "label": "未加权四分类NLL",
+      "old": 0.1450028121471405,
+      "new": 0.13703086972236633,
+      "delta": -0.00797194242477417
+    },
+    {
+      "split": "original_test",
+      "metric": "switch/correct_rescue_count",
+      "label": "正确救援数",
+      "old": 4613,
+      "new": 4463,
+      "delta": -150
+    },
+    {
+      "split": "original_test",
+      "metric": "switch/correct_rescue_rate",
+      "label": "正确救援率",
+      "old": 0.8293779216109313,
+      "new": 0.8024092053218267,
+      "delta": -0.026968716289104577
+    },
+    {
+      "split": "original_test",
+      "metric": "switch/missed_rescue_count",
+      "label": "漏救数",
+      "old": 949,
+      "new": 1099,
+      "delta": 150
+    },
+    {
+      "split": "original_test",
+      "metric": "selection/dangerous_branch_count",
+      "label": "单失败时选坏支路数",
+      "old": 1047,
+      "new": 1188,
+      "delta": 141
+    },
+    {
+      "split": "original_test",
+      "metric": "selection/dangerous_branch_rate",
+      "label": "单失败时选坏支路率",
+      "old": 0.09434132276085781,
+      "new": 0.10704631465128853,
+      "delta": 0.012704991890430714
+    },
+    {
+      "split": "original_test",
+      "metric": "switch/harmful_switch_count",
+      "label": "从安全支路切坏的次数",
+      "old": 98,
+      "new": 89,
+      "delta": -9
+    },
+    {
+      "split": "original_test",
+      "metric": "switch/both_safe_switch_rate",
+      "label": "双安全切换请求率",
+      "old": 0.019410671489090103,
+      "new": 0.016313223911043808,
+      "delta": -0.0030974475780462946
+    },
+    {
+      "split": "original_test",
+      "metric": "switch/both_failure_switch_rate",
+      "label": "双失败切换请求率",
+      "old": 0.21106412966878083,
+      "new": 0.21811134601832277,
+      "delta": 0.007047216349541946
+    },
+    {
+      "split": "original_test",
+      "metric": "selection/both_failure_flag_recall",
+      "label": "双失败识别召回",
+      "old": 0.671599718111346,
+      "new": 0.6613812544045102,
+      "delta": -0.010218463706835768
+    },
+    {
+      "split": "original_test",
+      "metric": "selection/both_unreliable_flag_precision",
+      "label": "双失败识别精确率",
+      "old": 0.6833990677662245,
+      "new": 0.6708363116511794,
+      "delta": -0.012562756115045093
+    },
+    {
+      "split": "original_test",
+      "metric": "selection/lp_only_failure_wrong_rate",
+      "label": "仅LP失败选坏支路率",
+      "old": 0.07584973166368515,
+      "new": 0.08419797257006559,
+      "delta": 0.008348240906380436
+    },
+    {
+      "split": "original_test",
+      "metric": "selection/vp_only_failure_wrong_rate",
+      "label": "仅VP失败选坏支路率",
+      "old": 0.15149281238481385,
+      "new": 0.17766310357537782,
+      "delta": 0.026170291190563966
+    },
+    {
+      "split": "original_test",
+      "metric": "switch/request_count",
+      "label": "切换请求总数",
+      "old": 8412,
+      "new": 7778,
+      "delta": -634
+    }
+  ],
+  "timing_comparison": [
+    {
+      "split": "validation",
+      "class": 1,
+      "class_name": "仅LP失败",
+      "time_bin": "(0,0.2]秒",
+      "samples": 1220,
+      "old_tp": 1085,
+      "new_tp": 1092,
+      "old_recall": 0.889344262295082,
+      "new_recall": 0.8950819672131147,
+      "delta": 0.0057377049180327155,
+      "rescue_needed": 794,
+      "old_rescue": 705,
+      "new_rescue": 717,
+      "old_rescue_rate": 0.8879093198992444,
+      "new_rescue_rate": 0.9030226700251889
+    },
+    {
+      "split": "validation",
+      "class": 1,
+      "class_name": "仅LP失败",
+      "time_bin": "(0.2,0.5]秒",
+      "samples": 3099,
+      "old_tp": 2788,
+      "new_tp": 2791,
+      "old_recall": 0.8996450467892869,
+      "new_recall": 0.9006131010003227,
+      "delta": 0.0009680542110357404,
+      "rescue_needed": 1814,
+      "old_rescue": 1667,
+      "new_rescue": 1685,
+      "old_rescue_rate": 0.9189636163175303,
+      "new_rescue_rate": 0.9288864388092613
+    },
+    {
+      "split": "validation",
+      "class": 1,
+      "class_name": "仅LP失败",
+      "time_bin": "(0.5,0.7]秒",
+      "samples": 2376,
+      "old_tp": 2056,
+      "new_tp": 2033,
+      "old_recall": 0.8653198653198653,
+      "new_recall": 0.8556397306397306,
+      "delta": -0.009680134680134622,
+      "rescue_needed": 1180,
+      "old_rescue": 1048,
+      "new_rescue": 1031,
+      "old_rescue_rate": 0.888135593220339,
+      "new_rescue_rate": 0.8737288135593221
+    },
+    {
+      "split": "validation",
+      "class": 1,
+      "class_name": "仅LP失败",
+      "time_bin": "(0.7,1]秒",
+      "samples": 3597,
+      "old_tp": 2738,
+      "new_tp": 2547,
+      "old_recall": 0.7611898804559355,
+      "new_recall": 0.7080900750625522,
+      "delta": -0.053099805393383326,
+      "rescue_needed": 1415,
+      "old_rescue": 1130,
+      "new_rescue": 1030,
+      "old_rescue_rate": 0.7985865724381626,
+      "new_rescue_rate": 0.7279151943462897
+    },
+    {
+      "split": "validation",
+      "class": 2,
+      "class_name": "仅VP失败",
+      "time_bin": "(0,0.2]秒",
+      "samples": 81,
+      "old_tp": 47,
+      "new_tp": 42,
+      "old_recall": 0.5802469135802469,
+      "new_recall": 0.5185185185185185,
+      "delta": -0.06172839506172845,
+      "rescue_needed": 59,
+      "old_rescue": 42,
+      "new_rescue": 37,
+      "old_rescue_rate": 0.711864406779661,
+      "new_rescue_rate": 0.6271186440677966
+    },
+    {
+      "split": "validation",
+      "class": 2,
+      "class_name": "仅VP失败",
+      "time_bin": "(0.2,0.5]秒",
+      "samples": 659,
+      "old_tp": 503,
+      "new_tp": 484,
+      "old_recall": 0.7632776934749621,
+      "new_recall": 0.7344461305007587,
+      "delta": -0.028831562974203417,
+      "rescue_needed": 512,
+      "old_rescue": 418,
+      "new_rescue": 400,
+      "old_rescue_rate": 0.81640625,
+      "new_rescue_rate": 0.78125
+    },
+    {
+      "split": "validation",
+      "class": 2,
+      "class_name": "仅VP失败",
+      "time_bin": "(0.5,0.7]秒",
+      "samples": 1037,
+      "old_tp": 800,
+      "new_tp": 781,
+      "old_recall": 0.7714561234329798,
+      "new_recall": 0.7531340405014465,
+      "delta": -0.018322082931533257,
+      "rescue_needed": 458,
+      "old_rescue": 328,
+      "new_rescue": 317,
+      "old_rescue_rate": 0.7161572052401747,
+      "new_rescue_rate": 0.6921397379912664
+    },
+    {
+      "split": "validation",
+      "class": 2,
+      "class_name": "仅VP失败",
+      "time_bin": "(0.7,1]秒",
+      "samples": 1495,
+      "old_tp": 871,
+      "new_tp": 854,
+      "old_recall": 0.5826086956521739,
+      "new_recall": 0.57123745819398,
+      "delta": -0.011371237458193906,
+      "rescue_needed": 590,
+      "old_rescue": 327,
+      "new_rescue": 317,
+      "old_rescue_rate": 0.5542372881355933,
+      "new_rescue_rate": 0.5372881355932203
+    },
+    {
+      "split": "validation",
+      "class": 3,
+      "class_name": "双失败",
+      "time_bin": "(0,0.2]秒",
+      "samples": 746,
+      "old_tp": 698,
+      "new_tp": 687,
+      "old_recall": 0.935656836461126,
+      "new_recall": 0.920911528150134,
+      "delta": -0.014745308310991967
+    },
+    {
+      "split": "validation",
+      "class": 3,
+      "class_name": "双失败",
+      "time_bin": "(0.2,0.5]秒",
+      "samples": 479,
+      "old_tp": 310,
+      "new_tp": 322,
+      "old_recall": 0.6471816283924844,
+      "new_recall": 0.6722338204592901,
+      "delta": 0.025052192066805756
+    },
+    {
+      "split": "validation",
+      "class": 3,
+      "class_name": "双失败",
+      "time_bin": "(0.5,0.7]秒",
+      "samples": 188,
+      "old_tp": 89,
+      "new_tp": 98,
+      "old_recall": 0.4734042553191489,
+      "new_recall": 0.5212765957446809,
+      "delta": 0.047872340425531956
+    },
+    {
+      "split": "validation",
+      "class": 3,
+      "class_name": "双失败",
+      "time_bin": "(0.7,1]秒",
+      "samples": 225,
+      "old_tp": 72,
+      "new_tp": 82,
+      "old_recall": 0.32,
+      "new_recall": 0.36444444444444446,
+      "delta": 0.04444444444444445
+    },
+    {
+      "split": "test",
+      "class": 1,
+      "class_name": "仅LP失败",
+      "time_bin": "(0,0.2]秒",
+      "samples": 1008,
+      "old_tp": 907,
+      "new_tp": 892,
+      "old_recall": 0.8998015873015873,
+      "new_recall": 0.8849206349206349,
+      "delta": -0.014880952380952439
+    },
+    {
+      "split": "test",
+      "class": 1,
+      "class_name": "仅LP失败",
+      "time_bin": "(0.2,0.5]秒",
+      "samples": 2527,
+      "old_tp": 2279,
+      "new_tp": 2288,
+      "old_recall": 0.9018599129402454,
+      "new_recall": 0.9054214483577364,
+      "delta": 0.0035615354174910463
+    },
+    {
+      "split": "test",
+      "class": 1,
+      "class_name": "仅LP失败",
+      "time_bin": "(0.5,0.7]秒",
+      "samples": 1970,
+      "old_tp": 1737,
+      "new_tp": 1722,
+      "old_recall": 0.8817258883248731,
+      "new_recall": 0.8741116751269036,
+      "delta": -0.0076142131979695105
+    },
+    {
+      "split": "test",
+      "class": 1,
+      "class_name": "仅LP失败",
+      "time_bin": "(0.7,1]秒",
+      "samples": 2800,
+      "old_tp": 2231,
+      "new_tp": 2033,
+      "old_recall": 0.7967857142857143,
+      "new_recall": 0.7260714285714286,
+      "delta": -0.07071428571428573
+    },
+    {
+      "split": "test",
+      "class": 2,
+      "class_name": "仅VP失败",
+      "time_bin": "(0,0.2]秒",
+      "samples": 51,
+      "old_tp": 37,
+      "new_tp": 28,
+      "old_recall": 0.7254901960784313,
+      "new_recall": 0.5490196078431373,
+      "delta": -0.17647058823529405
+    },
+    {
+      "split": "test",
+      "class": 2,
+      "class_name": "仅VP失败",
+      "time_bin": "(0.2,0.5]秒",
+      "samples": 539,
+      "old_tp": 421,
+      "new_tp": 406,
+      "old_recall": 0.7810760667903525,
+      "new_recall": 0.7532467532467533,
+      "delta": -0.027829313543599188
+    },
+    {
+      "split": "test",
+      "class": 2,
+      "class_name": "仅VP失败",
+      "time_bin": "(0.5,0.7]秒",
+      "samples": 784,
+      "old_tp": 634,
+      "new_tp": 593,
+      "old_recall": 0.8086734693877551,
+      "new_recall": 0.7563775510204082,
+      "delta": -0.05229591836734693
+    },
+    {
+      "split": "test",
+      "class": 2,
+      "class_name": "仅VP失败",
+      "time_bin": "(0.7,1]秒",
+      "samples": 1274,
+      "old_tp": 748,
+      "new_tp": 689,
+      "old_recall": 0.5871271585557299,
+      "new_recall": 0.5408163265306123,
+      "delta": -0.046310832025117654
+    },
+    {
+      "split": "test",
+      "class": 3,
+      "class_name": "双失败",
+      "time_bin": "(0,0.2]秒",
+      "samples": 699,
+      "old_tp": 644,
+      "new_tp": 644,
+      "old_recall": 0.9213161659513591,
+      "new_recall": 0.9213161659513591,
+      "delta": 0.0
+    },
+    {
+      "split": "test",
+      "class": 3,
+      "class_name": "双失败",
+      "time_bin": "(0.2,0.5]秒",
+      "samples": 436,
+      "old_tp": 292,
+      "new_tp": 296,
+      "old_recall": 0.6697247706422018,
+      "new_recall": 0.6788990825688074,
+      "delta": 0.00917431192660556
+    },
+    {
+      "split": "test",
+      "class": 3,
+      "class_name": "双失败",
+      "time_bin": "(0.5,0.7]秒",
+      "samples": 220,
+      "old_tp": 123,
+      "new_tp": 124,
+      "old_recall": 0.5590909090909091,
+      "new_recall": 0.5636363636363636,
+      "delta": 0.004545454545454519
+    },
+    {
+      "split": "test",
+      "class": 3,
+      "class_name": "双失败",
+      "time_bin": "(0.7,1]秒",
+      "samples": 241,
+      "old_tp": 89,
+      "new_tp": 97,
+      "old_recall": 0.36929460580912865,
+      "new_recall": 0.4024896265560166,
+      "delta": 0.03319502074688796
+    }
+  ],
+  "validation_missed_rescue_decomposition": {
+    "old": {
+      "missed": 1157,
+      "q0": 800,
+      "q3": 332,
+      "wrong_direction": 25
+    },
+    "new": {
+      "missed": 1288,
+      "q0": 942,
+      "q3": 318,
+      "wrong_direction": 28
+    }
+  },
+  "far_time_train_validation_test": [
+    {
+      "class": 1,
+      "class_name": "仅LP失败",
+      "train": {
+        "class": 1,
+        "class_name": "lp_only_failure",
+        "interval_s": [
+          0.7,
+          1.0
+        ],
+        "interval": "left_open_right_closed",
+        "all_times": false,
+        "samples": 19771,
+        "predicted_class_counts": [
+          4663,
+          14687,
+          26,
+          395
+        ],
+        "class_true_positive": 14687,
+        "class_recall": 0.7428556977391129,
+        "safe_branch_selected": 17615,
+        "safe_selection_rate": 0.8909513934550605,
+        "rescue_needed": 8513,
+        "correct_rescue": 6371,
+        "rescue_rate": 0.7483848232115587,
+        "missed_rescue": 2142,
+        "q0_missed_rescue": 1900,
+        "q3_missed_rescue": 230
+      },
+      "validation": {
+        "class": 1,
+        "class_name": "lp_only_failure",
+        "interval_s": [
+          0.7,
+          1.0
+        ],
+        "interval": "left_open_right_closed",
+        "all_times": false,
+        "samples": 3597,
+        "predicted_class_counts": [
+          1000,
+          2547,
+          14,
+          36
+        ],
+        "class_true_positive": 2547,
+        "class_recall": 0.7080900750625522,
+        "safe_branch_selected": 3207,
+        "safe_selection_rate": 0.8915763135946623,
+        "rescue_needed": 1415,
+        "correct_rescue": 1030,
+        "rescue_rate": 0.7279151943462897,
+        "missed_rescue": 385,
+        "q0_missed_rescue": 360,
+        "q3_missed_rescue": 16
+      },
+      "test": {
+        "class": 1,
+        "class_name": "lp_only_failure",
+        "interval_s": [
+          0.7,
+          1.0
+        ],
+        "interval": "left_open_right_closed",
+        "all_times": false,
+        "samples": 2800,
+        "predicted_class_counts": [
+          695,
+          2033,
+          20,
+          52
+        ],
+        "class_true_positive": 2033,
+        "class_recall": 0.7260714285714286,
+        "safe_branch_selected": 2456,
+        "safe_selection_rate": 0.8771428571428571,
+        "rescue_needed": 1155,
+        "correct_rescue": 825,
+        "rescue_rate": 0.7142857142857143,
+        "missed_rescue": 330,
+        "q0_missed_rescue": 290,
+        "q3_missed_rescue": 34
+      },
+      "train_minus_validation_recall": 0.03476562267656069
+    },
+    {
+      "class": 2,
+      "class_name": "仅VP失败",
+      "train": {
+        "class": 2,
+        "class_name": "vp_only_failure",
+        "interval_s": [
+          0.7,
+          1.0
+        ],
+        "interval": "left_open_right_closed",
+        "all_times": false,
+        "samples": 14951,
+        "predicted_class_counts": [
+          3238,
+          34,
+          11228,
+          451
+        ],
+        "class_true_positive": 11228,
+        "class_recall": 0.7509865560832052,
+        "safe_branch_selected": 12935,
+        "safe_selection_rate": 0.8651595211022675,
+        "rescue_needed": 7946,
+        "correct_rescue": 5942,
+        "rescue_rate": 0.7477976340297005,
+        "missed_rescue": 2004,
+        "q0_missed_rescue": 1654,
+        "q3_missed_rescue": 328
+      },
+      "validation": {
+        "class": 2,
+        "class_name": "vp_only_failure",
+        "interval_s": [
+          0.7,
+          1.0
+        ],
+        "interval": "left_open_right_closed",
+        "all_times": false,
+        "samples": 1495,
+        "predicted_class_counts": [
+          560,
+          16,
+          854,
+          65
+        ],
+        "class_true_positive": 854,
+        "class_recall": 0.57123745819398,
+        "safe_branch_selected": 1216,
+        "safe_selection_rate": 0.8133779264214047,
+        "rescue_needed": 590,
+        "correct_rescue": 317,
+        "rescue_rate": 0.5372881355932203,
+        "missed_rescue": 273,
+        "q0_missed_rescue": 222,
+        "q3_missed_rescue": 41
+      },
+      "test": {
+        "class": 2,
+        "class_name": "vp_only_failure",
+        "interval_s": [
+          0.7,
+          1.0
+        ],
+        "interval": "left_open_right_closed",
+        "all_times": false,
+        "samples": 1274,
+        "predicted_class_counts": [
+          529,
+          9,
+          689,
+          47
+        ],
+        "class_true_positive": 689,
+        "class_recall": 0.5408163265306123,
+        "safe_branch_selected": 1038,
+        "safe_selection_rate": 0.814756671899529,
+        "rescue_needed": 469,
+        "correct_rescue": 238,
+        "rescue_rate": 0.5074626865671642,
+        "missed_rescue": 231,
+        "q0_missed_rescue": 202,
+        "q3_missed_rescue": 25
+      },
+      "train_minus_validation_recall": 0.17974909788922522
+    },
+    {
+      "class": 3,
+      "class_name": "双失败",
+      "train": {
+        "class": 3,
+        "class_name": "both_failure",
+        "interval_s": [
+          0.7,
+          1.0
+        ],
+        "interval": "left_open_right_closed",
+        "all_times": false,
+        "samples": 3744,
+        "predicted_class_counts": [
+          281,
+          587,
+          178,
+          2698
+        ],
+        "class_true_positive": 2698,
+        "class_recall": 0.7206196581196581,
+        "switch_requests": 425,
+        "switch_request_rate": 0.11351495726495726
+      },
+      "validation": {
+        "class": 3,
+        "class_name": "both_failure",
+        "interval_s": [
+          0.7,
+          1.0
+        ],
+        "interval": "left_open_right_closed",
+        "all_times": false,
+        "samples": 225,
+        "predicted_class_counts": [
+          30,
+          92,
+          21,
+          82
+        ],
+        "class_true_positive": 82,
+        "class_recall": 0.36444444444444446,
+        "switch_requests": 52,
+        "switch_request_rate": 0.2311111111111111
+      },
+      "test": {
+        "class": 3,
+        "class_name": "both_failure",
+        "interval_s": [
+          0.7,
+          1.0
+        ],
+        "interval": "left_open_right_closed",
+        "all_times": false,
+        "samples": 241,
+        "predicted_class_counts": [
+          57,
+          66,
+          21,
+          97
+        ],
+        "class_true_positive": 97,
+        "class_recall": 0.4024896265560166,
+        "switch_requests": 38,
+        "switch_request_rate": 0.15767634854771784
+      },
+      "train_minus_validation_recall": 0.35617521367521365
+    }
+  ],
+  "supplement_fraction_within_training_class": {
+    "仅LP失败": 0.38087983241287376,
+    "仅VP失败": 0.675812664729337,
+    "双失败": 0.778816199376947
+  },
+  "server_prediction_exports": {
+    "validation": {
+      "predictions": "/home/user/TienKung-Lab/outputs/g1_renet_selector_joint_branch_gru_20261017_164954/validation_predictions.npz",
+      "manifest": "/home/user/TienKung-Lab/outputs/g1_renet_selector_joint_branch_gru_20261017_164954/validation_predictions.json",
+      "rows": 204750,
+      "sha256": "09e0b56a15e95d3dbc280ec71e70232983dab0cf8c983905706984e9100ee84f",
+      "full_split_export": true
+    },
+    "train": {
+      "predictions": "/home/user/TienKung-Lab/outputs/g1_renet_selector_joint_branch_gru_20261017_164954/train_predictions.npz",
+      "manifest": "/home/user/TienKung-Lab/outputs/g1_renet_selector_joint_branch_gru_20261017_164954/train_predictions.json",
+      "rows": 722949,
+      "sha256": "9afec730f5ee6d730c09f85caf0e1960cf4f7c1ed1cc7f52ff32f24a1d4d6bc6",
+      "full_split_export": true
+    }
+  },
+  "limitations": [
+    "New checkpoint and NPZ arrays are recorded on the server, not attached locally.",
+    "Old test timing comes from archived user-supplied tables; class totals match the old report.",
+    "Counts are net changes, not matched per-sample transitions.",
+    "Metrics are offline snapshot action requests; runtime gates and closed-loop switching are not evaluated.",
+    "Mixed-source train/validation gaps do not isolate ordinary overfitting or source shortcuts.",
+    "Three seeds were selected by validation loss; no validation action/time metrics for the other two checkpoints are supplied."
+  ]
+}

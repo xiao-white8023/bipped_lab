@@ -4,6 +4,7 @@ import argparse
 import copy
 import os
 import sys
+import time
 import traceback
 import warnings
 
@@ -37,6 +38,11 @@ parser.add_argument(
 )
 parser.add_argument("--depth_noise", action="store_true", help="Keep the configured training-time depth noise.")
 parser.add_argument("--depth_debug_vis", action="store_true", help="Visualize depth-camera rays.")
+parser.add_argument(
+    "--foot_edge_diagnostics",
+    action="store_true",
+    help="Keep the configured foot-edge reward and diagnostics (slow startup on large terrains).",
+)
 parser.add_argument(
     "--no_export",
     action="store_true",
@@ -106,6 +112,13 @@ def configure_playback(env_cfg):
     env_cfg.scene.env_spacing = 2.5
     env_cfg.noise.add_noise = False
 
+    # Edge cylinders only contribute to rewards/diagnostics. Building them for
+    # the entire training terrain can dominate startup even with one robot.
+    if not args_cli.foot_edge_diagnostics:
+        env_cfg.foot_edge.enabled = False
+        env_cfg.foot_edge.debug_vis = False
+        env_cfg.foot_edge.support_diagnostics = False
+
     if hasattr(env_cfg.domain_rand.events, "push_robot"):
         env_cfg.domain_rand.events.push_robot = None
 
@@ -124,7 +137,7 @@ def configure_playback(env_cfg):
     env_cfg.depth_noise_force_active = bool(args_cli.depth_noise)
     env_cfg.scene.camera.camera.debug_vis = bool(args_cli.depth_debug_vis)
     if args_cli.terrain is not None:
-        env_cfg.scene.terrain_generator = TERRAINS[args_cli.terrain]
+        env_cfg.scene.terrain_generator = copy.deepcopy(TERRAINS[args_cli.terrain])
         env_cfg.scene.terrain_type = "generator"
 
     terrain_generator = env_cfg.scene.terrain_generator
@@ -132,6 +145,32 @@ def configure_playback(env_cfg):
         terrain_generator.curriculum = False
 
     return env_cfg
+
+
+def configure_checkpoint_amp(env_cfg, agent_cfg, checkpoint_path):
+    """Select the saved AMP layout before constructing the playback environment."""
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if not isinstance(checkpoint, dict) or checkpoint.get("task_name") != "g1_depth":
+        raise ValueError("Playback requires a g1_depth training checkpoint.")
+    contract = checkpoint.get("amp_observation_contract")
+    dimension = contract.get("dimension") if isinstance(contract, dict) else None
+    if type(dimension) is not int or dimension not in (50, 58):
+        raise ValueError("g1_depth checkpoint must declare a 50-D or 58-D AMP observation contract.")
+
+    if env_cfg.amp_observation_dim != dimension or agent_cfg.amp_observation_dim != dimension:
+        motion_dir = os.path.join(
+            REPO_ROOT, "legged_lab", "envs", "g1", "datasets", "make_g1_23dof", "training",
+            "amp_full" if dimension == 58 else "amp_no_ankle",
+        )
+        agent_cfg.amp_motion_files = [
+            os.path.join(motion_dir, os.path.basename(path)) for path in agent_cfg.amp_motion_files
+        ]
+    env_cfg.amp_observation_dim = dimension
+    agent_cfg.amp_observation_dim = dimension
+    agent_cfg.amp_joint_count = (dimension - 12) // 2
+    agent_cfg.amp_data_class_name = "G1AnkleAMPLoader" if dimension == 58 else "AMPLoader"
+    print(f"[INFO] Playback AMP layout from checkpoint: {dimension} dimensions.", flush=True)
 
 
 def create_gamepad(env):
@@ -277,12 +316,8 @@ def play():
             f"{agent_cfg.runner_class_name!r}."
         )
 
-    env_class = task_registry.get_task_class(args_cli.task)
-    env = env_class(env_cfg, args_cli.headless)
-    print(f"[INFO] Isaac joint order: {env.robot.joint_names}")
-
     log_root_path = os.path.join(REPO_ROOT, "logs", agent_cfg.experiment_name)
-    print(f"[INFO] Loading experiment from directory: {log_root_path}")
+    print(f"[INFO] Loading experiment from directory: {log_root_path}", flush=True)
     if args_cli.checkpoint_path is not None:
         resume_path = os.path.abspath(os.path.expanduser(args_cli.checkpoint_path))
         if not os.path.isfile(resume_path):
@@ -290,7 +325,22 @@ def play():
     else:
         resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
     log_dir = os.path.dirname(resume_path)
-    print(f"[INFO] Loading model checkpoint: {resume_path}")
+    print(f"[INFO] Selected model checkpoint: {resume_path}", flush=True)
+    configure_checkpoint_amp(env_cfg, agent_cfg, resume_path)
+
+    env_class = task_registry.get_task_class(args_cli.task)
+    print(
+        f"[INFO] Creating playback environment: num_envs={env_cfg.scene.num_envs}, "
+        f"foot_edge_diagnostics={args_cli.foot_edge_diagnostics}",
+        flush=True,
+    )
+    if args_cli.foot_edge_diagnostics:
+        print("[INFO] Foot-edge geometry construction may take several minutes on the full terrain.", flush=True)
+    scene_start = time.perf_counter()
+    env = env_class(env_cfg, args_cli.headless)
+    print(f"[INFO] Playback environment ready in {time.perf_counter() - scene_start:.2f}s.", flush=True)
+    print(f"[INFO] Isaac joint order: {env.robot.joint_names}")
+    print(f"[INFO] Loading model checkpoint: {resume_path}", flush=True)
 
     runner = DepthAmpOnPolicyRunner(
         env,

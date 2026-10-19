@@ -37,7 +37,7 @@ parser.add_argument(
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-if args_cli.task is not None and ("sensor" in args_cli.task or args_cli.task == "g1_depth"):
+if args_cli.task is not None and ("sensor" in args_cli.task or args_cli.task in ("g1_depth", "g1_selector")):
     args_cli.enable_cameras = True
 
 # ==============================================================================
@@ -63,9 +63,11 @@ from isaaclab_tasks.utils import get_checkpoint_path
 from legged_lab.utils import task_registry
 from rsl_rl.runners import AmpOnPolicyRunner, ConstrainedOnPolicyRunner, OnPolicyRunner, MoeAmpOnPolicyRunner, DWAQAmpOnPolicyRunner, MoeOnPolicyRunner,G1OnPolicyRunner,FilmOnPolicyRunner, RENetAmpOnPolicyRunner
 from rsl_rl.runners.g1_student_on_policy_runner import G1StudentOnPolicyRunner
+from rsl_rl.runners.selector_on_policy_runner import SelectorOnPolicyRunner
 
 from legged_lab.envs import * # noqa:F401, F403
 from legged_lab.envs.g1.RENet_cfg import configure_agent_for_lp_source
+from legged_lab.envs.g1.g1_selector_cfg import configure_selector_agent
 from rsl_rl.runners import DepthAmpOnPolicyRunner
 from legged_lab.utils.cli_args import update_rsl_rl_cfg
 
@@ -76,7 +78,7 @@ torch.backends.cudnn.benchmark = False
 
 
 def train():
-    runner: OnPolicyRunner | AmpOnPolicyRunner | DepthAmpOnPolicyRunner
+    runner: OnPolicyRunner | AmpOnPolicyRunner | DepthAmpOnPolicyRunner | SelectorOnPolicyRunner
 
     env_class_name = args_cli.task
     env_cfg, agent_cfg = task_registry.get_cfgs(env_class_name)
@@ -86,14 +88,19 @@ def train():
         env_cfg.scene.num_envs = args_cli.num_envs
 
     agent_cfg = update_rsl_rl_cfg(agent_cfg, args_cli)
-    if env_class_name == "g1_depth":
+    if env_class_name == "g1_selector" and args_cli.distributed:
+        raise ValueError("g1_selector currently supports single-process PPO training only.")
+    if env_class_name in ("g1_depth", "g1_selector"):
         agent_cfg.device = args_cli.device
         env_cfg.device = args_cli.device
     if args_cli.lp_height_source is not None:
         if not hasattr(env_cfg, "lp_height"):
             raise ValueError("--lp_height_source is only supported by g1_renet")
         env_cfg.renet.lp_height_source = args_cli.lp_height_source
-    if hasattr(env_cfg, "lp_height"): # 判断lp_height是否存在于env_cfg中
+    if env_class_name == "g1_selector":
+        # 高层独立同步观测尺寸、控制频率和 seed，不能套用底层 RENet 网络配置。
+        configure_selector_agent(env_cfg, agent_cfg)
+    elif hasattr(env_cfg, "lp_height"): # 判断lp_height是否存在于env_cfg中
         configure_agent_for_lp_source(env_cfg, agent_cfg)
     env_cfg.scene.seed = agent_cfg.seed
 
@@ -169,7 +176,11 @@ def train():
     if hasattr(env, "foot_edge_monitor"):
         env.foot_edge_monitor.save_metadata(os.path.join(log_dir, "params", "foot_edge"))
 
-    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+    # 高层 episode、底层有效步数和感知时钟必须保持一致，不能单独随机化 episode 长度。
+    runner.learn(
+        num_learning_iterations=agent_cfg.max_iterations,
+        init_at_random_ep_len=env_class_name != "g1_selector",
+    )
 
 
 if __name__ == "__main__":

@@ -72,17 +72,18 @@ class DepthTrainCfg:
 class Reward:
     # 论文脚体积点边缘惩罚：函数返回非负代价，RewardManager统一乘负权重和dt。
     # -2.0来自InstinctLab官方任务；不新增足底支撑奖励。
-    foot_edge_penalty = RewTerm(func=foot_edge_penalty, weight=-2.0)
+    foot_edge_penalty = RewTerm(func=foot_edge_penalty, weight=-4.0)
 
     # 跟踪速度奖励
     track_lin_vel_xy_exp = RewTerm(func=mdp.track_lin_vel_xy_yaw_frame_exp, weight=3.0, params={"std": 0.5})
     track_ang_vel_z_exp = RewTerm(func=mdp.track_ang_vel_z_world_exp, weight=2.0, params={"std": 0.5})
-    # vp_idle_when_commanded = RewTerm(
-    #     func=mdp.vp_idle_when_commanded,
-    #     weight=-0.1,
-    #     params={"cmd_threshold": 0.1, "vel_threshold": 0.1,
-    #             "ang_cmd_threshold": 0.1, "ang_vel_threshold": 0.1},
-    # )
+
+    # 有平移速度指令但实际水平速度过低时，惩罚原地站立。
+    idle_penalty = RewTerm(
+        func=mdp.idle_when_commanded,
+        weight=-0.5,
+        params={"cmd_threshold": 0.2, "vel_threshold": 0.1},
+    )
 
     ang_vel_xy_l2 = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
 

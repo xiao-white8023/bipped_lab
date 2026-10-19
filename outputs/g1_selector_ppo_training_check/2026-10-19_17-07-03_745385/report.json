@@ -1,0 +1,43 @@
+{
+  "status": "blocked",
+  "scope": "真实 Isaac Sim 短训练两次更新及新进程恢复一次更新。",
+  "output": "/home/cjh/TienKung-Lab/outputs/g1_selector_ppo_training_check/2026-10-19_17-07-03_745385",
+  "seed": 42,
+  "num_envs": 4,
+  "rollout_steps": 4,
+  "checker_sha256": "5f8295ccd24c32bd9547fa6e91bc012761f6cd8e22415bac08bc403ef257d960",
+  "phases": {
+    "preflight": {
+      "command": [
+        "bash",
+        "-c",
+        "set -e\nsource \"$1\"\nshift\nexec \"$@\"",
+        "selector-ppo-check",
+        "/home/cjh/isaac-sim/setup_conda_env.sh",
+        "/home/cjh/miniconda3/envs/env_isaaclab/bin/python",
+        "-c",
+        "\nimport importlib\nimport json\nimport os\nfrom pathlib import Path\nimport sys\n\noutput, root, device = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]\nsys.path.insert(0, str(root))\nsys.path.insert(0, str(root / \"rsl_rl\"))\nresult = {\"status\": \"blocked\", \"python\": sys.executable, \"device\": device,\n          \"cuda_visible_devices\": os.environ.get(\"CUDA_VISIBLE_DEVICES\"), \"checks\": {}, \"reasons\": []}\ntorch = None\ntry:\n    import torch\n    result[\"torch_version\"] = str(torch.__version__)\n    result[\"checks\"][\"torch\"] = \"passed\"\n    available = torch.cuda.is_available()\n    count = torch.cuda.device_count() if available else 0\n    index = int(device.split(\":\")[1]) if \":\" in device else 0\n    result.update(cuda_available=available, gpu_count=count)\n    if available and index < count:\n        result[\"gpu_name\"] = torch.cuda.get_device_name(index)\n        result[\"checks\"][\"cuda\"] = \"passed\"\n    else:\n        result[\"checks\"][\"cuda\"] = \"blocked\"\n        result[\"reasons\"].append(f\"CUDA device {device} is unavailable (visible GPU count: {count}).\")\nexcept Exception as error:\n    result[\"checks\"][\"torch\"] = \"blocked\"\n    result[\"reasons\"].append(f\"PyTorch/CUDA: {type(error).__name__}: {error}\")\ntry:\n    from isaaclab.app import AppLauncher\n    result[\"checks\"][\"isaaclab_launcher_import\"] = \"passed\"\nexcept Exception as error:\n    result[\"checks\"][\"isaaclab_launcher_import\"] = \"blocked\"\n    result[\"reasons\"].append(f\"IsaacLab/Isaac Sim environment: {type(error).__name__}: {error}\")\nif torch is not None:\n    try:\n        importlib.import_module(\"rsl_rl.runners.selector_on_policy_runner\")\n        result[\"checks\"][\"selector_training_import\"] = \"passed\"\n    except Exception as error:\n        result[\"checks\"][\"selector_training_import\"] = \"blocked\"\n        result[\"reasons\"].append(f\"Selector training import: {type(error).__name__}: {error}\")\nif not result[\"reasons\"]:\n    result[\"status\"] = \"ready\"\noutput.write_text(json.dumps(result, ensure_ascii=False, indent=2) + \"\\n\", encoding=\"utf-8\")\n",
+        "/home/cjh/TienKung-Lab/outputs/g1_selector_ppo_training_check/2026-10-19_17-07-03_745385/preflight.json",
+        "/home/cjh/TienKung-Lab",
+        "cuda:0"
+      ],
+      "returncode": 0,
+      "timed_out": false,
+      "elapsed_seconds": 2.2176031860290095,
+      "log": "/home/cjh/TienKung-Lab/outputs/g1_selector_ppo_training_check/2026-10-19_17-07-03_745385/preflight.log",
+      "status": "blocked"
+    },
+    "train": {
+      "status": "not_run"
+    },
+    "resume": {
+      "status": "not_run"
+    },
+    "artifact_validation": {
+      "status": "not_run"
+    }
+  },
+  "reasons": [
+    "CUDA device cuda:0 is unavailable (visible GPU count: 0)."
+  ]
+}

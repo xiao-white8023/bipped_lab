@@ -93,6 +93,17 @@ def action_rate_l2(env: BaseEnv  | G1ROUGHEnv |G1Env) -> torch.Tensor:
     )
 
 
+def selector_mode_switch(env) -> torch.Tensor:
+    """返回本底层步实际切换模式的指标，由高层环境维护事件标志。
+
+    selector_switch_event 是设备上的 (num_envs,) 布尔张量：每个底层步
+    开始清零，仅在接受并执行模式变化时置真；初始化和 reset 不计切换。
+    本函数只读取事件，不消费或清零；驻留、确认和混合后续步不重复计罚。
+    RewardManager 还会乘底层 dt，权重 -1 在 50 Hz 下每次实际扣 0.02。
+    """
+    return env.selector_switch_event.float()
+
+
 # Standalone G1 Recovery rewards.
 def recovery_root_height_exp(
     env,

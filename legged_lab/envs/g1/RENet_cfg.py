@@ -91,7 +91,6 @@ if (type(G1_RENET_VP_PROPRIO_HISTORY_FRAMES) is not int
     raise ValueError("G1_RENET_VP_PROPRIO_HISTORY_FRAMES must be an integer from 1 to 10.")
 from legged_lab.assets.g1.unitree import G1_CFG
 
-
 @configclass
 class RENetTrainCfg:
     """Training-time estimator mask.
@@ -106,8 +105,6 @@ class RENetTrainCfg:
     lp_height_source: str = "pgtt_full_atten"
     # 材质/质量在 startup 随机化，推力从训练开始计时。
     domain_rand_start_iteration: int = 0
-
-
 
 @configclass
 class Reward:
@@ -480,7 +477,6 @@ class G1RENETENVCFG:
                                                                 ) 
                         )         
 
-
 @configclass
 class CnnMlpCfg:
     input_dim:tuple[int,int] = MISSING                   # 图像的高和宽
@@ -500,7 +496,6 @@ class CnnMlpCfg:
     mlp_activation:str="relu"
     num_heads:int = 16
     embed_dim:int = 64
-
 
 @configclass
 class CustomRslRlPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
@@ -537,7 +532,6 @@ class CustomRslRlPpoAlgorithmCfg(RslRlPpoAlgorithmCfg):
     vp_vae_coef: float = 1.0
     vp_vae_beta: float = 2
     vp_vae_warmup_iters: int = 500
-
 
 @configclass
 class CustomRslRlPpoActorCriticCfg(RslRlPpoActorCriticCfg):
@@ -756,7 +750,6 @@ class G1RENETAGENTCFG:
     amp_task_reward_lerp = 0.7
     amp_discr_hidden_dims = [1024, 512, 256]
     min_normalized_std = [0.05] * 23
-
 
 def configure_agent_for_lp_source(env_cfg, agent_cfg):
     """Configure the AME point-cross-attention LP used by g1_renet."""

@@ -1,0 +1,18 @@
+{
+  "status": "blocked",
+  "python": "/home/cjh/miniconda3/envs/env_isaaclab/bin/python",
+  "device": "cuda:0",
+  "cuda_visible_devices": null,
+  "checks": {
+    "torch": "passed",
+    "cuda": "blocked",
+    "isaaclab_launcher_import": "passed",
+    "selector_training_import": "passed"
+  },
+  "reasons": [
+    "CUDA device cuda:0 is unavailable (visible GPU count: 0)."
+  ],
+  "torch_version": "2.7.0+cu128",
+  "cuda_available": false,
+  "gpu_count": 0
+}

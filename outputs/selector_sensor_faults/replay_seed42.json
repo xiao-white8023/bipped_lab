@@ -1,0 +1,354 @@
+{
+  "scope": "synthetic sensor packets; no simulator, policy or physical fall-rate evaluation",
+  "seed": 42,
+  "num_envs": 32,
+  "sensor_frames_per_env": 1200,
+  "seconds_per_env": 120.0,
+  "config": {
+    "enable": true,
+    "schedule": {
+      "update_period_s": 0.1,
+      "scenario_probabilities": [
+        0.3,
+        0.25,
+        0.25,
+        0.2
+      ],
+      "normal_duration_s": [
+        1.0,
+        5.0
+      ],
+      "missing_duration_s": [
+        0.4,
+        2.0
+      ],
+      "temporal_duration_s": [
+        0.5,
+        3.0
+      ],
+      "persistent_duration_s": [
+        1.0,
+        5.0
+      ],
+      "full_dropout_duration_s": [
+        0.1,
+        0.3
+      ],
+      "dual_full_dropout_duration_s": [
+        0.2,
+        0.3
+      ],
+      "consecutive_dropout_duration_s": [
+        0.2,
+        0.5
+      ],
+      "recovery_duration_s": [
+        0.5,
+        3.0
+      ],
+      "stagger_probability": 0.5,
+      "stagger_s": [
+        0.1,
+        0.5
+      ],
+      "min_overlap_s": 0.2
+    },
+    "lp": {
+      "kinds": [
+        1,
+        2,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "lp_resolution_m": 0.1,
+      "lp_invalid_height": -1.1,
+      "lp_height_clip": [
+        -1.0,
+        1.0
+      ],
+      "max_delay_frames": 5,
+      "lp_dropout_fraction": [
+        0.1,
+        1.0
+      ],
+      "lp_block_fraction": [
+        0.1,
+        1.0
+      ],
+      "lp_height_bias_m_range": [
+        -0.15,
+        0.15
+      ],
+      "lp_translation_range_m": [
+        -0.2,
+        0.2
+      ],
+      "lp_yaw_range_deg": [
+        -5.0,
+        5.0
+      ],
+      "lp_drift_m_per_s": [
+        0.0,
+        0.05
+      ],
+      "lp_drift_deg_per_s": [
+        0.0,
+        1.0
+      ],
+      "lp_map_height_velocity_m_per_s": [
+        -0.05,
+        0.05
+      ],
+      "lp_map_translation_limit_m": 0.45,
+      "lp_map_yaw_limit_deg": 12.0,
+      "lp_map_height_limit_m": 0.25,
+      "lp_map_random_walk_m": 0.012,
+      "lp_map_correction_frames": [
+        15,
+        45
+      ],
+      "lp_person_radius_m": [
+        0.14,
+        0.32
+      ],
+      "lp_person_height_above_ground_m": [
+        0.25,
+        1.0
+      ],
+      "lp_person_main_fraction": 0.65,
+      "lp_map_confirm_frames": 3,
+      "lp_map_retention_radius_m": 2.5,
+      "burst_on_frames": [
+        1,
+        5
+      ],
+      "burst_off_frames": [
+        1,
+        4
+      ],
+      "compound_dropout_probability": 0.2,
+      "recovery_tau_s": 0.5,
+      "recovery_translation_epsilon_m": 0.001,
+      "recovery_yaw_epsilon_deg": 0.01
+    },
+    "vp": {
+      "modes": [
+        "large_hole",
+        "lower_occlusion",
+        "central_landing_occlusion",
+        "stripe_missing",
+        "full_dropout",
+        "consecutive_dropout",
+        "freeze_frame",
+        "distant_dust"
+      ],
+      "depth_min_m": 0.1,
+      "depth_max_m": 2.5,
+      "fill_value": 0.0,
+      "large_hole_height_range": [
+        0.35,
+        0.75
+      ],
+      "large_hole_width_range": [
+        0.35,
+        0.8
+      ],
+      "lower_occlusion_height_range": [
+        0.35,
+        0.7
+      ],
+      "central_landing_height_range": [
+        0.35,
+        0.7
+      ],
+      "central_landing_width_range": [
+        0.35,
+        0.75
+      ],
+      "central_landing_center_y_range": [
+        0.55,
+        0.85
+      ],
+      "central_landing_center_x_range": [
+        0.4,
+        0.6
+      ],
+      "stripe_width_range": [
+        0.08,
+        0.25
+      ],
+      "stripe_count_range": [
+        1,
+        3
+      ],
+      "stripe_orientations": [
+        "vertical",
+        "horizontal"
+      ],
+      "distant_dust_start": 1.5,
+      "distant_dust_noise_std": 0.08,
+      "distant_dust_dropout_probability": 0.35,
+      "distant_dust_fill_value": 0.0
+    }
+  },
+  "plans": {
+    "normal": {
+      "count": 289,
+      "fraction": 0.3054968287526427
+    },
+    "lp_only": {
+      "count": 244,
+      "fraction": 0.25792811839323465
+    },
+    "vp_only": {
+      "count": 221,
+      "fraction": 0.23361522198731502
+    },
+    "dual": {
+      "count": 192,
+      "fraction": 0.2029598308668076
+    }
+  },
+  "lp_types": {
+    "1": {
+      "count": 31,
+      "fraction": 0.07110091743119266
+    },
+    "2": {
+      "count": 38,
+      "fraction": 0.0871559633027523
+    },
+    "8": {
+      "count": 36,
+      "fraction": 0.08256880733944955
+    },
+    "9": {
+      "count": 42,
+      "fraction": 0.0963302752293578
+    },
+    "10": {
+      "count": 34,
+      "fraction": 0.0779816513761468
+    },
+    "11": {
+      "count": 36,
+      "fraction": 0.08256880733944955
+    },
+    "12": {
+      "count": 40,
+      "fraction": 0.09174311926605505
+    },
+    "13": {
+      "count": 49,
+      "fraction": 0.11238532110091744
+    },
+    "14": {
+      "count": 51,
+      "fraction": 0.11697247706422019
+    },
+    "15": {
+      "count": 32,
+      "fraction": 0.07339449541284404
+    },
+    "16": {
+      "count": 47,
+      "fraction": 0.10779816513761468
+    }
+  },
+  "vp_types": {
+    "large_hole": {
+      "count": 60,
+      "fraction": 0.14527845036319612
+    },
+    "lower_occlusion": {
+      "count": 53,
+      "fraction": 0.12832929782082325
+    },
+    "central_landing_occlusion": {
+      "count": 45,
+      "fraction": 0.1089588377723971
+    },
+    "stripe_missing": {
+      "count": 48,
+      "fraction": 0.1162227602905569
+    },
+    "full_dropout": {
+      "count": 53,
+      "fraction": 0.12832929782082325
+    },
+    "consecutive_dropout": {
+      "count": 45,
+      "fraction": 0.1089588377723971
+    },
+    "freeze_frame": {
+      "count": 53,
+      "fraction": 0.12832929782082325
+    },
+    "distant_dust": {
+      "count": 56,
+      "fraction": 0.13559322033898305
+    }
+  },
+  "planned_injection_frames": {
+    "normal": {
+      "count": 25377,
+      "fraction": 0.660859375
+    },
+    "lp_only": {
+      "count": 7665,
+      "fraction": 0.199609375
+    },
+    "vp_only": {
+      "count": 3592,
+      "fraction": 0.09354166666666666
+    },
+    "dual": {
+      "count": 1766,
+      "fraction": 0.045989583333333334
+    }
+  },
+  "observed_current_frames": {
+    "normal": {
+      "count": 23636,
+      "fraction": 0.6155208333333333
+    },
+    "lp_only": {
+      "count": 9459,
+      "fraction": 0.246328125
+    },
+    "vp_only": {
+      "count": 3442,
+      "fraction": 0.08963541666666666
+    },
+    "dual": {
+      "count": 1863,
+      "fraction": 0.048515625
+    }
+  },
+  "observed_history_frames": {
+    "normal": {
+      "count": 23371,
+      "fraction": 0.6086197916666667
+    },
+    "lp_only": {
+      "count": 9315,
+      "fraction": 0.242578125
+    },
+    "vp_only": {
+      "count": 3707,
+      "fraction": 0.09653645833333334
+    },
+    "dual": {
+      "count": 2007,
+      "fraction": 0.052265625
+    }
+  },
+  "lp_residual_frames_without_active_injection": 2491
+}

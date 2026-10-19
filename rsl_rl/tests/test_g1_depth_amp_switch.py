@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import copy
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,47 @@ import torch
 from rsl_rl.runners import DepthAmpOnPolicyRunner
 from rsl_rl.utils import AMPLoader, G1AnkleAMPLoader
 from test_g1_depth import Environment, ROOT, runner_config
+
+
+def playback_amp_configurator():
+    path = ROOT / "legged_lab/scripts/play_depth.py"
+    tree = ast.parse(path.read_text())
+    method = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "configure_checkpoint_amp")
+    scope = {"torch": torch, "os": os, "REPO_ROOT": str(ROOT)}
+    exec(compile(ast.Module(body=[method], type_ignores=[]), str(path), "exec"), scope)
+    return scope[method.name]
+
+
+@pytest.mark.parametrize("dimension,configured", [(50, 58), (58, 50), (50, 50), (58, 58)])
+def test_playback_selects_saved_amp_layout_without_changing_training_defaults(tmp_path, dimension, configured):
+    env_defaults, agent_defaults = amp_configs(configured)
+    env_cfg = SimpleNamespace(**copy.deepcopy(env_defaults))
+    agent_cfg = SimpleNamespace(**copy.deepcopy(agent_defaults))
+    path = tmp_path / "model.pt"
+    torch.save({"task_name": "g1_depth", "amp_observation_contract": {"dimension": dimension}}, path)
+    playback_amp_configurator()(env_cfg, agent_cfg, path)
+    expected_env, expected_agent = amp_configs(dimension)
+    assert vars(env_cfg) == expected_env
+    assert vars(agent_cfg) == expected_agent
+    assert (env_defaults, agent_defaults) == tuple(amp_configs(configured))
+
+
+@pytest.mark.parametrize("metadata", [
+    {"task_name": "g1_renet", "amp_observation_contract": {"dimension": 50}},
+    {"task_name": "g1_depth"},
+    {"task_name": "g1_depth", "amp_observation_contract": {"dimension": 51}},
+    {"task_name": "g1_depth", "amp_observation_contract": {"dimension": 50.0}},
+])
+def test_playback_rejects_missing_or_incompatible_amp_identity_before_mutation(tmp_path, metadata):
+    env_defaults, agent_defaults = amp_configs(58)
+    env_cfg = SimpleNamespace(**copy.deepcopy(env_defaults))
+    agent_cfg = SimpleNamespace(**copy.deepcopy(agent_defaults))
+    path = tmp_path / "bad.pt"
+    torch.save(metadata, path)
+    with pytest.raises(ValueError, match="g1_depth"):
+        playback_amp_configurator()(env_cfg, agent_cfg, path)
+    assert vars(env_cfg) == env_defaults
+    assert vars(agent_cfg) == agent_defaults
 
 
 def amp_configs(dimension):

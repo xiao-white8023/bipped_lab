@@ -1,0 +1,4609 @@
+{
+  "status": "passed",
+  "scope": "真实仿真环境接入检查，不进行 PPO 或安全性能评估。",
+  "seed": 42,
+  "num_envs": 4,
+  "high_level_steps": 30,
+  "faults_enabled": true,
+  "config": {
+    "seed": 42,
+    "amp_observation_dim": 58,
+    "device": "cuda:0",
+    "depth_noise_start_iteration": 0,
+    "depth_noise_force_active": false,
+    "depth_blur_probability": 0.0,
+    "depth_noise": {
+      "func": "legged_lab.sensors.camera_noise.camera_noise:distance_dependent_gaussian_noise",
+      "operation": "add",
+      "device": "cpu",
+      "near_std": 0.0,
+      "far_std": 0.0,
+      "distance_exponent": 2.0
+    },
+    "scene": {
+      "max_episode_length_s": 20.0,
+      "num_envs": 4,
+      "env_spacing": 2.5,
+      "robot": {
+        "class_type": "isaaclab.assets.articulation.articulation:Articulation",
+        "prim_path": {},
+        "spawn": {
+          "asset_path": "/home/cjh/TienKung-Lab/legged_lab/assets/g1/g1_23dof/g1_23dof_rev_1_0.urdf",
+          "usd_dir": null,
+          "usd_file_name": null,
+          "force_usd_conversion": false,
+          "make_instanceable": true,
+          "fix_base": false,
+          "root_link_name": null,
+          "link_density": 0.0,
+          "merge_fixed_joints": true,
+          "convert_mimic_joints_to_normal_joints": false,
+          "joint_drive": {
+            "drive_type": "force",
+            "target_type": "position",
+            "gains": {
+              "stiffness": 0,
+              "damping": 0
+            }
+          },
+          "collider_type": "convex_hull",
+          "self_collision": false,
+          "replace_cylinders_with_capsules": true,
+          "collision_from_visuals": false,
+          "func": "isaaclab.sim.spawners.from_files.from_files:spawn_from_urdf",
+          "visible": true,
+          "semantic_tags": null,
+          "copy_from_source": true,
+          "mass_props": null,
+          "deformable_props": null,
+          "rigid_props": {
+            "rigid_body_enabled": null,
+            "kinematic_enabled": null,
+            "disable_gravity": false,
+            "linear_damping": 0.0,
+            "angular_damping": 0.0,
+            "max_linear_velocity": 1000.0,
+            "max_angular_velocity": 1000.0,
+            "max_depenetration_velocity": 1.0,
+            "max_contact_impulse": null,
+            "enable_gyroscopic_forces": null,
+            "retain_accelerations": false,
+            "solver_position_iteration_count": null,
+            "solver_velocity_iteration_count": null,
+            "sleep_threshold": null,
+            "stabilization_threshold": null
+          },
+          "collision_props": null,
+          "activate_contact_sensors": true,
+          "scale": null,
+          "articulation_props": {
+            "articulation_enabled": null,
+            "enabled_self_collisions": true,
+            "solver_position_iteration_count": 8,
+            "solver_velocity_iteration_count": 4,
+            "sleep_threshold": null,
+            "stabilization_threshold": null,
+            "fix_root_link": null
+          },
+          "fixed_tendons_props": null,
+          "spatial_tendons_props": null,
+          "joint_drive_props": null,
+          "visual_material_path": "material",
+          "visual_material": null
+        },
+        "init_state": {
+          "pos": [
+            0.0,
+            0.0,
+            0.793
+          ],
+          "rot": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "lin_vel": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "ang_vel": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "joint_pos": {
+            ".*_hip_pitch_joint": -0.2,
+            ".*_knee_joint": 0.42,
+            ".*_ankle_pitch_joint": -0.23,
+            ".*_elbow_joint": 0.87,
+            "left_shoulder_roll_joint": 0.18,
+            "left_shoulder_pitch_joint": 0.35,
+            "right_shoulder_roll_joint": -0.18,
+            "right_shoulder_pitch_joint": 0.35
+          },
+          "joint_vel": {
+            ".*": 0.0
+          }
+        },
+        "collision_group": 0,
+        "debug_vis": false,
+        "articulation_root_prim_path": null,
+        "soft_joint_pos_limit_factor": 0.9,
+        "actuators": {
+          "legs": {
+            "class_type": "isaaclab.actuators.actuator_pd:ImplicitActuator",
+            "joint_names_expr": [
+              ".*_hip_yaw_joint",
+              ".*_hip_roll_joint",
+              ".*_hip_pitch_joint",
+              ".*_knee_joint",
+              "waist_yaw_joint"
+            ],
+            "effort_limit": null,
+            "velocity_limit": null,
+            "effort_limit_sim": {
+              ".*_hip_yaw_joint": 88.0,
+              ".*_hip_roll_joint": 139.0,
+              ".*_hip_pitch_joint": 88.0,
+              ".*_knee_joint": 139.0,
+              ".*waist_yaw_joint": 88.0
+            },
+            "velocity_limit_sim": {
+              ".*_hip_yaw_joint": 32.0,
+              ".*_hip_roll_joint": 20.0,
+              ".*_hip_pitch_joint": 32.0,
+              ".*_knee_joint": 20.0,
+              ".*waist_yaw_joint": 32.0
+            },
+            "stiffness": {
+              ".*_hip_yaw_joint": 150.0,
+              ".*_hip_roll_joint": 150.0,
+              ".*_hip_pitch_joint": 200.0,
+              ".*_knee_joint": 200.0,
+              ".*waist.*": 200.0
+            },
+            "damping": {
+              ".*_hip_yaw_joint": 5.0,
+              ".*_hip_roll_joint": 5.0,
+              ".*_hip_pitch_joint": 5.0,
+              ".*_knee_joint": 5.0,
+              ".*waist.*": 5.0
+            },
+            "armature": 0.01,
+            "friction": null,
+            "dynamic_friction": null,
+            "viscous_friction": null
+          },
+          "feet": {
+            "class_type": "isaaclab.actuators.actuator_pd:ImplicitActuator",
+            "joint_names_expr": [
+              ".*_ankle_pitch_joint",
+              ".*_ankle_roll_joint"
+            ],
+            "effort_limit": null,
+            "velocity_limit": null,
+            "effort_limit_sim": {
+              ".*_ankle_pitch_joint": 35.0,
+              ".*_ankle_roll_joint": 35.0
+            },
+            "velocity_limit_sim": {
+              ".*_ankle_pitch_joint": 30.0,
+              ".*_ankle_roll_joint": 30.0
+            },
+            "stiffness": 20.0,
+            "damping": 2.0,
+            "armature": 0.01,
+            "friction": null,
+            "dynamic_friction": null,
+            "viscous_friction": null
+          },
+          "shoulders": {
+            "class_type": "isaaclab.actuators.actuator_pd:ImplicitActuator",
+            "joint_names_expr": [
+              ".*_shoulder_pitch_joint",
+              ".*_shoulder_roll_joint"
+            ],
+            "effort_limit": null,
+            "velocity_limit": null,
+            "effort_limit_sim": {
+              ".*_shoulder_pitch_joint": 25.0,
+              ".*_shoulder_roll_joint": 25.0
+            },
+            "velocity_limit_sim": {
+              ".*_shoulder_pitch_joint": 37.0,
+              ".*_shoulder_roll_joint": 37.0
+            },
+            "stiffness": 100.0,
+            "damping": 2.0,
+            "armature": 0.01,
+            "friction": null,
+            "dynamic_friction": null,
+            "viscous_friction": null
+          },
+          "arms": {
+            "class_type": "isaaclab.actuators.actuator_pd:ImplicitActuator",
+            "joint_names_expr": [
+              ".*_shoulder_yaw_joint",
+              ".*_elbow_joint"
+            ],
+            "effort_limit": null,
+            "velocity_limit": null,
+            "effort_limit_sim": {
+              ".*_shoulder_yaw_joint": 25.0,
+              ".*_elbow_joint": 25.0
+            },
+            "velocity_limit_sim": {
+              ".*_shoulder_yaw_joint": 37.0,
+              ".*_elbow_joint": 37.0
+            },
+            "stiffness": 50.0,
+            "damping": 2.0,
+            "armature": 0.01,
+            "friction": null,
+            "dynamic_friction": null,
+            "viscous_friction": null
+          },
+          "wrist": {
+            "class_type": "isaaclab.actuators.actuator_pd:ImplicitActuator",
+            "joint_names_expr": [
+              ".*_wrist_.*"
+            ],
+            "effort_limit": null,
+            "velocity_limit": null,
+            "effort_limit_sim": {
+              ".*_wrist_roll_joint": 25.0
+            },
+            "velocity_limit_sim": {
+              ".*_wrist_roll_joint": 37.0
+            },
+            "stiffness": 15,
+            "damping": 2.0,
+            "armature": 0.01,
+            "friction": null,
+            "dynamic_friction": null,
+            "viscous_friction": null
+          }
+        },
+        "actuator_value_resolution_debug_print": false,
+        "joint_sdk_names": null
+      },
+      "terrain_type": "generator",
+      "terrain_generator": {
+        "class_type": "isaaclab.terrains.terrain_generator:TerrainGenerator",
+        "seed": 42,
+        "curriculum": true,
+        "size": [
+          8.0,
+          8.0
+        ],
+        "border_width": 20.0,
+        "border_height": 1.0,
+        "num_rows": 2,
+        "num_cols": 3,
+        "color_scheme": "none",
+        "horizontal_scale": 0.1,
+        "vertical_scale": 0.005,
+        "slope_threshold": 0.75,
+        "sub_terrains": {
+          "Inverted_pyramid_stairs_28": {
+            "function": "isaaclab.terrains.trimesh.mesh_terrains:inverted_pyramid_stairs_terrain",
+            "proportion": 0.1,
+            "size": [
+              10.0,
+              10.0
+            ],
+            "flat_patch_sampling": null,
+            "border_width": 1.0,
+            "step_height_range": [
+              0.0,
+              0.23
+            ],
+            "step_width": 0.28,
+            "platform_width": 3.0,
+            "holes": false
+          },
+          "Inverted_pyramid_stairs_30": {
+            "function": "isaaclab.terrains.trimesh.mesh_terrains:inverted_pyramid_stairs_terrain",
+            "proportion": 0.1,
+            "size": [
+              10.0,
+              10.0
+            ],
+            "flat_patch_sampling": null,
+            "border_width": 1.0,
+            "step_height_range": [
+              0.0,
+              0.23
+            ],
+            "step_width": 0.3,
+            "platform_width": 3.0,
+            "holes": false
+          },
+          "pyramid_stairs_28": {
+            "function": "isaaclab.terrains.trimesh.mesh_terrains:pyramid_stairs_terrain",
+            "proportion": 0.1,
+            "size": [
+              10.0,
+              10.0
+            ],
+            "flat_patch_sampling": null,
+            "border_width": 1.0,
+            "step_height_range": [
+              0.0,
+              0.23
+            ],
+            "step_width": 0.28,
+            "platform_width": 3.0,
+            "holes": false
+          },
+          "pyramid_stairs_30": {
+            "function": "isaaclab.terrains.trimesh.mesh_terrains:pyramid_stairs_terrain",
+            "proportion": 0.1,
+            "size": [
+              10.0,
+              10.0
+            ],
+            "flat_patch_sampling": null,
+            "border_width": 1.0,
+            "step_height_range": [
+              0.0,
+              0.23
+            ],
+            "step_width": 0.3,
+            "platform_width": 3.0,
+            "holes": false
+          },
+          "boxes": {
+            "function": "isaaclab.terrains.trimesh.mesh_terrains:random_grid_terrain",
+            "proportion": 0.1,
+            "size": [
+              10.0,
+              10.0
+            ],
+            "flat_patch_sampling": null,
+            "grid_width": 0.21,
+            "grid_height_range": [
+              0.0,
+              0.15
+            ],
+            "platform_width": 3.0,
+            "holes": false
+          },
+          "high_platform": {
+            "function": "isaaclab.terrains.trimesh.mesh_terrains:pit_terrain",
+            "proportion": 0.1,
+            "size": [
+              10.0,
+              10.0
+            ],
+            "flat_patch_sampling": null,
+            "pit_depth_range": [
+              0.05,
+              0.3
+            ],
+            "platform_width": 3.0,
+            "double_pit": true
+          },
+          "up_slope_terrain": {
+            "function": "isaaclab.terrains.height_field.hf_terrains:pyramid_sloped_terrain",
+            "proportion": 0.1,
+            "size": [
+              10.0,
+              10.0
+            ],
+            "flat_patch_sampling": null,
+            "border_width": 0.0,
+            "horizontal_scale": 0.1,
+            "vertical_scale": 0.005,
+            "slope_threshold": null,
+            "slope_range": [
+              0.0837,
+              0.55
+            ],
+            "platform_width": 3,
+            "inverted": false
+          },
+          "down_slope_terrain": {
+            "function": "isaaclab.terrains.height_field.hf_terrains:pyramid_sloped_terrain",
+            "proportion": 0.1,
+            "size": [
+              10.0,
+              10.0
+            ],
+            "flat_patch_sampling": null,
+            "border_width": 0.0,
+            "horizontal_scale": 0.1,
+            "vertical_scale": 0.005,
+            "slope_threshold": null,
+            "slope_range": [
+              0.0837,
+              0.55
+            ],
+            "platform_width": 3,
+            "inverted": true
+          },
+          "gap": {
+            "function": "legged_lab.terrains.mesh_gap_terrain:gap_with_floor_terrain",
+            "proportion": 0.2,
+            "size": [
+              10.0,
+              10.0
+            ],
+            "flat_patch_sampling": null,
+            "gap_width_range": [
+              0.1,
+              0.5
+            ],
+            "platform_width": 3.0,
+            "gap_depth_range": [
+              0.5,
+              1.0
+            ]
+          }
+        },
+        "difficulty_range": [
+          0.0,
+          1.0
+        ],
+        "use_cache": false,
+        "cache_dir": "/tmp/isaaclab/terrains"
+      },
+      "max_init_terrain_level": 1,
+      "height_scanner": {
+        "enable_height_scan": true,
+        "prim_body_name": "torso_link",
+        "resolution": 0.1,
+        "size": [
+          1.6,
+          1.0
+        ],
+        "debug_vis": false,
+        "drift_range": [
+          0.0,
+          0.0
+        ]
+      },
+      "lidar": null,
+      "depth_camera": {
+        "class_type": "legged_lab.sensors.camera.tiled_camera:TiledCamera",
+        "prim_path": {},
+        "update_period": 0.0,
+        "history_length": 0,
+        "debug_vis": false,
+        "offset": {
+          "pos": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rot": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "convention": "ros"
+        },
+        "spawn": {
+          "func": "isaaclab.sim.spawners.sensors.sensors:spawn_camera",
+          "visible": true,
+          "semantic_tags": null,
+          "copy_from_source": true,
+          "projection_type": "pinhole",
+          "clipping_range": [
+            0.01,
+            1000000.0
+          ],
+          "focal_length": 24.0,
+          "focus_distance": 400.0,
+          "f_stop": 0.0,
+          "horizontal_aperture": 20.955,
+          "vertical_aperture": null,
+          "horizontal_aperture_offset": 0.0,
+          "vertical_aperture_offset": 0.0,
+          "lock_camera": true
+        },
+        "depth_clipping_behavior": "none",
+        "data_types": [
+          "distance_to_image_plane"
+        ],
+        "width": 480,
+        "height": 270,
+        "update_latest_camera_pose": false,
+        "semantic_filter": "*:*",
+        "colorize_semantic_segmentation": true,
+        "colorize_instance_id_segmentation": true,
+        "colorize_instance_segmentation": true,
+        "semantic_segmentation_mapping": {},
+        "enable_depth_camera": false,
+        "prim_body_name": "pelvis/depth_camera",
+        "max_range": 15.0,
+        "min_range": 0.2,
+        "sensor_noise": {
+          "enable": false,
+          "mode": "gaussian",
+          "depth_std": 0.01,
+          "depth_std_multiplier": 0.01,
+          "dropout_prob": 0.01,
+          "dropout_value": 0.0
+        },
+        "visualizer_cfg": {
+          "prim_path": "/World/Visuals/CameraPointCloud",
+          "markers": {
+            "point": {
+              "func": "isaaclab.sim.spawners.shapes.shapes:spawn_sphere",
+              "visible": true,
+              "semantic_tags": null,
+              "copy_from_source": true,
+              "mass_props": null,
+              "rigid_props": null,
+              "collision_props": null,
+              "activate_contact_sensors": false,
+              "visual_material_path": "material",
+              "visual_material": {
+                "func": "isaaclab.sim.spawners.materials.visual_materials:spawn_preview_surface",
+                "diffuse_color": [
+                  0.2,
+                  0.8,
+                  0.2
+                ],
+                "emissive_color": [
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "roughness": 0.5,
+                "metallic": 0.0,
+                "opacity": 1.0
+              },
+              "physics_material_path": "material",
+              "physics_material": null,
+              "radius": 0.02
+            }
+          },
+          "decimation": 10
+        },
+        "far_out_of_range_value": "inf",
+        "near_out_of_range_value": "inf"
+      },
+      "camera": {
+        "add_camera": true,
+        "add_camera_noise": false,
+        "camera": {
+          "class_type": "legged_lab.sensors.grouped_ray_caster.grouped_ray_caster_camera:GroupedRayCasterCamera",
+          "prim_path": "/World/envs/env_.*/Robot/torso_link",
+          "update_period": 0.02,
+          "history_length": 0,
+          "debug_vis": false,
+          "mesh_prim_paths": [
+            "/World/ground",
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/left_hip_roll_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            },
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/left_hip_yaw_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            },
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/left_knee_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            },
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/left_ankle_pitch_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            },
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/left_ankle_roll_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            },
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/right_hip_roll_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            },
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/right_hip_yaw_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            },
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/right_knee_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            },
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/right_ankle_pitch_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            },
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/right_ankle_roll_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            },
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/left_elbow_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            },
+            {
+              "prim_expr": "/World/envs/env_.*/Robot/right_elbow_link/visuals",
+              "is_shared": false,
+              "merge_prim_meshes": true,
+              "track_mesh_transforms": true
+            }
+          ],
+          "offset": {
+            "pos": [
+              0.0576235,
+              0.01753,
+              0.42987
+            ],
+            "rot": [
+              0.9149595,
+              0.0,
+              0.4035447,
+              0.0
+            ],
+            "convention": "world"
+          },
+          "attach_yaw_only": null,
+          "ray_alignment": "yaw",
+          "pattern_cfg": {
+            "func": "isaaclab.sensors.ray_caster.patterns.patterns:pinhole_camera_pattern",
+            "focal_length": 1.0,
+            "horizontal_aperture": 1.9829684971963653,
+            "vertical_aperture": 1.1152440419261633,
+            "horizontal_aperture_offset": 0.0,
+            "vertical_aperture_offset": 0.0,
+            "width": 64,
+            "height": 36
+          },
+          "max_distance": 1000000.0,
+          "drift_range": [
+            0.0,
+            0.0
+          ],
+          "ray_cast_drift_range": {
+            "x": [
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              0.0
+            ],
+            "z": [
+              0.0,
+              0.0
+            ]
+          },
+          "visualizer_cfg": {
+            "prim_path": "/Visuals/GroupedRayCasterCamera",
+            "markers": {
+              "hit": {
+                "func": "isaaclab.sim.spawners.shapes.shapes:spawn_sphere",
+                "visible": true,
+                "semantic_tags": null,
+                "copy_from_source": true,
+                "mass_props": null,
+                "rigid_props": null,
+                "collision_props": null,
+                "activate_contact_sensors": false,
+                "visual_material_path": "material",
+                "visual_material": {
+                  "func": "isaaclab.sim.spawners.materials.visual_materials:spawn_preview_surface",
+                  "diffuse_color": [
+                    1.0,
+                    0.0,
+                    0.0
+                  ],
+                  "emissive_color": [
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "roughness": 0.5,
+                  "metallic": 0.0,
+                  "opacity": 1.0
+                },
+                "physics_material_path": "material",
+                "physics_material": null,
+                "radius": 0.02
+              },
+              "frame": {
+                "func": "isaaclab.sim.spawners.from_files.from_files:spawn_from_usd",
+                "visible": true,
+                "semantic_tags": null,
+                "copy_from_source": true,
+                "mass_props": null,
+                "deformable_props": null,
+                "rigid_props": null,
+                "collision_props": null,
+                "activate_contact_sensors": false,
+                "scale": [
+                  0.1,
+                  0.1,
+                  0.1
+                ],
+                "articulation_props": null,
+                "fixed_tendons_props": null,
+                "spatial_tendons_props": null,
+                "joint_drive_props": null,
+                "visual_material_path": "material",
+                "visual_material": null,
+                "usd_path": "https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/UIElements/frame_prim.usd",
+                "variants": null
+              }
+            }
+          },
+          "update_mesh_ids": false,
+          "reference_meshes": true,
+          "min_distance": 0.1,
+          "data_types": [
+            "distance_to_image_plane"
+          ],
+          "depth_clipping_behavior": "none"
+        },
+        "depth_max": 2.5,
+        "depth_update_interval": 5,
+        "depth_crop": [
+          18,
+          0,
+          16,
+          16
+        ],
+        "depth_history_frames": 2,
+        "depth_input_mode": "depth",
+        "normalize_depth_points": true
+      },
+      "left_feet_ray_caster": {
+        "add_left_feet_ray_caster": true,
+        "left_feet_ray_caster": {
+          "class_type": "isaaclab.sensors.ray_caster.ray_caster:RayCaster",
+          "prim_path": "{ENV_REGEX_NS}/Robot/left_ankle_roll_link",
+          "update_period": 0.02,
+          "history_length": 0,
+          "debug_vis": false,
+          "mesh_prim_paths": [
+            "/World/ground"
+          ],
+          "offset": {
+            "pos": [
+              0.0,
+              0.0,
+              -0.025
+            ],
+            "rot": [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "attach_yaw_only": null,
+          "ray_alignment": "base",
+          "pattern_cfg": {
+            "func": "legged_lab.sensors.foot_sole_pattern:foot_sole_pattern",
+            "mesh_path": "/home/cjh/TienKung-Lab/legged_lab/assets/g1/g1_23dof/meshes/left_ankle_roll_link.STL",
+            "resolution": 0.01,
+            "edge_margin": 0.002,
+            "sole_slice_tolerance": 0.001
+          },
+          "max_distance": 1000000.0,
+          "drift_range": [
+            0.0,
+            0.0
+          ],
+          "ray_cast_drift_range": {
+            "x": [
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              0.0
+            ],
+            "z": [
+              0.0,
+              0.0
+            ]
+          },
+          "visualizer_cfg": {
+            "prim_path": "/Visuals/RayCaster",
+            "markers": {
+              "hit": {
+                "func": "isaaclab.sim.spawners.shapes.shapes:spawn_sphere",
+                "visible": true,
+                "semantic_tags": null,
+                "copy_from_source": true,
+                "mass_props": null,
+                "rigid_props": null,
+                "collision_props": null,
+                "activate_contact_sensors": false,
+                "visual_material_path": "material",
+                "visual_material": {
+                  "func": "isaaclab.sim.spawners.materials.visual_materials:spawn_preview_surface",
+                  "diffuse_color": [
+                    1.0,
+                    0.0,
+                    0.0
+                  ],
+                  "emissive_color": [
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "roughness": 0.5,
+                  "metallic": 0.0,
+                  "opacity": 1.0
+                },
+                "physics_material_path": "material",
+                "physics_material": null,
+                "radius": 0.02
+              }
+            }
+          }
+        }
+      },
+      "right_feet_ray_caster": {
+        "add_right_feet_ray_caster": true,
+        "right_feet_ray_caster": {
+          "class_type": "isaaclab.sensors.ray_caster.ray_caster:RayCaster",
+          "prim_path": "{ENV_REGEX_NS}/Robot/right_ankle_roll_link",
+          "update_period": 0.02,
+          "history_length": 0,
+          "debug_vis": false,
+          "mesh_prim_paths": [
+            "/World/ground"
+          ],
+          "offset": {
+            "pos": [
+              0.0,
+              0.0,
+              -0.025
+            ],
+            "rot": [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "attach_yaw_only": null,
+          "ray_alignment": "base",
+          "pattern_cfg": {
+            "func": "legged_lab.sensors.foot_sole_pattern:foot_sole_pattern",
+            "mesh_path": "/home/cjh/TienKung-Lab/legged_lab/assets/g1/g1_23dof/meshes/right_ankle_roll_link.STL",
+            "resolution": 0.01,
+            "edge_margin": 0.002,
+            "sole_slice_tolerance": 0.001
+          },
+          "max_distance": 1000000.0,
+          "drift_range": [
+            0.0,
+            0.0
+          ],
+          "ray_cast_drift_range": {
+            "x": [
+              0.0,
+              0.0
+            ],
+            "y": [
+              0.0,
+              0.0
+            ],
+            "z": [
+              0.0,
+              0.0
+            ]
+          },
+          "visualizer_cfg": {
+            "prim_path": "/Visuals/RayCaster",
+            "markers": {
+              "hit": {
+                "func": "isaaclab.sim.spawners.shapes.shapes:spawn_sphere",
+                "visible": true,
+                "semantic_tags": null,
+                "copy_from_source": true,
+                "mass_props": null,
+                "rigid_props": null,
+                "collision_props": null,
+                "activate_contact_sensors": false,
+                "visual_material_path": "material",
+                "visual_material": {
+                  "func": "isaaclab.sim.spawners.materials.visual_materials:spawn_preview_surface",
+                  "diffuse_color": [
+                    1.0,
+                    0.0,
+                    0.0
+                  ],
+                  "emissive_color": [
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "roughness": 0.5,
+                  "metallic": 0.0,
+                  "opacity": 1.0
+                },
+                "physics_material_path": "material",
+                "physics_material": null,
+                "radius": 0.02
+              }
+            }
+          }
+        }
+      },
+      "privileged_info": {
+        "enable_feet_info": false,
+        "enable_root_height": false,
+        "enable_feet_contact_force": false
+      },
+      "seed": 42
+    },
+    "robot": {
+      "actor_obs_history_length": 10,
+      "critic_obs_history_length": 10,
+      "depth_history_frames": 2,
+      "action_scale": 0.25,
+      "terminate_contacts_body_names": [
+        ".*torso.*"
+      ],
+      "feet_body_names": [
+        "left_ankle_roll.*",
+        "right_ankle_roll.*"
+      ],
+      "depth_max": 2.5,
+      "depth_update_interval": 5,
+      "depth_crop": [
+        18,
+        0,
+        16,
+        16
+      ],
+      "limit_angle": 0.8
+    },
+    "normalization": {
+      "obs_scales": {
+        "lin_vel": 1.0,
+        "ang_vel": 1.0,
+        "projected_gravity": 1.0,
+        "commands": 1.0,
+        "joint_pos": 1.0,
+        "joint_vel": 1.0,
+        "actions": 1.0,
+        "height_scan": 1.0,
+        "feet_pos": 1.0,
+        "feet_vel": 1.0,
+        "contact_force": 0.01
+      },
+      "clip_observations": 100.0,
+      "clip_actions": 100.0,
+      "height_scan_offset": 0.5
+    },
+    "commands": {
+      "resampling_time_range": [
+        10.0,
+        10.0
+      ],
+      "rel_standing_envs": 0.2,
+      "rel_heading_envs": 1.0,
+      "heading_command": true,
+      "heading_control_stiffness": 0.5,
+      "debug_vis": true,
+      "ranges": {
+        "lin_vel_x": [
+          -0.6,
+          1.0
+        ],
+        "lin_vel_y": [
+          -0.5,
+          0.5
+        ],
+        "ang_vel_z": [
+          -1.57,
+          1.57
+        ],
+        "heading": [
+          -3.141592653589793,
+          3.141592653589793
+        ]
+      }
+    },
+    "noise": {
+      "add_noise": true,
+      "noise_scales": {
+        "lin_vel": 0.2,
+        "ang_vel": 0.2,
+        "projected_gravity": 0.05,
+        "joint_pos": 0.01,
+        "joint_vel": 1.5,
+        "height_scan": 0.1
+      }
+    },
+    "domain_rand": {
+      "add_EventCfg": true,
+      "events": {
+        "physics_material": null,
+        "add_base_mass": null,
+        "reset_base": {
+          "func": "isaaclab.envs.mdp.events:reset_root_state_uniform",
+          "params": {
+            "pose_range": {
+              "x": [
+                -0.5,
+                0.5
+              ],
+              "y": [
+                -0.5,
+                0.5
+              ],
+              "yaw": [
+                -3.14,
+                3.14
+              ]
+            },
+            "velocity_range": {
+              "x": [
+                -0.5,
+                0.5
+              ],
+              "y": [
+                -0.5,
+                0.5
+              ],
+              "z": [
+                -0.5,
+                0.5
+              ],
+              "roll": [
+                -0.5,
+                0.5
+              ],
+              "pitch": [
+                -0.5,
+                0.5
+              ],
+              "yaw": [
+                -0.5,
+                0.5
+              ]
+            }
+          },
+          "mode": "reset",
+          "interval_range_s": null,
+          "is_global_time": false,
+          "min_step_count_between_reset": 0
+        },
+        "reset_robot_joints": {
+          "func": "isaaclab.envs.mdp.events:reset_joints_by_scale",
+          "params": {
+            "position_range": [
+              0.5,
+              1.5
+            ],
+            "velocity_range": [
+              0.0,
+              0.0
+            ]
+          },
+          "mode": "reset",
+          "interval_range_s": null,
+          "is_global_time": false,
+          "min_step_count_between_reset": 0
+        },
+        "push_robot": null,
+        "reset_arm_pose_and_hold": {
+          "func": "legged_lab.mdp.event_mdp:reset_arm_pose_and_hold",
+          "params": {
+            "position_ranges": {
+              "right_shoulder_pitch_joint": [
+                -0.35,
+                0.35
+              ],
+              "right_shoulder_roll_joint": [
+                -0.1,
+                0.2
+              ],
+              "right_elbow_joint": [
+                0.2,
+                0.8
+              ]
+            },
+            "asset_cfg": {
+              "name": "robot",
+              "joint_names": [
+                "right_shoulder_pitch_joint",
+                "right_shoulder_roll_joint",
+                "right_elbow_joint"
+              ],
+              "joint_ids": "slice(None, None, None)",
+              "fixed_tendon_names": null,
+              "fixed_tendon_ids": "slice(None, None, None)",
+              "body_names": null,
+              "body_ids": "slice(None, None, None)",
+              "object_collection_names": null,
+              "object_collection_ids": "slice(None, None, None)",
+              "preserve_order": true
+            }
+          },
+          "mode": "reset",
+          "interval_range_s": null,
+          "is_global_time": false,
+          "min_step_count_between_reset": 0
+        },
+        "right_arm_shoulder_pitch_roll_gains": null,
+        "right_arm_shoulder_yaw_elbow_gains": null,
+        "right_arm_wrist_gains": null,
+        "left_arm_shoulder_pitch_roll_gains": null,
+        "left_arm_shoulder_yaw_elbow_gains": null,
+        "left_arm_wrist_gains": null
+      },
+      "action_delay": {
+        "enable": false,
+        "params": {
+          "max_delay": 5,
+          "min_delay": 0
+        }
+      }
+    },
+    "sim": {
+      "dt": 0.005,
+      "decimation": 4,
+      "physx": {
+        "gpu_max_rigid_patch_count": 8388608,
+        "use_gpu": true,
+        "gpu_max_rigid_contact_count": 8388608,
+        "gpu_heap_capacity": 67108864
+      }
+    },
+    "low_level": {
+      "loader": "validated_checkpoint",
+      "checkpoint_path": "/home/cjh/TienKung-Lab/logs/g1_renet/2026-09-04_14-11-25/model_60000.pt",
+      "reference_policy_path": "/home/cjh/TienKung-Lab/logs/g1_renet/2026-09-04_14-11-25/exported/policy.pt",
+      "freeze": true,
+      "deterministic": true,
+      "validate_observation_contract": true
+    },
+    "selector": {
+      "frequency": 5.0,
+      "mode_names": [
+        "vp",
+        "lp"
+      ],
+      "initial_mode": 0,
+      "num_modes": 2,
+      "action_dim": 1,
+      "mode_control": "external",
+      "switch_confirmations": 1,
+      "min_dwell_s": 0.0,
+      "terrain_curriculum": false,
+      "low_level_dt": 0.02,
+      "low_level_steps_per_decision": 10,
+      "aggregation": "sum",
+      "stop_on_done": true,
+      "bootstrap_timeouts": true,
+      "timeout_value_source": "terminal_observation"
+    },
+    "observation": {
+      "proprio_history_frames": 10,
+      "proprio_frame_dim": 78,
+      "depth_history_frames": 2,
+      "height_history_frames": 1,
+      "use_depth_valid_support": true,
+      "use_height_valid_mask": true,
+      "sensor_age_clip_s": 2.0,
+      "switch_time_clip_s": 2.0,
+      "state_names": [
+        "mode_vp",
+        "mode_lp",
+        "vp_old_valid_ratio",
+        "vp_new_valid_ratio",
+        "lp_valid_ratio",
+        "vp_source_age",
+        "lp_source_age",
+        "time_since_switch"
+      ],
+      "critic_use_privileged": true,
+      "critic_base_lin_vel_dim": 3,
+      "critic_feet_contact_dim": 2,
+      "critic_feet_height_dim": 2,
+      "critic_use_clean_height": true,
+      "depth_shape": [
+        2,
+        18,
+        32
+      ],
+      "height_shape": [
+        1,
+        11,
+        17
+      ],
+      "proprio_dim": 780,
+      "depth_input_channels": 4,
+      "height_input_channels": 2,
+      "state_dim": 8,
+      "actor_obs_dim": 3466,
+      "critic_privileged_dim": 194,
+      "critic_obs_dim": 3660
+    },
+    "faults": {
+      "enable": true,
+      "schedule": {
+        "update_period_s": 0.1,
+        "scenario_probabilities": [
+          0.3,
+          0.25,
+          0.25,
+          0.2
+        ],
+        "normal_duration_s": [
+          1.0,
+          5.0
+        ],
+        "missing_duration_s": [
+          0.4,
+          2.0
+        ],
+        "temporal_duration_s": [
+          0.5,
+          3.0
+        ],
+        "persistent_duration_s": [
+          1.0,
+          5.0
+        ],
+        "full_dropout_duration_s": [
+          0.1,
+          0.3
+        ],
+        "dual_full_dropout_duration_s": [
+          0.2,
+          0.3
+        ],
+        "consecutive_dropout_duration_s": [
+          0.2,
+          0.5
+        ],
+        "recovery_duration_s": [
+          0.5,
+          3.0
+        ],
+        "stagger_probability": 0.5,
+        "stagger_s": [
+          0.1,
+          0.5
+        ],
+        "min_overlap_s": 0.2
+      },
+      "lp": {
+        "kinds": [
+          1,
+          2,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16
+        ],
+        "lp_resolution_m": 0.1,
+        "lp_invalid_height": -1.1,
+        "lp_height_clip": [
+          -1.0,
+          1.0
+        ],
+        "max_delay_frames": 5,
+        "lp_dropout_fraction": [
+          0.1,
+          1.0
+        ],
+        "lp_block_fraction": [
+          0.1,
+          1.0
+        ],
+        "lp_height_bias_m_range": [
+          -0.15,
+          0.15
+        ],
+        "lp_translation_range_m": [
+          -0.2,
+          0.2
+        ],
+        "lp_yaw_range_deg": [
+          -5.0,
+          5.0
+        ],
+        "lp_drift_m_per_s": [
+          0.0,
+          0.05
+        ],
+        "lp_drift_deg_per_s": [
+          0.0,
+          1.0
+        ],
+        "lp_map_height_velocity_m_per_s": [
+          -0.05,
+          0.05
+        ],
+        "lp_map_translation_limit_m": 0.45,
+        "lp_map_yaw_limit_deg": 12.0,
+        "lp_map_height_limit_m": 0.25,
+        "lp_map_random_walk_m": 0.012,
+        "lp_map_correction_frames": [
+          15,
+          45
+        ],
+        "lp_person_radius_m": [
+          0.14,
+          0.32
+        ],
+        "lp_person_height_above_ground_m": [
+          0.25,
+          1.0
+        ],
+        "lp_person_main_fraction": 0.65,
+        "lp_map_confirm_frames": 3,
+        "lp_map_retention_radius_m": 2.5,
+        "burst_on_frames": [
+          1,
+          5
+        ],
+        "burst_off_frames": [
+          1,
+          4
+        ],
+        "compound_dropout_probability": 0.2,
+        "recovery_tau_s": 0.5,
+        "recovery_translation_epsilon_m": 0.001,
+        "recovery_yaw_epsilon_deg": 0.01
+      },
+      "vp": {
+        "modes": [
+          "large_hole",
+          "lower_occlusion",
+          "central_landing_occlusion",
+          "stripe_missing",
+          "full_dropout",
+          "consecutive_dropout",
+          "freeze_frame",
+          "distant_dust"
+        ],
+        "depth_min_m": 0.1,
+        "depth_max_m": 2.5,
+        "fill_value": 0.0,
+        "large_hole_height_range": [
+          0.35,
+          0.75
+        ],
+        "large_hole_width_range": [
+          0.35,
+          0.8
+        ],
+        "lower_occlusion_height_range": [
+          0.35,
+          0.7
+        ],
+        "central_landing_height_range": [
+          0.35,
+          0.7
+        ],
+        "central_landing_width_range": [
+          0.35,
+          0.75
+        ],
+        "central_landing_center_y_range": [
+          0.55,
+          0.85
+        ],
+        "central_landing_center_x_range": [
+          0.4,
+          0.6
+        ],
+        "stripe_width_range": [
+          0.08,
+          0.25
+        ],
+        "stripe_count_range": [
+          1,
+          3
+        ],
+        "stripe_orientations": [
+          "vertical",
+          "horizontal"
+        ],
+        "distant_dust_start": 1.5,
+        "distant_dust_noise_std": 0.08,
+        "distant_dust_dropout_probability": 0.35,
+        "distant_dust_fill_value": 0.0
+      }
+    },
+    "lp_height": {
+      "resolution": 0.1,
+      "full_size": [
+        1.6,
+        1.0
+      ],
+      "history_frames": 1,
+      "update_period": 0.1,
+      "invalid_height": -1.1,
+      "height_clip": [
+        -1.0,
+        1.0
+      ],
+      "noise": {
+        "enable": false,
+        "start_iteration": 0,
+        "force_active": false,
+        "height_std_range": [
+          0.01,
+          0.03
+        ],
+        "height_bias_range": [
+          -0.02,
+          0.02
+        ],
+        "xy_bias_range": [
+          -0.02,
+          0.02
+        ],
+        "yaw_bias_deg_range": [
+          -1.0,
+          1.0
+        ],
+        "dropout_range": [
+          0.0,
+          0.05
+        ],
+        "quantize": true,
+        "map_resolution": 0.1,
+        "max_delay_packets": 2,
+        "block_probability": 0.2,
+        "block_x_size": [
+          0.1,
+          0.3
+        ],
+        "block_y_size": [
+          0.1,
+          0.4
+        ],
+        "block_duration_packets": [
+          1,
+          3
+        ]
+      },
+      "shape": [
+        11,
+        17
+      ],
+      "x_range": [
+        -0.8,
+        0.8
+      ],
+      "y_range": [
+        -0.5,
+        0.5
+      ]
+    },
+    "amp_motion_files_display": [
+      "/home/cjh/TienKung-Lab/legged_lab/envs/g1/datasets/make_g1_23dof/training/visualization/walk_turns_40s.txt"
+    ],
+    "reward": {
+      "track_lin_vel_xy_exp": {
+        "func": "legged_lab.mdp.rewards:track_lin_vel_xy_yaw_frame_exp",
+        "params": {
+          "std": 0.5
+        },
+        "weight": 3.0
+      },
+      "track_ang_vel_z_exp": {
+        "func": "legged_lab.mdp.rewards:track_ang_vel_z_world_exp",
+        "params": {
+          "std": 0.5
+        },
+        "weight": 2.0
+      },
+      "termination_penalty": {
+        "func": "legged_lab.mdp.rewards:is_terminated",
+        "params": {},
+        "weight": -200.0
+      },
+      "alive": {
+        "func": "legged_lab.mdp.rewards:alive",
+        "params": {},
+        "weight": 0.15
+      },
+      "mode_switch_penalty": {
+        "func": "legged_lab.mdp.rewards:selector_mode_switch",
+        "params": {},
+        "weight": -1.0
+      },
+      "action_rate_l2": {
+        "func": "legged_lab.mdp.rewards:action_rate_l2",
+        "params": {},
+        "weight": -0.01
+      }
+    },
+    "renet": {
+      "mask_mode": "vp",
+      "lp_height_source": "pgtt_full_atten",
+      "domain_rand_start_iteration": 0
+    }
+  },
+  "overrides": {
+    "device": "cuda:0",
+    "seed": 42,
+    "scene.seed": 42,
+    "scene.num_envs": 4,
+    "scene.max_init_terrain_level": 1,
+    "scene.terrain_generator.num_rows": 2,
+    "scene.terrain_generator.num_cols": 3,
+    "scene.terrain_generator.seed": 42,
+    "scene.terrain_generator.use_cache": false,
+    "faults.enable": true
+  },
+  "frozen_policy": {
+    "version": 1,
+    "source_checkpoint": "/home/cjh/TienKung-Lab/logs/g1_renet/2026-09-04_14-11-25/model_60000.pt",
+    "source_checkpoint_sha256": "d588c113dfa797afb486eef69e15889e4787e60257e66c36d6e64f00976f1566",
+    "reference_policy": "/home/cjh/TienKung-Lab/logs/g1_renet/2026-09-04_14-11-25/exported/policy.pt",
+    "reference_policy_sha256": "7a34a61b4b6f391f628b46b4da106d99b72f9034dab5f62386bac7db87a351b1",
+    "source_iteration": 60000,
+    "actor_observation_dim": 2120,
+    "critic_observation_dim": 1037,
+    "action_dim": 23,
+    "lp_query_history_frames": 5,
+    "vp_proprio_history_frames": 10,
+    "normalization": "identity",
+    "inference_precision": "float32_no_tf32",
+    "lp_encoder_contract": {
+      "version": 1,
+      "encoder_type": "ame_point_cross_attention",
+      "proprio_history_frames": 5,
+      "height_history_frames": 1,
+      "map_shape": [
+        11,
+        17
+      ],
+      "map_token_dim": 64,
+      "attention_heads": 16,
+      "sample_order": "y_ascending/x_ascending",
+      "grid_x_range": [
+        -0.8,
+        0.8
+      ],
+      "grid_y_range": [
+        -0.5,
+        0.5
+      ],
+      "coordinate_features": "x_y_encoded_height",
+      "uses_lp_gru": false,
+      "reconstruction_region": "full_187"
+    },
+    "vp_encoder_contract": {
+      "version": 1,
+      "proprio_history_frames": 10,
+      "single_proprio_dim": 78,
+      "depth_history_frames": 2,
+      "fusion_type": "attention",
+      "sequence_order": "oldest_to_current",
+      "recurrent_state": "reset_each_observation_window"
+    },
+    "critic_observation_contract": {
+      "version": 1,
+      "single_frame_dim": 85,
+      "history_frames": 10,
+      "vp_history_frames": 10,
+      "terrain_dim": 187,
+      "mode_source": "matching_actor_estimator_mask"
+    },
+    "lp_observation_contract": {
+      "version": 3,
+      "source": "pgtt_full",
+      "layout": "rectangular_full",
+      "shape": [
+        11,
+        17
+      ],
+      "history_frames": 1,
+      "update_period": 0.1,
+      "frame": "capture_torso_yaw",
+      "order": "single/y_ascending/x_ascending",
+      "sample_xy": [
+        [
+          [
+            -0.800000011920929,
+            -0.5
+          ],
+          [
+            -0.699999988079071,
+            -0.5
+          ],
+          [
+            -0.6000000238418579,
+            -0.5
+          ],
+          [
+            -0.5,
+            -0.5
+          ],
+          [
+            -0.4000000059604645,
+            -0.5
+          ],
+          [
+            -0.30000001192092896,
+            -0.5
+          ],
+          [
+            -0.20000000298023224,
+            -0.5
+          ],
+          [
+            -0.10000000149011612,
+            -0.5
+          ],
+          [
+            0.0,
+            -0.5
+          ],
+          [
+            0.10000000149011612,
+            -0.5
+          ],
+          [
+            0.20000000298023224,
+            -0.5
+          ],
+          [
+            0.30000001192092896,
+            -0.5
+          ],
+          [
+            0.4000000059604645,
+            -0.5
+          ],
+          [
+            0.5,
+            -0.5
+          ],
+          [
+            0.6000000238418579,
+            -0.5
+          ],
+          [
+            0.699999988079071,
+            -0.5
+          ],
+          [
+            0.800000011920929,
+            -0.5
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            -0.4000000059604645
+          ],
+          [
+            -0.699999988079071,
+            -0.4000000059604645
+          ],
+          [
+            -0.6000000238418579,
+            -0.4000000059604645
+          ],
+          [
+            -0.5,
+            -0.4000000059604645
+          ],
+          [
+            -0.4000000059604645,
+            -0.4000000059604645
+          ],
+          [
+            -0.30000001192092896,
+            -0.4000000059604645
+          ],
+          [
+            -0.20000000298023224,
+            -0.4000000059604645
+          ],
+          [
+            -0.10000000149011612,
+            -0.4000000059604645
+          ],
+          [
+            0.0,
+            -0.4000000059604645
+          ],
+          [
+            0.10000000149011612,
+            -0.4000000059604645
+          ],
+          [
+            0.20000000298023224,
+            -0.4000000059604645
+          ],
+          [
+            0.30000001192092896,
+            -0.4000000059604645
+          ],
+          [
+            0.4000000059604645,
+            -0.4000000059604645
+          ],
+          [
+            0.5,
+            -0.4000000059604645
+          ],
+          [
+            0.6000000238418579,
+            -0.4000000059604645
+          ],
+          [
+            0.699999988079071,
+            -0.4000000059604645
+          ],
+          [
+            0.800000011920929,
+            -0.4000000059604645
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            -0.30000001192092896
+          ],
+          [
+            -0.699999988079071,
+            -0.30000001192092896
+          ],
+          [
+            -0.6000000238418579,
+            -0.30000001192092896
+          ],
+          [
+            -0.5,
+            -0.30000001192092896
+          ],
+          [
+            -0.4000000059604645,
+            -0.30000001192092896
+          ],
+          [
+            -0.30000001192092896,
+            -0.30000001192092896
+          ],
+          [
+            -0.20000000298023224,
+            -0.30000001192092896
+          ],
+          [
+            -0.10000000149011612,
+            -0.30000001192092896
+          ],
+          [
+            0.0,
+            -0.30000001192092896
+          ],
+          [
+            0.10000000149011612,
+            -0.30000001192092896
+          ],
+          [
+            0.20000000298023224,
+            -0.30000001192092896
+          ],
+          [
+            0.30000001192092896,
+            -0.30000001192092896
+          ],
+          [
+            0.4000000059604645,
+            -0.30000001192092896
+          ],
+          [
+            0.5,
+            -0.30000001192092896
+          ],
+          [
+            0.6000000238418579,
+            -0.30000001192092896
+          ],
+          [
+            0.699999988079071,
+            -0.30000001192092896
+          ],
+          [
+            0.800000011920929,
+            -0.30000001192092896
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            -0.19999998807907104
+          ],
+          [
+            -0.699999988079071,
+            -0.19999998807907104
+          ],
+          [
+            -0.6000000238418579,
+            -0.19999998807907104
+          ],
+          [
+            -0.5,
+            -0.19999998807907104
+          ],
+          [
+            -0.4000000059604645,
+            -0.19999998807907104
+          ],
+          [
+            -0.30000001192092896,
+            -0.19999998807907104
+          ],
+          [
+            -0.20000000298023224,
+            -0.19999998807907104
+          ],
+          [
+            -0.10000000149011612,
+            -0.19999998807907104
+          ],
+          [
+            0.0,
+            -0.19999998807907104
+          ],
+          [
+            0.10000000149011612,
+            -0.19999998807907104
+          ],
+          [
+            0.20000000298023224,
+            -0.19999998807907104
+          ],
+          [
+            0.30000001192092896,
+            -0.19999998807907104
+          ],
+          [
+            0.4000000059604645,
+            -0.19999998807907104
+          ],
+          [
+            0.5,
+            -0.19999998807907104
+          ],
+          [
+            0.6000000238418579,
+            -0.19999998807907104
+          ],
+          [
+            0.699999988079071,
+            -0.19999998807907104
+          ],
+          [
+            0.800000011920929,
+            -0.19999998807907104
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            -0.09999999403953552
+          ],
+          [
+            -0.699999988079071,
+            -0.09999999403953552
+          ],
+          [
+            -0.6000000238418579,
+            -0.09999999403953552
+          ],
+          [
+            -0.5,
+            -0.09999999403953552
+          ],
+          [
+            -0.4000000059604645,
+            -0.09999999403953552
+          ],
+          [
+            -0.30000001192092896,
+            -0.09999999403953552
+          ],
+          [
+            -0.20000000298023224,
+            -0.09999999403953552
+          ],
+          [
+            -0.10000000149011612,
+            -0.09999999403953552
+          ],
+          [
+            0.0,
+            -0.09999999403953552
+          ],
+          [
+            0.10000000149011612,
+            -0.09999999403953552
+          ],
+          [
+            0.20000000298023224,
+            -0.09999999403953552
+          ],
+          [
+            0.30000001192092896,
+            -0.09999999403953552
+          ],
+          [
+            0.4000000059604645,
+            -0.09999999403953552
+          ],
+          [
+            0.5,
+            -0.09999999403953552
+          ],
+          [
+            0.6000000238418579,
+            -0.09999999403953552
+          ],
+          [
+            0.699999988079071,
+            -0.09999999403953552
+          ],
+          [
+            0.800000011920929,
+            -0.09999999403953552
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.699999988079071,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.6000000238418579,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.5,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.4000000059604645,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.30000001192092896,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.20000000298023224,
+            -7.450580596923828e-09
+          ],
+          [
+            -0.10000000149011612,
+            -7.450580596923828e-09
+          ],
+          [
+            0.0,
+            -7.450580596923828e-09
+          ],
+          [
+            0.10000000149011612,
+            -7.450580596923828e-09
+          ],
+          [
+            0.20000000298023224,
+            -7.450580596923828e-09
+          ],
+          [
+            0.30000001192092896,
+            -7.450580596923828e-09
+          ],
+          [
+            0.4000000059604645,
+            -7.450580596923828e-09
+          ],
+          [
+            0.5,
+            -7.450580596923828e-09
+          ],
+          [
+            0.6000000238418579,
+            -7.450580596923828e-09
+          ],
+          [
+            0.699999988079071,
+            -7.450580596923828e-09
+          ],
+          [
+            0.800000011920929,
+            -7.450580596923828e-09
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            0.09999999403953552
+          ],
+          [
+            -0.699999988079071,
+            0.09999999403953552
+          ],
+          [
+            -0.6000000238418579,
+            0.09999999403953552
+          ],
+          [
+            -0.5,
+            0.09999999403953552
+          ],
+          [
+            -0.4000000059604645,
+            0.09999999403953552
+          ],
+          [
+            -0.30000001192092896,
+            0.09999999403953552
+          ],
+          [
+            -0.20000000298023224,
+            0.09999999403953552
+          ],
+          [
+            -0.10000000149011612,
+            0.09999999403953552
+          ],
+          [
+            0.0,
+            0.09999999403953552
+          ],
+          [
+            0.10000000149011612,
+            0.09999999403953552
+          ],
+          [
+            0.20000000298023224,
+            0.09999999403953552
+          ],
+          [
+            0.30000001192092896,
+            0.09999999403953552
+          ],
+          [
+            0.4000000059604645,
+            0.09999999403953552
+          ],
+          [
+            0.5,
+            0.09999999403953552
+          ],
+          [
+            0.6000000238418579,
+            0.09999999403953552
+          ],
+          [
+            0.699999988079071,
+            0.09999999403953552
+          ],
+          [
+            0.800000011920929,
+            0.09999999403953552
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            0.19999998807907104
+          ],
+          [
+            -0.699999988079071,
+            0.19999998807907104
+          ],
+          [
+            -0.6000000238418579,
+            0.19999998807907104
+          ],
+          [
+            -0.5,
+            0.19999998807907104
+          ],
+          [
+            -0.4000000059604645,
+            0.19999998807907104
+          ],
+          [
+            -0.30000001192092896,
+            0.19999998807907104
+          ],
+          [
+            -0.20000000298023224,
+            0.19999998807907104
+          ],
+          [
+            -0.10000000149011612,
+            0.19999998807907104
+          ],
+          [
+            0.0,
+            0.19999998807907104
+          ],
+          [
+            0.10000000149011612,
+            0.19999998807907104
+          ],
+          [
+            0.20000000298023224,
+            0.19999998807907104
+          ],
+          [
+            0.30000001192092896,
+            0.19999998807907104
+          ],
+          [
+            0.4000000059604645,
+            0.19999998807907104
+          ],
+          [
+            0.5,
+            0.19999998807907104
+          ],
+          [
+            0.6000000238418579,
+            0.19999998807907104
+          ],
+          [
+            0.699999988079071,
+            0.19999998807907104
+          ],
+          [
+            0.800000011920929,
+            0.19999998807907104
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            0.30000001192092896
+          ],
+          [
+            -0.699999988079071,
+            0.30000001192092896
+          ],
+          [
+            -0.6000000238418579,
+            0.30000001192092896
+          ],
+          [
+            -0.5,
+            0.30000001192092896
+          ],
+          [
+            -0.4000000059604645,
+            0.30000001192092896
+          ],
+          [
+            -0.30000001192092896,
+            0.30000001192092896
+          ],
+          [
+            -0.20000000298023224,
+            0.30000001192092896
+          ],
+          [
+            -0.10000000149011612,
+            0.30000001192092896
+          ],
+          [
+            0.0,
+            0.30000001192092896
+          ],
+          [
+            0.10000000149011612,
+            0.30000001192092896
+          ],
+          [
+            0.20000000298023224,
+            0.30000001192092896
+          ],
+          [
+            0.30000001192092896,
+            0.30000001192092896
+          ],
+          [
+            0.4000000059604645,
+            0.30000001192092896
+          ],
+          [
+            0.5,
+            0.30000001192092896
+          ],
+          [
+            0.6000000238418579,
+            0.30000001192092896
+          ],
+          [
+            0.699999988079071,
+            0.30000001192092896
+          ],
+          [
+            0.800000011920929,
+            0.30000001192092896
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            0.4000000059604645
+          ],
+          [
+            -0.699999988079071,
+            0.4000000059604645
+          ],
+          [
+            -0.6000000238418579,
+            0.4000000059604645
+          ],
+          [
+            -0.5,
+            0.4000000059604645
+          ],
+          [
+            -0.4000000059604645,
+            0.4000000059604645
+          ],
+          [
+            -0.30000001192092896,
+            0.4000000059604645
+          ],
+          [
+            -0.20000000298023224,
+            0.4000000059604645
+          ],
+          [
+            -0.10000000149011612,
+            0.4000000059604645
+          ],
+          [
+            0.0,
+            0.4000000059604645
+          ],
+          [
+            0.10000000149011612,
+            0.4000000059604645
+          ],
+          [
+            0.20000000298023224,
+            0.4000000059604645
+          ],
+          [
+            0.30000001192092896,
+            0.4000000059604645
+          ],
+          [
+            0.4000000059604645,
+            0.4000000059604645
+          ],
+          [
+            0.5,
+            0.4000000059604645
+          ],
+          [
+            0.6000000238418579,
+            0.4000000059604645
+          ],
+          [
+            0.699999988079071,
+            0.4000000059604645
+          ],
+          [
+            0.800000011920929,
+            0.4000000059604645
+          ]
+        ],
+        [
+          [
+            -0.800000011920929,
+            0.5
+          ],
+          [
+            -0.699999988079071,
+            0.5
+          ],
+          [
+            -0.6000000238418579,
+            0.5
+          ],
+          [
+            -0.5,
+            0.5
+          ],
+          [
+            -0.4000000059604645,
+            0.5
+          ],
+          [
+            -0.30000001192092896,
+            0.5
+          ],
+          [
+            -0.20000000298023224,
+            0.5
+          ],
+          [
+            -0.10000000149011612,
+            0.5
+          ],
+          [
+            0.0,
+            0.5
+          ],
+          [
+            0.10000000149011612,
+            0.5
+          ],
+          [
+            0.20000000298023224,
+            0.5
+          ],
+          [
+            0.30000001192092896,
+            0.5
+          ],
+          [
+            0.4000000059604645,
+            0.5
+          ],
+          [
+            0.5,
+            0.5
+          ],
+          [
+            0.6000000238418579,
+            0.5
+          ],
+          [
+            0.699999988079071,
+            0.5
+          ],
+          [
+            0.800000011920929,
+            0.5
+          ]
+        ]
+      ],
+      "height_offset": 0.5,
+      "height_scale": 1.0,
+      "height_clip": [
+        -1.0,
+        1.0
+      ],
+      "invalid_height": -1.1,
+      "lp_target": "critic_11x17_full_187_fixed_clip"
+    },
+    "checkpoint_lp_height_source": "pgtt_full",
+    "validation": {
+      "lp_max_abs_error": 3.814697265625e-06,
+      "vp_max_abs_error": 2.6226043701171875e-06
+    }
+  },
+  "terrain": {
+    "generator_curriculum": true,
+    "environment_curriculum": false,
+    "initial_levels": [
+      1,
+      1,
+      0,
+      0
+    ],
+    "initial_origins": [
+      [
+        4.0,
+        -8.0,
+        -1.1582971811294556
+      ],
+      [
+        4.0,
+        -8.0,
+        -1.1582971811294556
+      ],
+      [
+        -4.0,
+        0.0,
+        0.6911713480949402
+      ],
+      [
+        -4.0,
+        8.0,
+        0.1550000011920929
+      ]
+    ],
+    "coverage_note": "缩小地形数量，不保证覆盖全部地形；不评估摔倒率。"
+  },
+  "steps": [
+    {
+      "step": 1,
+      "phase": "fixed_vp",
+      "requested_mode": 0,
+      "reward": [
+        0.7167142033576965,
+        0.9561475515365601,
+        0.4943600296974182,
+        0.7583356499671936
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 12,
+        "Fault/observed_normal_fraction": 1.0,
+        "Fault/observed_lp_only_fraction": 0.0,
+        "Fault/observed_vp_only_fraction": 0.0,
+        "Fault/observed_dual_fraction": 0.0
+      }
+    },
+    {
+      "step": 2,
+      "phase": "fixed_vp",
+      "requested_mode": 0,
+      "reward": [
+        0.9034714102745056,
+        0.9716995358467102,
+        0.7590194940567017,
+        0.8934340476989746
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 20,
+        "Fault/observed_normal_fraction": 1.0,
+        "Fault/observed_lp_only_fraction": 0.0,
+        "Fault/observed_vp_only_fraction": 0.0,
+        "Fault/observed_dual_fraction": 0.0
+      }
+    },
+    {
+      "step": 3,
+      "phase": "fixed_vp",
+      "requested_mode": 0,
+      "reward": [
+        0.9459162950515747,
+        0.853838324546814,
+        0.8859835267066956,
+        0.9639979600906372
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 28,
+        "Fault/observed_normal_fraction": 1.0,
+        "Fault/observed_lp_only_fraction": 0.0,
+        "Fault/observed_vp_only_fraction": 0.0,
+        "Fault/observed_dual_fraction": 0.0
+      }
+    },
+    {
+      "step": 4,
+      "phase": "fixed_vp",
+      "requested_mode": 0,
+      "reward": [
+        0.9905176162719727,
+        0.884553849697113,
+        0.9255374073982239,
+        0.9461120963096619
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 36,
+        "Fault/observed_normal_fraction": 1.0,
+        "Fault/observed_lp_only_fraction": 0.0,
+        "Fault/observed_vp_only_fraction": 0.0,
+        "Fault/observed_dual_fraction": 0.0
+      }
+    },
+    {
+      "step": 5,
+      "phase": "fixed_vp",
+      "requested_mode": 0,
+      "reward": [
+        0.9818360805511475,
+        0.9064642190933228,
+        0.9235548973083496,
+        0.9973044991493225
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 44,
+        "Fault/observed_normal_fraction": 0.9772727489471436,
+        "Fault/observed_lp_only_fraction": 0.0,
+        "Fault/observed_vp_only_fraction": 0.022727273404598236,
+        "Fault/observed_dual_fraction": 0.0
+      }
+    },
+    {
+      "step": 6,
+      "phase": "fixed_vp",
+      "requested_mode": 0,
+      "reward": [
+        0.9159703850746155,
+        0.8235874176025391,
+        0.7348337173461914,
+        0.9304492473602295
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 52,
+        "Fault/observed_normal_fraction": 0.942307710647583,
+        "Fault/observed_lp_only_fraction": 0.0,
+        "Fault/observed_vp_only_fraction": 0.057692307978868484,
+        "Fault/observed_dual_fraction": 0.0
+      }
+    },
+    {
+      "step": 7,
+      "phase": "fixed_vp",
+      "requested_mode": 0,
+      "reward": [
+        0.9824309349060059,
+        0.9383665323257446,
+        0.7688137292861938,
+        0.9768592715263367
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 60,
+        "Fault/observed_normal_fraction": 0.9166666865348816,
+        "Fault/observed_lp_only_fraction": 0.0,
+        "Fault/observed_vp_only_fraction": 0.06666667014360428,
+        "Fault/observed_dual_fraction": 0.01666666753590107
+      }
+    },
+    {
+      "step": 8,
+      "phase": "fixed_vp",
+      "requested_mode": 0,
+      "reward": [
+        1.0137050151824951,
+        0.8609728813171387,
+        0.7766807079315186,
+        0.9995901584625244
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 68,
+        "Fault/observed_normal_fraction": 0.8970588445663452,
+        "Fault/observed_lp_only_fraction": 0.014705882407724857,
+        "Fault/observed_vp_only_fraction": 0.05882352963089943,
+        "Fault/observed_dual_fraction": 0.029411764815449715
+      }
+    },
+    {
+      "step": 9,
+      "phase": "fixed_vp",
+      "requested_mode": 0,
+      "reward": [
+        1.0027238130569458,
+        0.8003543019294739,
+        0.8093842267990112,
+        0.9513918161392212
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 76,
+        "Fault/observed_normal_fraction": 0.8815789222717285,
+        "Fault/observed_lp_only_fraction": 0.03947368264198303,
+        "Fault/observed_vp_only_fraction": 0.05263157933950424,
+        "Fault/observed_dual_fraction": 0.02631578966975212
+      }
+    },
+    {
+      "step": 10,
+      "phase": "fixed_vp",
+      "requested_mode": 0,
+      "reward": [
+        1.0065488815307617,
+        0.8693126440048218,
+        0.7922201156616211,
+        0.9664517045021057
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 84,
+        "Fault/observed_normal_fraction": 0.8690476417541504,
+        "Fault/observed_lp_only_fraction": 0.0595238097012043,
+        "Fault/observed_vp_only_fraction": 0.0476190485060215,
+        "Fault/observed_dual_fraction": 0.02380952425301075
+      }
+    },
+    {
+      "step": 11,
+      "phase": "fixed_lp",
+      "requested_mode": 1,
+      "reward": [
+        0.9918966293334961,
+        0.7666693925857544,
+        0.6840200424194336,
+        0.9833891987800598
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 4,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 92,
+        "Fault/observed_normal_fraction": 0.8586956262588501,
+        "Fault/observed_lp_only_fraction": 0.07608695328235626,
+        "Fault/observed_vp_only_fraction": 0.043478261679410934,
+        "Fault/observed_dual_fraction": 0.021739130839705467
+      }
+    },
+    {
+      "step": 12,
+      "phase": "fixed_lp",
+      "requested_mode": 1,
+      "reward": [
+        1.0208009481430054,
+        0.6051345467567444,
+        0.763584554195404,
+        0.9673296809196472
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 100,
+        "Fault/observed_normal_fraction": 0.8500000238418579,
+        "Fault/observed_lp_only_fraction": 0.09000000357627869,
+        "Fault/observed_vp_only_fraction": 0.03999999910593033,
+        "Fault/observed_dual_fraction": 0.019999999552965164
+      }
+    },
+    {
+      "step": 13,
+      "phase": "fixed_lp",
+      "requested_mode": 1,
+      "reward": [
+        1.0154176950454712,
+        0.6902908086776733,
+        0.7860304713249207,
+        1.0116510391235352
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 108,
+        "Fault/observed_normal_fraction": 0.8425925970077515,
+        "Fault/observed_lp_only_fraction": 0.10185185074806213,
+        "Fault/observed_vp_only_fraction": 0.03703703731298447,
+        "Fault/observed_dual_fraction": 0.018518518656492233
+      }
+    },
+    {
+      "step": 14,
+      "phase": "fixed_lp",
+      "requested_mode": 1,
+      "reward": [
+        1.025758147239685,
+        0.670783281326294,
+        0.8393745422363281,
+        0.9643111228942871
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 116,
+        "Fault/observed_normal_fraction": 0.8448275923728943,
+        "Fault/observed_lp_only_fraction": 0.1034482792019844,
+        "Fault/observed_vp_only_fraction": 0.03448275849223137,
+        "Fault/observed_dual_fraction": 0.017241379246115685
+      }
+    },
+    {
+      "step": 15,
+      "phase": "fixed_lp",
+      "requested_mode": 1,
+      "reward": [
+        1.0156514644622803,
+        0.6546719074249268,
+        0.9163484573364258,
+        1.0077311992645264
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 124,
+        "Fault/observed_normal_fraction": 0.8548387289047241,
+        "Fault/observed_lp_only_fraction": 0.09677419066429138,
+        "Fault/observed_vp_only_fraction": 0.032258063554763794,
+        "Fault/observed_dual_fraction": 0.016129031777381897
+      }
+    },
+    {
+      "step": 16,
+      "phase": "fixed_lp",
+      "requested_mode": 1,
+      "reward": [
+        1.0222817659378052,
+        0.6178876757621765,
+        0.948055624961853,
+        0.9718171954154968
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 132,
+        "Fault/observed_normal_fraction": 0.8484848737716675,
+        "Fault/observed_lp_only_fraction": 0.09090909361839294,
+        "Fault/observed_vp_only_fraction": 0.03030303120613098,
+        "Fault/observed_dual_fraction": 0.03030303120613098
+      }
+    },
+    {
+      "step": 17,
+      "phase": "fixed_lp",
+      "requested_mode": 1,
+      "reward": [
+        1.0242254734039307,
+        0.646660327911377,
+        0.9371533393859863,
+        0.9756831526756287
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 140,
+        "Fault/observed_normal_fraction": 0.8428571224212646,
+        "Fault/observed_lp_only_fraction": 0.08571428805589676,
+        "Fault/observed_vp_only_fraction": 0.02857142873108387,
+        "Fault/observed_dual_fraction": 0.04285714402794838
+      }
+    },
+    {
+      "step": 18,
+      "phase": "fixed_lp",
+      "requested_mode": 1,
+      "reward": [
+        1.023034691810608,
+        0.6245336532592773,
+        1.0003559589385986,
+        0.963567316532135
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 148,
+        "Fault/observed_normal_fraction": 0.837837815284729,
+        "Fault/observed_lp_only_fraction": 0.0810810774564743,
+        "Fault/observed_vp_only_fraction": 0.027027027681469917,
+        "Fault/observed_dual_fraction": 0.054054055362939835
+      }
+    },
+    {
+      "step": 19,
+      "phase": "fixed_lp",
+      "requested_mode": 1,
+      "reward": [
+        1.0205806493759155,
+        0.5587619543075562,
+        0.9869503974914551,
+        0.9940378069877625
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 156,
+        "Fault/observed_normal_fraction": 0.8333333134651184,
+        "Fault/observed_lp_only_fraction": 0.07692307978868484,
+        "Fault/observed_vp_only_fraction": 0.025641025975346565,
+        "Fault/observed_dual_fraction": 0.06410256773233414
+      }
+    },
+    {
+      "step": 20,
+      "phase": "fixed_lp",
+      "requested_mode": 1,
+      "reward": [
+        1.012782096862793,
+        0.5185860395431519,
+        0.9329765439033508,
+        0.9757792949676514
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 0,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 164,
+        "Fault/observed_normal_fraction": 0.8292682766914368,
+        "Fault/observed_lp_only_fraction": 0.08536585420370102,
+        "Fault/observed_vp_only_fraction": 0.024390242993831635,
+        "Fault/observed_dual_fraction": 0.060975611209869385
+      }
+    },
+    {
+      "step": 21,
+      "phase": "alternating",
+      "requested_mode": 0,
+      "reward": [
+        0.969211220741272,
+        0.5567215085029602,
+        0.9705019593238831,
+        0.9868130087852478
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 4,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 172,
+        "Fault/observed_normal_fraction": 0.8139534592628479,
+        "Fault/observed_lp_only_fraction": 0.09302325546741486,
+        "Fault/observed_vp_only_fraction": 0.03488372266292572,
+        "Fault/observed_dual_fraction": 0.058139536529779434
+      }
+    },
+    {
+      "step": 22,
+      "phase": "alternating",
+      "requested_mode": 1,
+      "reward": [
+        0.9804064631462097,
+        0.660415768623352,
+        0.9338341951370239,
+        0.9728384017944336
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 4,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 180,
+        "Fault/observed_normal_fraction": 0.8055555820465088,
+        "Fault/observed_lp_only_fraction": 0.10000000149011612,
+        "Fault/observed_vp_only_fraction": 0.03888889029622078,
+        "Fault/observed_dual_fraction": 0.0555555559694767
+      }
+    },
+    {
+      "step": 23,
+      "phase": "alternating",
+      "requested_mode": 0,
+      "reward": [
+        0.9542660117149353,
+        0.628455638885498,
+        0.8826667070388794,
+        0.9624719619750977
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 4,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 188,
+        "Fault/observed_normal_fraction": 0.8031914830207825,
+        "Fault/observed_lp_only_fraction": 0.10638298094272614,
+        "Fault/observed_vp_only_fraction": 0.03723404183983803,
+        "Fault/observed_dual_fraction": 0.05319149047136307
+      }
+    },
+    {
+      "step": 24,
+      "phase": "alternating",
+      "requested_mode": 1,
+      "reward": [
+        0.9995730519294739,
+        0.5870702266693115,
+        0.9279578924179077,
+        0.994333803653717
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 4,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 196,
+        "Fault/observed_normal_fraction": 0.8112244606018066,
+        "Fault/observed_lp_only_fraction": 0.10204081982374191,
+        "Fault/observed_vp_only_fraction": 0.0357142873108387,
+        "Fault/observed_dual_fraction": 0.051020409911870956
+      }
+    },
+    {
+      "step": 25,
+      "phase": "alternating",
+      "requested_mode": 0,
+      "reward": [
+        0.9921725988388062,
+        0.5542852282524109,
+        0.8970226049423218,
+        0.9713943004608154
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 4,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 204,
+        "Fault/observed_normal_fraction": 0.8186274766921997,
+        "Fault/observed_lp_only_fraction": 0.09803921729326248,
+        "Fault/observed_vp_only_fraction": 0.03431372717022896,
+        "Fault/observed_dual_fraction": 0.04901960864663124
+      }
+    },
+    {
+      "step": 26,
+      "phase": "alternating",
+      "requested_mode": 1,
+      "reward": [
+        0.9925109148025513,
+        0.5862273573875427,
+        0.8680600523948669,
+        0.9880818128585815
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 4,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 212,
+        "Fault/observed_normal_fraction": 0.8254716992378235,
+        "Fault/observed_lp_only_fraction": 0.09433962404727936,
+        "Fault/observed_vp_only_fraction": 0.033018868416547775,
+        "Fault/observed_dual_fraction": 0.04716981202363968
+      }
+    },
+    {
+      "step": 27,
+      "phase": "alternating",
+      "requested_mode": 0,
+      "reward": [
+        0.9977274537086487,
+        0.5297960042953491,
+        0.8118453621864319,
+        0.951546311378479
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 4,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 220,
+        "Fault/observed_normal_fraction": 0.831818163394928,
+        "Fault/observed_lp_only_fraction": 0.09090909361839294,
+        "Fault/observed_vp_only_fraction": 0.03181818127632141,
+        "Fault/observed_dual_fraction": 0.04545454680919647
+      }
+    },
+    {
+      "step": 28,
+      "phase": "alternating",
+      "requested_mode": 1,
+      "reward": [
+        1.0001474618911743,
+        0.5580869913101196,
+        0.8061972856521606,
+        0.9961411356925964
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 4,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 228,
+        "Fault/observed_normal_fraction": 0.8333333134651184,
+        "Fault/observed_lp_only_fraction": 0.09210526198148727,
+        "Fault/observed_vp_only_fraction": 0.030701754614710808,
+        "Fault/observed_dual_fraction": 0.04385964944958687
+      }
+    },
+    {
+      "step": 29,
+      "phase": "alternating",
+      "requested_mode": 0,
+      "reward": [
+        1.001486897468567,
+        0.5543981790542603,
+        0.8303192257881165,
+        0.9683191776275635
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 4,
+        "Selector/lp_fraction": 0.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 236,
+        "Fault/observed_normal_fraction": 0.8305084705352783,
+        "Fault/observed_lp_only_fraction": 0.09745762497186661,
+        "Fault/observed_vp_only_fraction": 0.029661016538739204,
+        "Fault/observed_dual_fraction": 0.04237288236618042
+      }
+    },
+    {
+      "step": 30,
+      "phase": "alternating",
+      "requested_mode": 1,
+      "reward": [
+        0.9956889152526855,
+        0.27362462878227234,
+        0.823322057723999,
+        0.9737201929092407
+      ],
+      "done": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "time_outs": [
+        false,
+        false,
+        false,
+        false
+      ],
+      "low_level_steps": [
+        10,
+        10,
+        10,
+        10
+      ],
+      "physics_steps": 40,
+      "sensor_captures": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "terminal_env_ids": [],
+      "log": {
+        "Selector/switches": 4,
+        "Selector/lp_fraction": 1.0,
+        "Termination/contact": 0,
+        "Termination/tilt": 0,
+        "Termination/time_out": 0,
+        "Selector/effective_low_level_steps": 10.0,
+        "Sensors/captures_total": 244,
+        "Fault/observed_normal_fraction": 0.8278688788414001,
+        "Fault/observed_lp_only_fraction": 0.09836065769195557,
+        "Fault/observed_vp_only_fraction": 0.028688523918390274,
+        "Fault/observed_dual_fraction": 0.0450819656252861
+      }
+    }
+  ],
+  "checks": {
+    "frozen_eval_no_grad": "passed",
+    "observations_and_read_only": "passed",
+    "forty_physics_steps_per_macro": "passed",
+    "two_sensor_captures_for_unterminated_rows": "passed",
+    "fixed_terrain_across_steps_and_partial_reset": "passed",
+    "partial_reset_without_physics": "passed",
+    "terminal_interface": "passed"
+  },
+  "sensor_capture_count": [
+    62,
+    61,
+    61,
+    61
+  ],
+  "physics_step_count": 1200,
+  "fault_audit": {
+    "seed": 42,
+    "config": {
+      "enable": true,
+      "schedule": {
+        "update_period_s": 0.1,
+        "scenario_probabilities": [
+          0.3,
+          0.25,
+          0.25,
+          0.2
+        ],
+        "normal_duration_s": [
+          1.0,
+          5.0
+        ],
+        "missing_duration_s": [
+          0.4,
+          2.0
+        ],
+        "temporal_duration_s": [
+          0.5,
+          3.0
+        ],
+        "persistent_duration_s": [
+          1.0,
+          5.0
+        ],
+        "full_dropout_duration_s": [
+          0.1,
+          0.3
+        ],
+        "dual_full_dropout_duration_s": [
+          0.2,
+          0.3
+        ],
+        "consecutive_dropout_duration_s": [
+          0.2,
+          0.5
+        ],
+        "recovery_duration_s": [
+          0.5,
+          3.0
+        ],
+        "stagger_probability": 0.5,
+        "stagger_s": [
+          0.1,
+          0.5
+        ],
+        "min_overlap_s": 0.2
+      },
+      "lp": {
+        "kinds": [
+          1,
+          2,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16
+        ],
+        "lp_resolution_m": 0.1,
+        "lp_invalid_height": -1.1,
+        "lp_height_clip": [
+          -1.0,
+          1.0
+        ],
+        "max_delay_frames": 5,
+        "lp_dropout_fraction": [
+          0.1,
+          1.0
+        ],
+        "lp_block_fraction": [
+          0.1,
+          1.0
+        ],
+        "lp_height_bias_m_range": [
+          -0.15,
+          0.15
+        ],
+        "lp_translation_range_m": [
+          -0.2,
+          0.2
+        ],
+        "lp_yaw_range_deg": [
+          -5.0,
+          5.0
+        ],
+        "lp_drift_m_per_s": [
+          0.0,
+          0.05
+        ],
+        "lp_drift_deg_per_s": [
+          0.0,
+          1.0
+        ],
+        "lp_map_height_velocity_m_per_s": [
+          -0.05,
+          0.05
+        ],
+        "lp_map_translation_limit_m": 0.45,
+        "lp_map_yaw_limit_deg": 12.0,
+        "lp_map_height_limit_m": 0.25,
+        "lp_map_random_walk_m": 0.012,
+        "lp_map_correction_frames": [
+          15,
+          45
+        ],
+        "lp_person_radius_m": [
+          0.14,
+          0.32
+        ],
+        "lp_person_height_above_ground_m": [
+          0.25,
+          1.0
+        ],
+        "lp_person_main_fraction": 0.65,
+        "lp_map_confirm_frames": 3,
+        "lp_map_retention_radius_m": 2.5,
+        "burst_on_frames": [
+          1,
+          5
+        ],
+        "burst_off_frames": [
+          1,
+          4
+        ],
+        "compound_dropout_probability": 0.2,
+        "recovery_tau_s": 0.5,
+        "recovery_translation_epsilon_m": 0.001,
+        "recovery_yaw_epsilon_deg": 0.01
+      },
+      "vp": {
+        "modes": [
+          "large_hole",
+          "lower_occlusion",
+          "central_landing_occlusion",
+          "stripe_missing",
+          "full_dropout",
+          "consecutive_dropout",
+          "freeze_frame",
+          "distant_dust"
+        ],
+        "depth_min_m": 0.1,
+        "depth_max_m": 2.5,
+        "fill_value": 0.0,
+        "large_hole_height_range": [
+          0.35,
+          0.75
+        ],
+        "large_hole_width_range": [
+          0.35,
+          0.8
+        ],
+        "lower_occlusion_height_range": [
+          0.35,
+          0.7
+        ],
+        "central_landing_height_range": [
+          0.35,
+          0.7
+        ],
+        "central_landing_width_range": [
+          0.35,
+          0.75
+        ],
+        "central_landing_center_y_range": [
+          0.55,
+          0.85
+        ],
+        "central_landing_center_x_range": [
+          0.4,
+          0.6
+        ],
+        "stripe_width_range": [
+          0.08,
+          0.25
+        ],
+        "stripe_count_range": [
+          1,
+          3
+        ],
+        "stripe_orientations": [
+          "vertical",
+          "horizontal"
+        ],
+        "distant_dust_start": 1.5,
+        "distant_dust_noise_std": 0.08,
+        "distant_dust_dropout_probability": 0.35,
+        "distant_dust_fill_value": 0.0
+      }
+    },
+    "scenarios": [
+      "normal",
+      "lp_only",
+      "vp_only",
+      "dual"
+    ],
+    "lp_kinds": [
+      1,
+      2,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ],
+    "vp_modes": [
+      "large_hole",
+      "lower_occlusion",
+      "central_landing_occlusion",
+      "stripe_missing",
+      "full_dropout",
+      "consecutive_dropout",
+      "freeze_frame",
+      "distant_dust"
+    ],
+    "plans": [
+      [
+        0,
+        0,
+        2,
+        0
+      ],
+      [
+        1,
+        0,
+        0,
+        1
+      ],
+      [
+        1,
+        0,
+        0,
+        1
+      ],
+      [
+        1,
+        0,
+        0,
+        1
+      ]
+    ],
+    "lp_events": [
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "vp_events": [
+      [
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "planned_frames": [
+      [
+        58,
+        0,
+        4,
+        0
+      ],
+      [
+        56,
+        3,
+        0,
+        2
+      ],
+      [
+        44,
+        12,
+        3,
+        2
+      ],
+      [
+        44,
+        9,
+        0,
+        8
+      ]
+    ],
+    "observed_frames": [
+      [
+        58,
+        0,
+        4,
+        0
+      ],
+      [
+        56,
+        4,
+        0,
+        1
+      ],
+      [
+        44,
+        12,
+        3,
+        2
+      ],
+      [
+        45,
+        8,
+        0,
+        8
+      ]
+    ],
+    "visible_frames": [
+      [
+        56,
+        0,
+        6,
+        0
+      ],
+      [
+        56,
+        4,
+        0,
+        1
+      ],
+      [
+        44,
+        11,
+        3,
+        3
+      ],
+      [
+        45,
+        7,
+        0,
+        9
+      ]
+    ],
+    "residual_frames": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "vp_content_stamp": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        5.9,
+        5.9
+      ],
+      [
+        5.9,
+        6.0
+      ],
+      [
+        5.9,
+        6.0
+      ]
+    ],
+    "frame": [
+      0,
+      60,
+      60,
+      60
+    ],
+    "scenario": [
+      0,
+      3,
+      0,
+      0
+    ],
+    "lp_kind": [
+      0,
+      13,
+      0,
+      0
+    ],
+    "vp_mode": [
+      -1,
+      6,
+      -1,
+      -1
+    ],
+    "lp_start": [
+      0,
+      56,
+      54,
+      55
+    ],
+    "vp_start": [
+      0,
+      59,
+      54,
+      55
+    ],
+    "lp_duration": [
+      0,
+      17,
+      0,
+      0
+    ],
+    "vp_duration": [
+      0,
+      14,
+      0,
+      0
+    ],
+    "next_plan": [
+      27,
+      83,
+      102,
+      88
+    ],
+    "lp_remaining": [
+      0,
+      12,
+      0,
+      0
+    ],
+    "vp_remaining": [
+      0,
+      12,
+      0,
+      0
+    ],
+    "lp_parameters": {
+      "delay": [
+        0,
+        5,
+        1,
+        1
+      ],
+      "dropout": [
+        0.0,
+        0.8024770617485046,
+        0.4479244649410248,
+        0.9172687530517578
+      ],
+      "bias": [
+        0.0,
+        -0.10841193795204163,
+        0.011864811182022095,
+        0.02816830575466156
+      ],
+      "registration": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.037689968943595886,
+          -0.07647477835416794,
+          3.406890869140625
+        ],
+        [
+          -0.10442682355642319,
+          -0.015200316905975342,
+          -0.007750034332275391
+        ],
+        [
+          -0.17661592364311218,
+          -0.11077255010604858,
+          0.07629776000976562
+        ]
+      ],
+      "velocity": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          -0.0002411456371191889,
+          -0.012828470207750797,
+          0.15369489789009094,
+          0.029473666101694107
+        ],
+        [
+          0.03731802478432655,
+          0.0161372609436512,
+          0.4716092050075531,
+          0.04435516521334648
+        ],
+        [
+          -0.007228935603052378,
+          -0.004708435386419296,
+          0.48498818278312683,
+          0.00015667825937271118
+        ]
+      ],
+      "linear": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      ],
+      "map_drift": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      ]
+    }
+  }
+}
