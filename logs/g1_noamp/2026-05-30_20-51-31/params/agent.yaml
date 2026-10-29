@@ -1,0 +1,117 @@
+seed: 42
+device: cuda:0
+num_steps_per_env: 24
+max_iterations: 50000
+empirical_normalization: false
+policy:
+  class_name: MoeActorCritic
+  init_noise_std: 1.0
+  noise_std_type: scalar
+  state_dependent_std: false
+  actor_obs_normalization: {}
+  critic_obs_normalization: {}
+  actor_hidden_dims:
+  - 512
+  - 256
+  - 128
+  critic_hidden_dims:
+  - 512
+  - 256
+  - 128
+  activation: elu
+  CnnMlp:
+    input_dim: !!python/tuple
+    - 18
+    - 32
+    input_channels: 8
+    output_channels:
+    - 4
+    kernel_size:
+    - 3
+    stride:
+    - 1
+    dilation:
+    - 1
+    padding: zeros
+    norm: none
+    activation: relu
+    max_pool: true
+    global_pool: none
+    flatten: true
+    mlp_hidden_dim:
+    - 256
+    - 256
+    mlp_output_dim: 128
+    mlp_activation: elu
+    num_heads: 16
+    embed_dim: 64
+  use_gru: false
+  use_film_cnn: true
+  use_film_moe_gate: false
+  single_proprio_dim: 100
+  num_experts: 4
+  gate_hidden_dim:
+  - 256
+  - 128
+  - 64
+  his_encoder_dims:
+  - 256
+  - 128
+  his_latent_dim: 64
+  use_terrain_recon: true
+  terrain_activation: elu
+  terrain_hidden_dim:
+  - 256
+  - 128
+  terrain_scan_dim: 187
+  terrain_recon_front_only: true
+  terrain_recon_grid_cols: 17
+  terrain_recon_grid_rows: 11
+  terrain_recon_x_min: 0.0
+  use_vel_estimation: true
+  vel_activation: elu
+  vel_hidden_dim:
+  - 32
+  vel_dim: 3
+algorithm:
+  class_name: MoePPO
+  num_learning_epochs: 5
+  num_mini_batches: 4
+  learning_rate: 0.001
+  schedule: adaptive
+  gamma: 0.99
+  lam: 0.95
+  entropy_coef: 0.005
+  desired_kl: 0.01
+  max_grad_norm: 1.0
+  value_loss_coef: 1.0
+  use_clipped_value_loss: true
+  clip_param: 0.2
+  normalize_advantage_per_mini_batch: false
+  rnd_cfg: null
+  symmetry_cfg: null
+  vel_estimation_warmup_iters: 0
+  vel_estimation_coef: 1.0
+  terrain_recon_coef: 0.5
+  vel_dim: 3
+  terrain_recon_target_clip: 1
+  terrain_recon_warmup_iters: 500
+  terrain_scan_dim: 187
+  terrain_recon_front_only: true
+  terrain_recon_grid_cols: 17
+  terrain_recon_grid_rows: 11
+  terrain_recon_x_min: 0.0
+  single_critic_dim: 124
+  critic_history_len: 10
+  vel_in_critic_offset: 102
+clip_actions: null
+save_interval: 1000
+runner_class_name: FilmOnPolicyRunner
+experiment_name: g1_noamp
+run_name: ''
+logger: tensorboard
+neptune_project: walk
+wandb_project: walk
+resume: false
+load_run: .*
+load_checkpoint: model_.*.pt
