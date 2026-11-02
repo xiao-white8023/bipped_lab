@@ -781,15 +781,6 @@ class G1MOEFILMEnv(VecEnv):
 
         # 归一化到 [0, 1]
         depth_normalized = depth_clipped / self.cfg.scene.camera.depth_max
-        if getattr(self, "debug_depth", True):
-            zero_ratio = (depth_normalized < 0.03).float().mean().item()
-            print(
-                "[DEPTH DEBUG] "
-                f"min={depth_normalized.min().item():.3f}, "
-                f"max={depth_normalized.max().item():.3f}, "
-                f"mean={depth_normalized.mean().item():.3f}, "
-                f"zero_ratio={zero_ratio:.3f}"
-            )
         return depth_normalized
 
     def get_deepcamera_history(self):
