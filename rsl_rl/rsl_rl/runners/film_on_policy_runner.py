@@ -57,12 +57,20 @@ class FilmOnPolicyRunner:
 
         # evaluate the policy class
         policy_class = eval(self.policy_cfg.pop("class_name"))
+        if policy_class is ActorCritic:
+            # The matched MLP task shares a config schema with the MoE control.
+            self.policy_cfg.pop("num_experts", None)
+            self.policy_cfg.pop("gate_hidden_dim", None)
         if "CnnMlp" in self.policy_cfg and isinstance(self.policy_cfg["CnnMlp"], dict):
             self.policy_cfg["CnnMlp"].pop("num_heads", None)
             self.policy_cfg["CnnMlp"].pop("embed_dim", None)
         policy: ActorCritic | MoeActorCritic | MhaActorCritic = policy_class(
             num_obs, num_privileged_obs, self.env.num_actions, **self.policy_cfg
         ).to(self.device)
+        print(
+            f"[FilmOnPolicyRunner] actor_obs={num_obs}, critic_obs={num_privileged_obs}, "
+            f"actor_head={type(policy.actor).__name__}, critic_head={type(policy.critic).__name__}"
+        )
 
         # resolve dimension of rnd gated state
         if "rnd_cfg" in self.alg_cfg and self.alg_cfg["rnd_cfg"] is not None:

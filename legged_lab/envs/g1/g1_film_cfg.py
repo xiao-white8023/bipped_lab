@@ -2,6 +2,10 @@
 # G1 29dof
 # ================================================
 import math
+import copy
+import isaaclab.terrains as terrain_gen
+from isaaclab.terrains import TerrainGeneratorCfg
+import legged_lab.terrains.hf_terrain_cfg as perlin
 from dataclasses import MISSING
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
@@ -73,6 +77,84 @@ class DepthNoiseCurriculumCfg:
     ema_beta: float = 0.9
     gaussian_std_range: tuple[float, float] = (0.0, 0.1) # 0.15
     failure_probability_range: tuple[float, float] = (0.0, 0.06) # 0.12
+
+def make_june_film_terrain_cfg():
+    """Reconstruct the seven terrain entries in the saved June env.yaml."""
+    def noise(scale=0.05):
+        return perlin.PerlinPlaneTerrainCfg(
+            noise_scale=scale,
+            noise_frequency=20,
+            fractal_octaves=2,
+            fractal_lacunarity=2.0,
+            fractal_gain=0.25,
+            centering=True,
+        )
+
+    return TerrainGeneratorCfg(
+        seed=0,
+        size=(8.0, 8.0),
+        border_width=3.0,
+        num_rows=10,
+        num_cols=20,
+        horizontal_scale=0.05,
+        vertical_scale=0.005,
+        slope_threshold=1.0,
+        curriculum=True,
+        use_cache=False,
+        sub_terrains={
+            "pyramid_stairs_0.3_perlin": perlin.PerlinPyramidStairsTerrainCfg(
+                proportion=0.15,
+                step_height_range=(0.05, 0.23),
+                step_width=0.30,
+                platform_width=2.5,
+                border_width=1.0,
+                perlin_cfg=noise(),
+            ),
+            "pyramid_stairs_inv_0.3_perlin": perlin.PerlinInvertedPyramidStairsTerrainCfg(
+                proportion=0.15,
+                step_height_range=(0.05, 0.23),
+                step_width=0.30,
+                platform_width=3.0,
+                border_width=1.0,
+                perlin_cfg=noise(),
+            ),
+            "pyramid_stairs_28": terrain_gen.MeshPyramidStairsTerrainCfg(
+                proportion=0.10,
+                step_height_range=(0.0, 0.23),
+                step_width=0.28,
+                platform_width=3.0,
+                border_width=1.0,
+                holes=False,
+            ),
+            "pyramid_stairs_inv_0.28_perlin": perlin.PerlinInvertedPyramidStairsTerrainCfg(
+                proportion=0.15,
+                step_height_range=(0.05, 0.23),
+                step_width=0.28,
+                platform_width=3.0,
+                border_width=1.0,
+                perlin_cfg=noise(),
+            ),
+            "up_slope_terrain": terrain_gen.HfPyramidSlopedTerrainCfg(
+                proportion=0.10,
+                slope_range=(0.0837, 0.55),
+                platform_width=3.0,
+                inverted=False,
+            ),
+            "hf_pyramid_slope_inv": perlin.PerlinInvertedPyramidSlopedTerrainCfg(
+                proportion=0.10,
+                slope_range=(0.0837, 0.55),
+                platform_width=3.0,
+                border_width=1.0,
+                perlin_cfg=noise(0.0),
+            ),
+            "gap": terrain_gen.MeshGapTerrainCfg(
+                proportion=0.15,
+                gap_width_range=(0.05, 0.40),
+                platform_width=3.0,
+            ),
+        },
+    )
+
 
 @configclass
 class Reward:
@@ -175,18 +257,9 @@ class Reward:
         },
     )
 
-    joint_deviation_waist_roll=RewTerm(func=mdp.joint_deviation_l1_always,
-                                       weight=-0.1,
-                                       params={
-                                                "asset_cfg": SceneEntityCfg("robot", joint_names=[".*waist_roll.*"])
-                                              },
-                                      )
-    joint_deviation_waist_yaw=RewTerm(func=mdp.joint_deviation_l1_always,
-                                       weight=-0.01,
-                                       params={
-                                                "asset_cfg": SceneEntityCfg("robot", joint_names=[".*waist_yaw.*"])
-                                                },
-                                    )
+    # 六月参考配置不包含后来新增的腰部单独偏差惩罚。
+    joint_deviation_waist_roll = None
+    joint_deviation_waist_yaw = None
 
     joint_deviation_legs = RewTerm(
         func=mdp.joint_deviation_l1_always,
@@ -201,7 +274,7 @@ class Reward:
     dont_wait = RewTerm(func=mdp.dont_wait, weight=-0.5)
 
     gait_phase_contact = RewTerm(
-    func=mdp.new_gait_phase_contact,
+    func=mdp.gait_phase_contact,
     weight=0.2,
     params={
         "sensor_cfg": SceneEntityCfg(
@@ -212,7 +285,6 @@ class Reward:
             ],
         ),
         "stance_threshold": 0.55,
-        "command_threshold": 0.1,
     },
     )
 
@@ -255,7 +327,7 @@ class G129MOE_FILMENVCFG:
         env_spacing=2.5,
         robot=G1_CFG,
         terrain_type="generator",
-        terrain_generator=flex_terrain_CFG,#
+        terrain_generator=make_june_film_terrain_cfg(),
         max_init_terrain_level=5,
         height_scanner=HeightScannerCfg(
             enable_height_scan=True,
@@ -375,7 +447,8 @@ class G129MOE_FILMENVCFG:
         heading_control_stiffness=0.5,
         debug_vis=False,
         ranges=CommandRangesCfg(
-            lin_vel_x=(-0.6, 1.0), lin_vel_y=(-0, 0), ang_vel_z=(-0, 0), heading=(-0, 0)
+            lin_vel_x=(-0.6, 1.0), lin_vel_y=(-0.5, 0.5),
+            ang_vel_z=(-1.57, 1.57), heading=(-math.pi, math.pi)
         ),
     )
 
@@ -532,27 +605,31 @@ class CustomRslRlPpoActorCriticCfg(RslRlPpoActorCriticCfg):
 
 @configclass
 class  G129MOE_FILMAGENTENV:
+    # MoE 整体消融开关：False = actor、critic 都是普通 MLP；
+    # True = actor、critic 都使用 5 专家 MoE。FiLM、GRU、辅助任务保持一致。
+    # 修改这一项后重新启动训练，日志目录与 policy.class_name 会自动同步。
+    use_moe: bool = False
     seed = 42
     device = "cuda:0"
     num_steps_per_env = 24
     max_iterations = 50000
     empirical_normalization = False
     policy = CustomRslRlPpoActorCriticCfg(
-        class_name="MoeActorCritic",
+        class_name="ActorCritic",
         init_noise_std=1.0,
         noise_std_type="scalar",
         actor_hidden_dims=[512, 256, 128],
         critic_hidden_dims=[512, 256, 128],
         activation="elu",
-        num_experts=4,
+        num_experts=5,
         gate_hidden_dim=[256,128,64],
-        single_proprio_dim=96, # 100
+        single_proprio_dim=100, # 96 本体特征 + 4 步态相位
         his_encoder_dims = [256, 128],
         his_latent_dim = 64,
-        use_gru=False,
+        use_gru=True,
         use_film_cnn= True, # 是否使用FiLM调制CNN特征图
         use_film_moe_gate= False, # 是否使用FiLM调制MoE门控网络
-        use_separate_moe_gate_input=True,
+        use_separate_moe_gate_input=False,
         use_moe_topk=False,
         moe_topk=2,
         moe_topk_start_iter=2000,
@@ -588,7 +665,7 @@ class  G129MOE_FILMAGENTENV:
             )
     )
     algorithm = CustomRslRlPpoAlgorithmCfg(
-        class_name="MoePPO",
+        class_name="MoePPO", # 保留速度估计和地形重建的辅助损失
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
@@ -611,26 +688,34 @@ class  G129MOE_FILMAGENTENV:
         terrain_recon_grid_cols=17,
         terrain_recon_grid_rows=11,
         terrain_recon_x_min=0.0,
-        single_critic_dim =120, # 124
+        single_critic_dim =124,
         critic_history_len = 10,
-        vel_in_critic_offset= 98, # 102
+        vel_in_critic_offset=102,
         terrain_recon_target_clip=1,
         terrain_recon_warmup_iters=500,
         vel_estimation_warmup_iters=0,
-        use_moe_balance_loss=True,
-        moe_balance_coef=0.01,
+        use_moe_balance_loss=False,
+        moe_balance_coef=0.0,
         use_moe_gate_entropy_loss=False,
-        moe_gate_entropy_coef=0.001
+        moe_gate_entropy_coef=0.0
     )
 
     clip_actions = None
     save_interval = 1000
     runner_class_name = "FilmOnPolicyRunner"
-    experiment_name = "g1_noamp"
-    run_name = ""
+    experiment_name = "g1_noamp_wo_moe"
+    run_name = "wo_moe_actor_critic"
     logger = "tensorboard"
     neptune_project = "walk"
     wandb_project = "walk"
     resume = False
     load_run = ".*"
     load_checkpoint = "model_.*.pt"
+
+
+    def __post_init__(self):
+        # Configclass instances must not share the mutable policy configuration.
+        self.policy = copy.deepcopy(self.policy)
+        self.policy.class_name = "MoeActorCritic" if self.use_moe else "ActorCritic"
+        self.experiment_name = "g1_noamp" if self.use_moe else "g1_noamp_wo_moe"
+        self.run_name = "full_actor_critic" if self.use_moe else "wo_moe_actor_critic"
